@@ -1,0 +1,6 @@
+{
+  "name": "Riya AI",
+  "description": "Riya AI — বাংলা ভয়েস ও অ্যাক্সেসিবিলিটি অ্যাসিস্ট্যান্ট: WhatsApp, imo ও Messenger অটো-রিপ্লাই, স্ক্রিন রিডার এবং Infinix Android 16 দ্রুত টাস্ক নেভিগেশন।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
