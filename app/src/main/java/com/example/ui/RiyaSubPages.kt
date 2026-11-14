@@ -51,9 +51,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessibilityNew
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.GraphicEq
@@ -64,9 +67,12 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -87,6 +93,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -117,9 +124,11 @@ import androidx.core.content.ContextCompat
 import com.example.data.RiyaState
 import com.example.data.Store
 import com.example.data.VoiceGender
+import com.example.data.VoiceMatchSensitivity
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
 import com.example.service.RiyaVoiceManager
+import com.example.service.VoiceMatchManager
 import kotlinx.coroutines.delay
 
 fun hasPerm(c: Context, p: String): Boolean =
@@ -492,6 +501,87 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
   var show by remember { mutableStateOf(false) }
 
+  // 3-step Voice Match state inside Gemini API Key & Voice section
+  var vmEnabled by remember { mutableStateOf(Store.voiceMatchEnabled(ctx)) }
+  var vmSensitivity by remember { mutableStateOf(Store.voiceMatchSensitivity(ctx)) }
+  var vmStamp by remember { mutableIntStateOf(0) }
+  var recordingStep by remember { mutableIntStateOf(0) }
+  var testingMatch by remember { mutableStateOf(false) }
+  var vmLevel by remember { mutableFloatStateOf(0f) }
+  var vmFeedback by remember { mutableStateOf("") }
+  var vmFeedbackPositive by remember { mutableStateOf(true) }
+  var pendingVmAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+  val vmProfile = remember(vmStamp) { VoiceMatchManager.loadProfile(ctx, forceReload = true) }
+
+  val vmMicPermLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      if (granted) {
+        pendingVmAction?.invoke()
+      } else {
+        vmFeedback = "ভয়েস ম্যাচ ব্যবহারের জন্য মাইক্রোফোন অনুমতি দিন বস।"
+        vmFeedbackPositive = false
+      }
+      pendingVmAction = null
+    }
+
+  DisposableEffect(Unit) {
+    onDispose { VoiceMatchManager.cancelActiveCapture() }
+  }
+
+  fun startEnrollStep(stepNumber: Int) {
+    val action = {
+      recordingStep = stepNumber
+      testingMatch = false
+      vmFeedback = "ধাপ $stepNumber শুনছি... স্ক্রিনের বাক্যটি স্পষ্টভাবে বলুন"
+      vmFeedbackPositive = true
+      VoiceMatchManager.enrollStep(
+        ctx = ctx,
+        step = stepNumber,
+        onLevel = { vmLevel = it },
+        onDone = { ok, msg ->
+          recordingStep = 0
+          vmLevel = 0f
+          vmFeedback = msg
+          vmFeedbackPositive = ok
+          vmStamp++
+          vmEnabled = Store.voiceMatchEnabled(ctx)
+        },
+      )
+    }
+    if (hasPerm(ctx, Manifest.permission.RECORD_AUDIO)) {
+      action()
+    } else {
+      pendingVmAction = action
+      vmMicPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+  }
+
+  fun startTestMatch() {
+    val action = {
+      testingMatch = true
+      recordingStep = 0
+      vmFeedback = "এখন কথা বলুন — বসের কণ্ঠ মিলিয়ে দেখছি..."
+      vmFeedbackPositive = true
+      VoiceMatchManager.testLiveMatch(
+        ctx = ctx,
+        onLevel = { vmLevel = it },
+        onDone = { matched, msg ->
+          testingMatch = false
+          vmLevel = 0f
+          vmFeedback = msg
+          vmFeedbackPositive = matched
+        },
+      )
+    }
+    if (hasPerm(ctx, Manifest.permission.RECORD_AUDIO)) {
+      action()
+    } else {
+      pendingVmAction = action
+      vmMicPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+  }
+
   val ttsStatus by RiyaVoiceManager.ttsStatusLabel.collectAsState()
 
   val fieldColors =
@@ -512,6 +602,8 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     Store.setTtsStyleInstruction(ctx, ttsStyle)
     Store.setWhisperBoost(ctx, whisperBoost)
     Store.setLowNetFastMode(ctx, lowNetFast)
+    Store.setVoiceMatchEnabled(ctx, vmEnabled)
+    Store.setVoiceMatchSensitivity(ctx, vmSensitivity)
     RiyaVoiceManager.refreshVoicePreferences(ctx)
   }
 
@@ -520,6 +612,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       .fillMaxSize()
       .background(FULL_BG_GRADIENT)
       .statusBarsPadding()
+      .navigationBarsPadding()
       .verticalScroll(rememberScrollState())
       .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -723,10 +816,230 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       }
     }
 
+    // Voice Match Tool (3-Step Speaker Identification & Non-Boss Voice Avoidance)
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("voice_match_card")
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(
+            1.2.dp,
+            if (vmProfile.isComplete && vmEnabled) CYBER_PURPLE.copy(alpha = 0.7f)
+            else CYBER_AMBER.copy(alpha = 0.45f),
+            RoundedCornerShape(18.dp),
+          )
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(
+          Icons.Filled.VerifiedUser,
+          "Voice Match",
+          listOf(CYBER_PURPLE, CYBER_CYAN),
+          sizeDp = 36,
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text("ভয়েস ম্যাচ (Voice Match)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+          Text(
+            if (vmProfile.isComplete && vmEnabled)
+              "সক্রিয় ✓ — শুধু বসের কমান্ড ফলো করবে, অন্যদের কথা এভোয়েড করবে"
+            else if (vmProfile.isComplete)
+              "৩ ধাপ সম্পন্ন — চালু করতে পাশে সুইচ অন করুন"
+            else
+              "৩ ধাপে আপনার কণ্ঠ সনাক্ত করুন (${vmProfile.completedSteps}/3 সম্পন্ন)",
+            color = if (vmProfile.isComplete && vmEnabled) CYBER_GREEN else CYBER_AMBER,
+            fontSize = 11.5.sp,
+          )
+        }
+        Switch(
+          checked = vmEnabled,
+          onCheckedChange = {
+            vmEnabled = it
+            Store.setVoiceMatchEnabled(ctx, it)
+          },
+          modifier = Modifier.testTag("voice_match_toggle"),
+          colors = SwitchDefaults.colors(checkedTrackColor = CYBER_PURPLE, checkedThumbColor = Color.White),
+        )
+      }
+
+      LinearProgressIndicator(
+        progress = { vmProfile.completedSteps / 3f },
+        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(6.dp)),
+        color = if (vmProfile.isComplete) CYBER_GREEN else CYBER_PURPLE,
+        trackColor = Color(0xFF232B45),
+      )
+
+      AnimatedVisibility(visible = recordingStep != 0 || testingMatch) {
+        val animatedLvl by animateFloatAsState(targetValue = vmLevel, label = "vm_mic_level")
+        Column(
+          Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0A1128), RoundedCornerShape(12.dp))
+            .border(1.dp, CYBER_CYAN.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .padding(10.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            if (testingMatch) "🎙️ কণ্ঠ মিলিয়ে দেখা হচ্ছে..."
+            else "🎙️ ধাপ $recordingStep রেকর্ড হচ্ছে — স্পষ্টভাবে বলুন...",
+            color = CYBER_CYAN,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+          )
+          LinearProgressIndicator(
+            progress = { animatedLvl.coerceIn(0.05f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp)),
+            color = CYBER_GREEN,
+            trackColor = Color(0xFF1B2440),
+          )
+        }
+      }
+
+      if (vmFeedback.isNotBlank()) {
+        Text(
+          text = vmFeedback,
+          color = if (vmFeedbackPositive) CYBER_GREEN else CYBER_AMBER,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+
+      val stepTitles = listOf("১- প্রথম ভয়েস সনাক্ত", "২- দ্বিতীয় ভয়েস সনাক্ত", "৩- তৃতীয় ভয়েস সনাক্ত")
+      Store.VOICE_MATCH_PHRASES.forEachIndexed { idx, phrase ->
+        val stepNum = idx + 1
+        val done = vmProfile.isStepDone(stepNum)
+        val isRecordingThis = recordingStep == stepNum
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .background(
+                if (isRecordingThis) CYBER_CYAN.copy(alpha = 0.14f)
+                else if (done) CYBER_GREEN.copy(alpha = 0.10f)
+                else Color(0xFF0E152E),
+                RoundedCornerShape(14.dp),
+              )
+              .border(
+                1.dp,
+                when {
+                  isRecordingThis -> CYBER_CYAN
+                  done -> CYBER_GREEN.copy(alpha = 0.55f)
+                  else -> Color(0xFF2D3759)
+                },
+                RoundedCornerShape(14.dp),
+              )
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              if (done) {
+                Icon(
+                  Icons.Filled.CheckCircle,
+                  contentDescription = "Step $stepNum Done",
+                  tint = CYBER_GREEN,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+              Text(
+                stepTitles[idx],
+                color = if (done) CYBER_GREEN else Color(0xFFAAB4D0),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+            Text("“$phrase”", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+          }
+          Spacer(Modifier.width(8.dp))
+          Button(
+            onClick = {
+              if (isRecordingThis) VoiceMatchManager.cancelActiveCapture()
+              else startEnrollStep(stepNum)
+            },
+            enabled = (recordingStep == 0 || isRecordingThis) && !testingMatch,
+            modifier = Modifier.testTag("voice_match_step_${stepNum}_btn"),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = if (isRecordingThis) CYBER_RED else if (done) CYBER_BLUE else CYBER_PURPLE,
+              ),
+          ) {
+            Icon(
+              imageVector = if (isRecordingThis) Icons.Filled.Stop else Icons.Filled.Mic,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+              text = if (isRecordingThis) "থামান" else if (done) "আবার" else "বলুন",
+              fontSize = 11.5.sp,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        }
+      }
+
+      if (vmProfile.isComplete) {
+        Text("সনাক্তকরণ সতর্কতা (Sensitivity):", color = Color(0xFFD5DEF5), fontSize = 11.5.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          VoiceMatchSensitivity.entries.forEach { preset ->
+            FilterChip(
+              selected = vmSensitivity == preset,
+              onClick = {
+                vmSensitivity = preset
+                Store.setVoiceMatchSensitivity(ctx, preset)
+              },
+              label = { Text(preset.labelBn, fontSize = 11.sp) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = CYBER_PURPLE,
+                  selectedLabelColor = Color.White,
+                  labelColor = Color(0xFFB8C4E0),
+                ),
+            )
+          }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          OutlinedButton(
+            onClick = {
+              if (testingMatch) VoiceMatchManager.cancelActiveCapture()
+              else startTestMatch()
+            },
+            enabled = recordingStep == 0,
+            modifier = Modifier.weight(1f).testTag("voice_match_test_btn"),
+          ) {
+            Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+              if (testingMatch) "শুনছি..." else "টেস্ট ভয়েস ম্যাচ",
+              color = CYBER_CYAN,
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+          OutlinedButton(
+            onClick = {
+              VoiceMatchManager.resetProfile(ctx)
+              vmStamp++
+              vmFeedback = "ভয়েস ম্যাচ রিসেট করা হয়েছে। আবার ৩ ধাপে সেট করুন।"
+              vmFeedbackPositive = true
+            },
+            enabled = recordingStep == 0 && !testingMatch,
+            modifier = Modifier.testTag("voice_match_reset_btn"),
+          ) {
+            Icon(Icons.Filled.Refresh, contentDescription = null, tint = CYBER_RED, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("রিসেট", color = CYBER_RED, fontSize = 12.sp)
+          }
+        }
+      }
+    }
+
     Button(
       onClick = {
         applyVoiceSettings()
-        Toast.makeText(ctx, "হয়েছে, বস! LXR--AI ভয়েস ও কী সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, "হয়েছে, বস! LXR--AI ভয়েস ও ভয়েস ম্যাচ সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
         back()
       },
       modifier = Modifier.fillMaxWidth().height(50.dp).testTag("save_key_voice_button"),

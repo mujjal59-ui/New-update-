@@ -444,6 +444,7 @@ class GeminiLive(private val ctx: Context) {
       am.mode = AudioManager.MODE_NORMAL
       @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = false }
     } catch (_: Throwable) {}
+    RiyaState.voiceMatchLiveLabel.value = ""
   }
 
   private fun connect() {
@@ -547,6 +548,7 @@ class GeminiLive(private val ctx: Context) {
       - Live Accessibility Now: $accStatus
       - Screen Watch Status: ACTIVE (সবসময় বাধ্যতামূলক)
       - Live Vision Camera Status: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Boss Voice Match Lock: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু ৩ ধাপে সনাক্ত বসের কণ্ঠের কমান্ড ফলো করো, আশেপাশের অন্য মানুষের কথা সম্পূর্ণ এভোয়েড করো)" else "OFF"}
 
       [WORK RULES — কঠোর, সব কাজে বাধ্যতামূলক]
       1. সম্পূর্ণ স্ক্রিন পড়া বাধ্যতামূলক: যেকোনো স্ক্রিন-সম্পর্কিত কাজের আগে read_screen দিয়ে পুরো স্ক্রিন পড়বে এবং প্রতিটি ধাপের পর আবার read_screen পড়ে ফল যাচাই করবে। (তবে লাইভ ক্যামেরা চালু থাকলে এবং বস সামনে কী দেখা যাচ্ছে জিজ্ঞেস করলে read_screen না চালিয়ে সরাসরি ক্যামেরার ভিডিও ছবি দেখে বলবে।)
@@ -1470,6 +1472,28 @@ class GeminiLive(private val ctx: Context) {
           val buf = ByteArray(1600)
           var lastVoiceMs = System.currentTimeMillis()
           var silentFrameCounter = 0
+
+          // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
+          var gateState = 0
+          val onsetChunks = ArrayList<ByteArray>(12)
+          val verifyStream = java.io.ByteArrayOutputStream()
+          var consecutiveRejects = 0
+          var rejectedSpeechChunks = 0
+          var lastVmRefreshAt = 0L
+          var voiceMatchActive = VoiceMatchManager.isActiveGateReady(ctx)
+          var vmProfile = if (voiceMatchActive) VoiceMatchManager.loadProfile(ctx) else null
+          var vmSensitivity = Store.voiceMatchSensitivity(ctx)
+          if (voiceMatchActive) {
+            RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
+          } else {
+            RiyaState.voiceMatchLiveLabel.value = ""
+          }
+
+          fun sendAudioPcm(chunk: ByteArray, len: Int) {
+            val d = Base64.encodeToString(chunk, 0, len, Base64.NO_WRAP)
+            ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
+          }
+
           while (!stopped) {
             val activeRec = synchronized(recLock) { rec } ?: break
             val n =
@@ -1482,9 +1506,31 @@ class GeminiLive(private val ctx: Context) {
             if (n < 0) break
             if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0) < 80_000) {
               val now = System.currentTimeMillis()
+              if (now - lastVmRefreshAt > 2000L) {
+                lastVmRefreshAt = now
+                val newActive = VoiceMatchManager.isActiveGateReady(ctx)
+                if (newActive != voiceMatchActive) {
+                  voiceMatchActive = newActive
+                  gateState = 0
+                  onsetChunks.clear()
+                  verifyStream.reset()
+                  consecutiveRejects = 0
+                  rejectedSpeechChunks = 0
+                  RiyaState.voiceMatchLiveLabel.value =
+                    if (newActive) "🔒 শুধু বসের কণ্ঠ শুনছে" else ""
+                }
+                if (voiceMatchActive) {
+                  vmProfile = VoiceMatchManager.loadProfile(ctx)
+                  vmSensitivity = Store.voiceMatchSensitivity(ctx)
+                }
+              }
+
               val rms = computeRms16Bit(buf, n)
               val whisperBoostOn = Store.whisperBoost(ctx)
               val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
+
+              // Copy raw mic frame before aggressive boost for clean speaker timbre matching
+              val vmSampleChunk = if (voiceMatchActive) buf.copyOf(n) else null
 
               // Gentle echo-ducking on speakerphone ONLY if hardware AEC unavailable and speaker spoke in last 240ms
               if (!usingBtAudio && !hasHwAec && (now - lastSpeakerWriteMs) < 240L && rms < 4500.0) {
@@ -1505,9 +1551,123 @@ class GeminiLive(private val ctx: Context) {
               silentFrameCounter = if (withinHangover) 0 else (silentFrameCounter + 1)
               val shouldSend = !lowNet || withinHangover || (silentFrameCounter % 4 == 0)
 
-              if (shouldSend) {
-                val d = Base64.encodeToString(buf, 0, n, Base64.NO_WRAP)
-                ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
+              val activeProfile = vmProfile
+              if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
+                if (shouldSend) {
+                  sendAudioPcm(buf, n)
+                }
+              } else {
+                if (!withinHangover) {
+                  if (gateState != 0) {
+                    gateState = 0
+                    onsetChunks.clear()
+                    verifyStream.reset()
+                    consecutiveRejects = 0
+                    rejectedSpeechChunks = 0
+                    RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
+                  }
+                  if (shouldSend) {
+                    sendAudioPcm(buf, n)
+                  }
+                } else {
+                  val sendChunk = buf.copyOf(n)
+                  when (gateState) {
+                    0, 1 -> {
+                      gateState = 1
+                      onsetChunks.add(sendChunk)
+                      if (vmSampleChunk != null && hasSpeech) {
+                        verifyStream.write(vmSampleChunk)
+                      }
+                      if (onsetChunks.size >= 6) {
+                        val pcmToTest = verifyStream.toByteArray()
+                        val res =
+                          if (pcmToTest.size >= 3200) {
+                            VoiceMatchEngine.verifyPcmChunk(activeProfile, pcmToTest, vmSensitivity)
+                          } else {
+                            null
+                          }
+                        if (res != null && res.matched) {
+                          gateState = 2
+                          consecutiveRejects = 0
+                          verifyStream.reset()
+                          RiyaState.voiceMatchLiveLabel.value =
+                            "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
+                          for (pendingChunk in onsetChunks) {
+                            sendAudioPcm(pendingChunk, pendingChunk.size)
+                          }
+                          onsetChunks.clear()
+                        } else if (res != null && !res.matched && onsetChunks.size >= 8) {
+                          gateState = 3
+                          rejectedSpeechChunks = 0
+                          onsetChunks.clear()
+                          verifyStream.reset()
+                          RiyaState.voiceMatchLiveLabel.value =
+                            "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
+                        } else if (onsetChunks.size >= 14) {
+                          // Too quiet / non-speech onset — allow normal stream reset cleanly
+                          gateState = 0
+                          onsetChunks.clear()
+                          verifyStream.reset()
+                        }
+                      }
+                    }
+                    2 -> {
+                      sendAudioPcm(sendChunk, sendChunk.size)
+                      if (vmSampleChunk != null && hasSpeech) {
+                        verifyStream.write(vmSampleChunk)
+                      }
+                      if (verifyStream.size() >= 25600) {
+                        val res =
+                          VoiceMatchEngine.verifyPcmChunk(
+                            activeProfile,
+                            verifyStream.toByteArray(),
+                            vmSensitivity,
+                          )
+                        verifyStream.reset()
+                        if (res != null && !res.matched) {
+                          consecutiveRejects++
+                          if (consecutiveRejects >= 2) {
+                            gateState = 3
+                            rejectedSpeechChunks = 0
+                            RiyaState.voiceMatchLiveLabel.value =
+                              "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
+                          }
+                        } else if (res != null && res.matched) {
+                          consecutiveRejects = 0
+                          RiyaState.voiceMatchLiveLabel.value =
+                            "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
+                        }
+                      }
+                    }
+                    else -> {
+                      // REJECTED_OTHER: block surrounding person's voice, keep checking in case Boss speaks over them
+                      if (vmSampleChunk != null && hasSpeech) {
+                        verifyStream.write(vmSampleChunk)
+                        rejectedSpeechChunks++
+                      }
+                      if (rejectedSpeechChunks >= 12) {
+                        val res =
+                          VoiceMatchEngine.verifyPcmChunk(
+                            activeProfile,
+                            verifyStream.toByteArray(),
+                            vmSensitivity,
+                          )
+                        verifyStream.reset()
+                        rejectedSpeechChunks = 0
+                        if (res != null && res.matched) {
+                          gateState = 2
+                          consecutiveRejects = 0
+                          RiyaState.voiceMatchLiveLabel.value =
+                            "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
+                          sendAudioPcm(sendChunk, sendChunk.size)
+                        } else if (res != null) {
+                          RiyaState.voiceMatchLiveLabel.value =
+                            "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }

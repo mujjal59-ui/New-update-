@@ -363,6 +363,7 @@ fun RiyaHomeScreen(
   val audioDevice by RiyaState.connectedAudioDevice.collectAsState()
   val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
   val netLabel by RiyaState.networkSpeedLabel.collectAsState()
+  val voiceMatchLabel by RiyaState.voiceMatchLiveLabel.collectAsState()
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
     val iw = 941f
@@ -438,6 +439,26 @@ fun RiyaHomeScreen(
               .border(
                 1.dp,
                 (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f),
+                RoundedCornerShape(16.dp),
+              )
+              .padding(horizontal = 10.dp, vertical = 2.dp),
+        )
+      }
+
+      if (running && voiceMatchLabel.isNotBlank()) {
+        val avoided = voiceMatchLabel.contains("এভোয়েড")
+        Text(
+          text = voiceMatchLabel,
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = if (avoided) Color(0xFFFFB300) else CYBER_GREEN,
+          modifier =
+            Modifier
+              .testTag("home_voice_match_pill")
+              .background(Color(0xCC050B1E), RoundedCornerShape(16.dp))
+              .border(
+                1.dp,
+                (if (avoided) Color(0xFFFFB300) else CYBER_GREEN).copy(alpha = 0.6f),
                 RoundedCornerShape(16.dp),
               )
               .padding(horizontal = 10.dp, vertical = 2.dp),

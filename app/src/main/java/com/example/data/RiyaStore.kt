@@ -14,6 +14,12 @@ enum class VoiceGender(val labelBn: String) {
   MALE("ছেলের ভয়েস"),
 }
 
+enum class VoiceMatchSensitivity(val labelBn: String, val threshold: Float) {
+  EASY("সহজ", 0.62f),
+  BALANCED("মাঝারি", 0.72f),
+  STRICT("কঠোর", 0.80f),
+}
+
 data class GeminiVoiceOption(
   val id: String,
   val displayName: String,
@@ -31,6 +37,7 @@ object RiyaState {
   val connectedAudioDevice = MutableStateFlow("Phone Mic (Whisper Boost)")
   val isBluetoothMicActive = MutableStateFlow(false)
   val networkSpeedLabel = MutableStateFlow("Fast")
+  val voiceMatchLiveLabel = MutableStateFlow("")
 
   @Volatile var live: GeminiLive? = null
   @Volatile var cameraOn: Boolean = false
@@ -161,6 +168,39 @@ object Store {
     p(c).getBoolean("oemDone", false) || legacyPrefs(c).getBoolean("oemDone", false)
 
   fun setOemDone(c: Context, v: Boolean) = p(c).edit().putBoolean("oemDone", v).apply()
+
+  val VOICE_MATCH_PHRASES =
+    listOf(
+      "তোমার নাম LxR",
+      "তুমি আমার পার্সোনাল অ্যাসিস্ট্যান্ট LxR",
+      "LxR এখন থেকে আমি তোমার বস",
+    )
+
+  fun voiceMatchEnabled(c: Context): Boolean = p(c).getBoolean("vmEnabled", true)
+
+  fun setVoiceMatchEnabled(c: Context, v: Boolean) = p(c).edit().putBoolean("vmEnabled", v).apply()
+
+  fun voiceMatchSensitivity(c: Context): VoiceMatchSensitivity {
+    val raw = p(c).getString("vmSensitivity", VoiceMatchSensitivity.BALANCED.name)
+    return VoiceMatchSensitivity.entries.firstOrNull { it.name == raw } ?: VoiceMatchSensitivity.BALANCED
+  }
+
+  fun setVoiceMatchSensitivity(c: Context, s: VoiceMatchSensitivity) =
+    p(c).edit().putString("vmSensitivity", s.name).apply()
+
+  fun voiceMatchStepJson(c: Context, step: Int): String =
+    p(c).getString("vmStep_$step", "") ?: ""
+
+  fun setVoiceMatchStepJson(c: Context, step: Int, json: String) =
+    p(c).edit().putString("vmStep_$step", json).apply()
+
+  fun clearVoiceMatch(c: Context) {
+    p(c).edit()
+      .remove("vmStep_1")
+      .remove("vmStep_2")
+      .remove("vmStep_3")
+      .apply()
+  }
 
   private fun f(c: Context) = File(c.filesDir, "memory.txt")
 

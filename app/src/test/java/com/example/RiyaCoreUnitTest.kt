@@ -197,4 +197,78 @@ class RiyaCoreUnitTest {
     assertTrue(RiyaPersona.TEXT.contains("FIRST scan the top visible chat rows"))
     assertTrue(RiyaPersona.TEXT.contains("Never guess or falsely claim Accessibility is OFF"))
   }
+
+  @Test
+  fun voiceMatchEngine_threeStepsDistinguishBossFromOtherSpeakerSafely() {
+    assertEquals(
+      listOf(
+        "তোমার নাম LxR",
+        "তুমি আমার পার্সোনাল অ্যাসিস্ট্যান্ট LxR",
+        "LxR এখন থেকে আমি তোমার বস",
+      ),
+      Store.VOICE_MATCH_PHRASES,
+    )
+
+    fun synthVoice(f0Hz: Double, formantBoostHz: Double, durationSec: Double = 0.8): ShortArray {
+      val n = (16000 * durationSec).toInt()
+      return ShortArray(n) { i ->
+        val t = i / 16000.0
+        val fund = kotlin.math.sin(2.0 * Math.PI * f0Hz * t)
+        val h2 = 0.6 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 2.0) * t)
+        val h3 = 0.4 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 3.0) * t)
+        val formant = 0.75 * kotlin.math.sin(2.0 * Math.PI * formantBoostHz * t)
+        ((fund + h2 + h3 + formant) * 3500.0).toInt().coerceIn(-32768, 32767).toShort()
+      }
+    }
+
+    val boss1 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthVoice(125.0, 580.0))
+    val boss2 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthVoice(128.0, 600.0))
+    val boss3 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthVoice(122.0, 560.0))
+    assertNotNull(boss1)
+    assertNotNull(boss2)
+    assertNotNull(boss3)
+
+    val profile =
+      com.example.service.VoiceMatchEngine.buildProfile(
+        mapOf(1 to boss1!!, 2 to boss2!!, 3 to boss3!!)
+      )
+    assertTrue(profile.isComplete)
+
+    // Boss speaks again (slightly softer or different distance) -> MUST match
+    val bossTest = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthVoice(126.0, 590.0))!!
+    val bossMatch =
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile,
+        bossTest,
+        com.example.data.VoiceMatchSensitivity.BALANCED,
+      )
+    assertTrue("Expected Boss voice to match, score=${bossMatch.score}", bossMatch.matched)
+
+    // Different surrounding person (higher pitch + different vocal tract formants) -> MUST reject
+    val otherSpeaker = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthVoice(245.0, 1750.0))!!
+    val otherMatch =
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile,
+        otherSpeaker,
+        com.example.data.VoiceMatchSensitivity.BALANCED,
+      )
+    assertFalse("Expected surrounding person to be avoided, score=${otherMatch.score}", otherMatch.matched)
+
+    // Safe persistence & malformed JSON guard
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    Store.setVoiceMatchStepJson(ctx, 1, boss1.toJsonString())
+    Store.setVoiceMatchStepJson(ctx, 2, "{corrupted_json")
+    Store.setVoiceMatchStepJson(ctx, 3, boss3.toJsonString())
+    val loadedPartial = com.example.service.VoiceMatchManager.loadProfile(ctx, forceReload = true)
+    assertEquals(2, loadedPartial.completedSteps)
+    assertFalse(loadedPartial.isComplete)
+
+    Store.setVoiceMatchStepJson(ctx, 2, boss2.toJsonString())
+    val loadedFull = com.example.service.VoiceMatchManager.loadProfile(ctx, forceReload = true)
+    assertTrue(loadedFull.isComplete)
+    assertTrue(com.example.service.VoiceMatchManager.isActiveGateReady(ctx))
+
+    com.example.service.VoiceMatchManager.resetProfile(ctx)
+    assertFalse(com.example.service.VoiceMatchManager.isActiveGateReady(ctx))
+  }
 }
