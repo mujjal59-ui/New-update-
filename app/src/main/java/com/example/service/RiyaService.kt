@@ -126,6 +126,7 @@ class RiyaService : Service() {
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
+    AccessibilityKeepAliveService.scheduleRestart(applicationContext, delayMs = 600L)
     if (Store.always(this) && Store.apiKey(this).isNotBlank()) {
       try {
         val restartIntent = Intent(applicationContext, RiyaService::class.java)
@@ -158,6 +159,7 @@ class RiyaService : Service() {
     RiyaState.live = null
     RiyaState.running.value = false
     RiyaState.status.value = "Tap to speak"
+    LxrFloatingOverlayManager.hide(applicationContext)
     super.onDestroy()
   }
 }

@@ -26,6 +26,12 @@ object Keep {
       .isAccessibilityTrulyActive
   }
 
+  /** Checks Settings.Secure / AccessibilityManager directly so background guard stays alive across transitions. */
+  fun isEnabledInSettingsOrAm(c: Context): Boolean {
+    if (RiyaAccessibilityService.instance != null) return true
+    return AccessibilityStatusMonitor.isEnabledInOsSettings(c)
+  }
+
   fun canSelfEnable(c: Context): Boolean =
     c.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) ==
       PackageManager.PERMISSION_GRANTED

@@ -15,9 +15,9 @@ enum class VoiceGender(val labelBn: String) {
 }
 
 enum class VoiceMatchSensitivity(val labelBn: String, val threshold: Float) {
-  EASY("সহজ", 0.62f),
-  BALANCED("মাঝারি", 0.72f),
-  STRICT("কঠোর", 0.80f),
+  EASY("সহজ", 0.46f),
+  BALANCED("মাঝারি", 0.52f),
+  STRICT("কঠোর", 0.60f),
 }
 
 data class GeminiVoiceOption(
@@ -68,6 +68,8 @@ object Store {
   const val TTS_LOCALE_TAG = "bn-BD"
   const val TTS_LOCALE_LABEL = "Bengali (Bangladesh)"
   const val DEFAULT_TTS_STYLE = "Read aloud in a warm, welcoming tone."
+  const val MIC_TAP_GREETING_BN =
+    "আসসালামু ওয়ালাইকুম... কেমন আছেন আমার প্রাণ প্রিয় বস, বলুন কি করতে হবে।"
 
   val VOICE_OPTIONS =
     listOf(

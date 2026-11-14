@@ -271,4 +271,107 @@ class RiyaCoreUnitTest {
     com.example.service.VoiceMatchManager.resetProfile(ctx)
     assertFalse(com.example.service.VoiceMatchManager.isActiveGateReady(ctx))
   }
+
+  @Test
+  fun messageAgent_exactAppDisambiguationAndBengaliContactMatchingWork() {
+    assertEquals("com.whatsapp", com.example.service.MessageAgent.find("WhatsApp")?.pkg)
+    assertEquals("com.whatsapp", com.example.service.MessageAgent.find("হোয়াটসঅ্যাপ")?.pkg)
+    assertEquals("com.imo.android.imoim", com.example.service.MessageAgent.find("imo")?.pkg)
+    assertEquals("com.imo.android.imoim", com.example.service.MessageAgent.find("ইমো")?.pkg)
+    assertEquals("com.imo.android.imoim", com.example.service.MessageAgent.find("ইমু")?.pkg)
+    assertEquals("com.facebook.orca", com.example.service.MessageAgent.find("Messenger")?.pkg)
+    assertEquals("com.facebook.orca", com.example.service.MessageAgent.find("মেসেঞ্জার")?.pkg)
+
+    assertTrue(com.example.service.MessageAgent.matchesContactName("Sumon Khan", "সুমন"))
+    assertTrue(com.example.service.MessageAgent.matchesContactName("Dr: Rasel Vai", "রাসেল"))
+    assertTrue(com.example.service.MessageAgent.matchesContactName("Mizanur Rahman", "মিজান"))
+    assertFalse(com.example.service.MessageAgent.matchesContactName("Sumon Khan", "করিম"))
+  }
+
+  @Test
+  fun micTapGreetingAndCalibratedVoiceSensitivity_areConfiguredProperly() {
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("প্রাণ প্রিয় বস"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("বলুন কি করতে হবে"))
+
+    assertEquals(0.46f, com.example.data.VoiceMatchSensitivity.EASY.threshold, 0.001f)
+    assertEquals(0.52f, com.example.data.VoiceMatchSensitivity.BALANCED.threshold, 0.001f)
+    assertEquals(0.60f, com.example.data.VoiceMatchSensitivity.STRICT.threshold, 0.001f)
+  }
+
+  @Test
+  fun voiceMatchEngine_softWhisperBossSpeechMatchesBalancedAndStrictWithoutShouting_andOffDisablesGate() {
+    fun synthScaledVoice(
+      f0Hz: Double,
+      formantBoostHz: Double,
+      amplitude: Double,
+      durationSec: Double = 0.8,
+    ): ShortArray {
+      val n = (16000 * durationSec).toInt()
+      return ShortArray(n) { i ->
+        val t = i / 16000.0
+        val fund = kotlin.math.sin(2.0 * Math.PI * f0Hz * t)
+        val h2 = 0.6 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 2.0) * t)
+        val h3 = 0.4 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 3.0) * t)
+        val formant = 0.75 * kotlin.math.sin(2.0 * Math.PI * formantBoostHz * t)
+        ((fund + h2 + h3 + formant) * amplitude).toInt().coerceIn(-32768, 32767).toShort()
+      }
+    }
+
+    val b1 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(125.0, 580.0, 3500.0))!!
+    val b2 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(127.0, 595.0, 3400.0))!!
+    val b3 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(123.0, 565.0, 3600.0))!!
+    val profile = com.example.service.VoiceMatchEngine.buildProfile(mapOf(1 to b1, 2 to b2, 3 to b3))
+
+    // Boss speaks softly (~1/20th amplitude of enrollment, ~160 peak): MUST match in BALANCED & STRICT
+    val softBossSig = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(125.0, 585.0, 160.0))
+    assertNotNull("Soft Boss speech must still extract valid voice signature", softBossSig)
+
+    val softBalanced =
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile,
+        softBossSig!!,
+        com.example.data.VoiceMatchSensitivity.BALANCED,
+      )
+    val softStrict =
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile,
+        softBossSig,
+        com.example.data.VoiceMatchSensitivity.STRICT,
+      )
+    assertTrue("Expected soft Boss voice to match BALANCED (score=${softBalanced.score})", softBalanced.matched)
+    assertTrue("Expected soft Boss voice to match STRICT (score=${softStrict.score})", softStrict.matched)
+
+    // Stranger voice still rejected even in BALANCED
+    val strangerSig = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(250.0, 1800.0, 3500.0))!!
+    val strangerBalanced =
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile,
+        strangerSig,
+        com.example.data.VoiceMatchSensitivity.BALANCED,
+      )
+    assertFalse("Expected stranger voice to be rejected (score=${strangerBalanced.score})", strangerBalanced.matched)
+
+    // Disabling Voice Match toggle disables gate even when all 3 steps are enrolled
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    Store.setVoiceMatchStepJson(ctx, 1, b1.toJsonString())
+    Store.setVoiceMatchStepJson(ctx, 2, b2.toJsonString())
+    Store.setVoiceMatchStepJson(ctx, 3, b3.toJsonString())
+    com.example.service.VoiceMatchManager.loadProfile(ctx, forceReload = true)
+    Store.setVoiceMatchEnabled(ctx, false)
+    assertFalse(com.example.service.VoiceMatchManager.isActiveGateReady(ctx))
+    Store.setVoiceMatchEnabled(ctx, true)
+    assertTrue(com.example.service.VoiceMatchManager.isActiveGateReady(ctx))
+    com.example.service.VoiceMatchManager.resetProfile(ctx)
+  }
+
+  @Test
+  fun lxrFloatingOverlay_triggersOnWakeWordsAndUsesExact50PercentOpacity() {
+    assertEquals(0.50f, com.example.service.LxrFloatingOverlayManager.OVERLAY_ALPHA, 0.001f)
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("Hey LxR, open WhatsApp"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("L X R"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("এল এক্স আর লাইট জ্বালাও"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("এলএক্সআর কেমন আছো"))
+    assertFalse(com.example.service.LxrFloatingOverlayManager.containsWakeWord("আবহাওয়া কেমন আজ"))
+  }
 }

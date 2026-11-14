@@ -46,12 +46,22 @@ class RiyaAccessibilityService : AccessibilityService() {
   @Volatile private var lastScan = 0L
   @Volatile private var scanScheduled = false
 
+  override fun onCreate() {
+    super.onCreate()
+    instance = this
+    RiyaRuntimeBridge.setServiceConnected(true)
+    AccessibilityKeepAliveService.sync(this)
+  }
+
   override fun onServiceConnected() {
     super.onServiceConnected()
     instance = this
     RiyaRuntimeBridge.setServiceConnected(true)
     AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = false)
-    RiyaVoiceManager.initialize(this)
+    AccessibilityKeepAliveService.sync(this)
+    serviceScope.launch(Dispatchers.IO) {
+      RiyaVoiceManager.initialize(this@RiyaAccessibilityService)
+    }
     com.example.data.RiyaState.resume.value++
     Log.d(TAG, "LXR--AI AccessibilityService connected")
     snapshotExec.execute {
@@ -66,6 +76,7 @@ class RiyaAccessibilityService : AccessibilityService() {
     instance = this
     RiyaRuntimeBridge.setServiceConnected(true)
     AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = false)
+    AccessibilityKeepAliveService.sync(this)
     Log.d(TAG, "LXR--AI AccessibilityService rebound cleanly")
   }
 
@@ -77,6 +88,24 @@ class RiyaAccessibilityService : AccessibilityService() {
         RiyaRuntimeBridge.setServiceConnected(true)
       }
       val pkg = event.packageName?.toString().orEmpty()
+      if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED && pkg.isNotEmpty() && pkg != packageName) {
+        val notif =
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            event.parcelableData as? android.app.Notification
+          } else {
+            @Suppress("DEPRECATION")
+            event.parcelableData as? android.app.Notification
+          }
+        val texts = event.text?.mapNotNull { it?.toString()?.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        RiyaNotificationListenerService.handleAccessibilityFallbackNotification(
+          applicationContext,
+          pkg,
+          notif,
+          texts,
+        )
+        return
+      }
+
       if (pkg.isNotEmpty() && pkg != packageName) {
         currentApp = pkg
       }
@@ -84,8 +113,11 @@ class RiyaAccessibilityService : AccessibilityService() {
       if (pkg == packageName) return
       val now = System.currentTimeMillis()
       val isStateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+      val isContentChange =
+        event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+          com.example.data.RiyaState.running.value
       val minGap = if (isStateChange) 700L else 1800L
-      if ((isStateChange || event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) &&
+      if ((isStateChange || isContentChange) &&
         now - lastScan >= minGap &&
         !scanScheduled
       ) {
@@ -114,6 +146,7 @@ class RiyaAccessibilityService : AccessibilityService() {
   override fun onTaskRemoved(rootIntent: Intent?) {
     try {
       Keep.ensureAccessibility(this)
+      AccessibilityKeepAliveService.sync(this)
     } catch (_: Throwable) {}
     super.onTaskRemoved(rootIntent)
   }
@@ -473,11 +506,18 @@ class RiyaAccessibilityService : AccessibilityService() {
       if (n == null) return
       val txt = n.text?.toString()?.lowercase()?.trim() ?: ""
       val desc = n.contentDescription?.toString()?.lowercase()?.trim() ?: ""
-      val hit = if (isContact) txt.contains(query) else (txt.contains(query) || desc.contains(query))
+      val hit =
+        if (isContact) {
+          txt.contains(query) || MessageAgent.matchesContactName(txt, t)
+        } else {
+          txt.contains(query) ||
+            desc.contains(query) ||
+            MessageAgent.matchesContactName(txt.ifBlank { desc }, t)
+        }
       if (hit && !n.isEditable) {
         val r = Rect()
         n.getBoundsInScreen(r)
-        val isBelowTopSearch = r.top >= (screenH * 0.16f).toInt()
+        val isBelowTopSearch = r.top >= (screenH * 0.12f).toInt()
         val exactBonus = if (txt == query || desc == query) 20 else 0
         val zoneBonus = if (isBelowTopSearch) 50 else 0
         matches.add(n to (zoneBonus + exactBonus))
@@ -567,41 +607,179 @@ class RiyaAccessibilityService : AccessibilityService() {
     return candidates.firstOrNull { it.isEditable } ?: candidates.firstOrNull()
   }
 
-  /** চালু স্ক্রিনের সুইচ (Wi-Fi/Bluetooth) খুঁজে অন/অফ করে। ফল যাচাই করে। */
-  fun setSwitch(enable: Boolean, labels: List<String>): String {
-    fun all(n: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo>) {
+  private fun collectNodeHierarchyText(n: AccessibilityNodeInfo): String {
+    val sb = StringBuilder()
+    fun appendNode(node: AccessibilityNodeInfo?) {
+      if (node == null) return
+      sb.append(node.text ?: "").append(' ')
+      sb.append(node.contentDescription ?: "").append(' ')
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        sb.append(node.stateDescription ?: "").append(' ')
+      }
+      sb.append(node.viewIdResourceName ?: "").append(' ')
+    }
+    var p: AccessibilityNodeInfo? = n
+    var depth = 0
+    while (p != null && depth < 5) {
+      appendNode(p)
+      for (i in 0 until p.childCount) {
+        val c = p.getChild(i)
+        appendNode(c)
+        if (c != null) {
+          for (j in 0 until minOf(c.childCount, 4)) {
+            appendNode(c.getChild(j))
+          }
+        }
+      }
+      p = p.parent
+      depth++
+    }
+    return sb.toString().lowercase()
+  }
+
+  private fun isNodeCheckedOrOn(n: AccessibilityNodeInfo): Boolean {
+    if (n.isChecked || n.isSelected) return true
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val sd = n.stateDescription?.toString()?.lowercase()?.trim().orEmpty()
+      if (sd == "on" || sd == "চালু" || sd.startsWith("on,") || sd.contains("connected")) return true
+      if (sd == "off" || sd == "বন্ধ" || sd.startsWith("off,")) return false
+    }
+    return false
+  }
+
+  /**
+   * Quick Settings টাইল দিয়ে দ্রুত Wi-Fi / Bluetooth / Flashlight চালু বা বন্ধ করে (Android 14–16 / Infinix XOS)।
+   */
+  fun toggleQuickSettingTile(
+    enable: Boolean,
+    labels: List<String>,
+    excludeLabels: List<String> = emptyList(),
+    hardwareStateKnown: Boolean? = null,
+  ): String {
+    if (hardwareStateKnown != null && hardwareStateKnown == enable) return "ALREADY"
+
+    val opened = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+    if (!opened) return "NOTFOUND"
+
+    try {
+      var foundTile: AccessibilityNodeInfo? = null
+      val deadline = System.currentTimeMillis() + 1800L
+      while (System.currentTimeMillis() < deadline && foundTile == null) {
+        Thread.sleep(180)
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        windows?.forEach { w -> w.root?.let { roots.add(it) } }
+        rootInActiveWindow?.let { if (it !in roots) roots.add(it) }
+
+        val candidates = mutableListOf<AccessibilityNodeInfo>()
+        fun collectTiles(node: AccessibilityNodeInfo?, depth: Int) {
+          if (node == null || depth > 25) return
+          if (node.isClickable || node.isCheckable) {
+            candidates.add(node)
+          }
+          for (i in 0 until node.childCount) collectTiles(node.getChild(i), depth + 1)
+        }
+        roots.forEach { r ->
+          if (r.packageName?.toString() == "com.android.systemui") {
+            collectTiles(r, 0)
+          }
+        }
+
+        foundTile =
+          candidates.firstOrNull { node ->
+            val info = collectNodeHierarchyText(node)
+            labels.any { k -> info.contains(k.lowercase()) } &&
+              excludeLabels.none { ex -> info.contains(ex.lowercase()) }
+          }
+      }
+
+      val tile = foundTile ?: return "NOTFOUND"
+      val tileInfo = collectNodeHierarchyText(tile)
+      val curOn = hardwareStateKnown ?: isNodeCheckedOrOn(tile)
+
+      // Handle Android 14–16 "Internet" tile opening a Wi-Fi sub-sheet instead of flipping directly
+      if (hardwareStateKnown == null && tileInfo.contains("internet") && !tileInfo.contains("wi-fi")) {
+        clickNodeOrBounds(tile)
+        Thread.sleep(420)
+        val sheetSwitch = setSwitch(enable, listOf("wi-fi", "wifi", "wlan", "ওয়াই"), excludeLabels)
+        return if (sheetSwitch == "OK" || sheetSwitch == "ALREADY") sheetSwitch else "CLICKED"
+      }
+
+      if (hardwareStateKnown == null && curOn == enable) {
+        return "ALREADY"
+      }
+
+      val clicked = clickNodeOrBounds(tile)
+      Thread.sleep(360)
+
+      // If tapping "Internet" tile popped up the Internet sheet dialog inside systemui, toggle the Wi-Fi switch inside it
+      if (tileInfo.contains("internet")) {
+        val sheetRes = setSwitch(enable, listOf("wi-fi", "wifi", "wlan", "ওয়াই"), excludeLabels)
+        if (sheetRes == "OK" || sheetRes == "ALREADY") return sheetRes
+      }
+
+      return if (clicked) "OK" else "NOTFOUND"
+    } finally {
+      // Close Quick Settings shade cleanly
+      repeat(2) {
+        val curPkg = rootInActiveWindow?.packageName?.toString().orEmpty()
+        if (curPkg == "com.android.systemui") {
+          performGlobalAction(GLOBAL_ACTION_BACK)
+          Thread.sleep(180)
+        }
+      }
+    }
+  }
+
+  private fun clickNodeOrBounds(node: AccessibilityNodeInfo): Boolean {
+    if (clickNode(node)) return true
+    val rect = Rect()
+    node.getBoundsInScreen(rect)
+    return rect.width() > 0 && rect.height() > 0 && tapAt(rect.exactCenterX(), rect.exactCenterY())
+  }
+
+  /** চালু স্ক্রিনের সুইচ (Wi-Fi/Bluetooth) খুঁজে অন/অফ করে। কখনো ভুল সুইচে চাপ দেয় না এবং ফল যাচাই করে। */
+  fun setSwitch(
+    enable: Boolean,
+    labels: List<String>,
+    excludeLabels: List<String> = emptyList(),
+  ): String {
+    fun allCheckables(n: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo>) {
       if (n == null) return
       if (n.isCheckable) out.add(n)
-      for (i in 0 until n.childCount) all(n.getChild(i), out)
+      for (i in 0 until n.childCount) allCheckables(n.getChild(i), out)
     }
-    fun label(n: AccessibilityNodeInfo): String {
-      val sb = StringBuilder()
-      var p: AccessibilityNodeInfo? = n
-      var depth = 0
-      while (p != null && depth < 3) {
-        sb.append(p.text ?: "").append(' ').append(p.contentDescription ?: "").append(' ')
-        for (i in 0 until p.childCount) {
-          val c = p.getChild(i)
-          sb.append(c?.text ?: "").append(' ')
-        }
-        p = p.parent
-        depth++
-      }
-      return sb.toString().lowercase()
-    }
-    repeat(4) {
+
+    val deadline = System.currentTimeMillis() + 3200L
+    while (System.currentTimeMillis() < deadline) {
       val list = mutableListOf<AccessibilityNodeInfo>()
-      all(rootInActiveWindow, list)
-      if (list.isNotEmpty()) {
-        val sw = list.firstOrNull { n -> labels.any { label(n).contains(it) } } ?: list.first()
-        if (sw.isChecked == enable) return "ALREADY"
-        clickNode(sw)
-        Thread.sleep(260)
-        sw.refresh()
-        readEntireScreenTree()
-        return if (sw.isChecked == enable) "OK" else "CLICKED"
+      windows?.forEach { w -> w.root?.let { allCheckables(it, list) } }
+      if (list.isEmpty()) {
+        allCheckables(rootInActiveWindow, list)
       }
-      Thread.sleep(200)
+
+      if (list.isNotEmpty()) {
+        val sw =
+          list.firstOrNull { n ->
+            val text = collectNodeHierarchyText(n)
+            labels.any { text.contains(it.lowercase()) } &&
+              excludeLabels.none { text.contains(it.lowercase()) }
+          }
+            ?: if (list.size == 1) list.first() else null
+
+        if (sw != null) {
+          val curChecked = isNodeCheckedOrOn(sw)
+          if (curChecked == enable) return "ALREADY"
+          val clicked = clickNodeOrBounds(sw)
+          if (clicked) {
+            Thread.sleep(360)
+            sw.refresh()
+            readEntireScreenTree()
+            val after = isNodeCheckedOrOn(sw)
+            return if (after == enable) "OK" else "CLICKED"
+          }
+        }
+      }
+      Thread.sleep(220)
     }
     return "NOTFOUND"
   }

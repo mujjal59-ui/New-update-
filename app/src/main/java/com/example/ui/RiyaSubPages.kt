@@ -844,11 +844,11 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
           Text("ভয়েস ম্যাচ (Voice Match)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
           Text(
             if (vmProfile.isComplete && vmEnabled)
-              "সক্রিয় ✓ — শুধু বসের কমান্ড ফলো করবে, অন্যদের কথা এভোয়েড করবে"
+              "সক্রিয় ✓ — স্বাভাবিক ও আস্তে বললেও বসের কণ্ঠ চিনবে, অন্যদের এভোয়েড করবে"
             else if (vmProfile.isComplete)
-              "৩ ধাপ সম্পন্ন — চালু করতে পাশে সুইচ অন করুন"
+              "বন্ধ আছে — অ্যাপের সব কাজ ও কমান্ড স্বাভাবিকভাবে চলবে"
             else
-              "৩ ধাপে আপনার কণ্ঠ সনাক্ত করুন (${vmProfile.completedSteps}/3 সম্পন্ন)",
+              "৩ ধাপে কণ্ঠ দিন (${vmProfile.completedSteps}/3) — না দিলেও সব কাজ স্বাভাবিকভাবে চলবে",
             color = if (vmProfile.isComplete && vmEnabled) CYBER_GREEN else CYBER_AMBER,
             fontSize = 11.5.sp,
           )
@@ -1103,12 +1103,31 @@ private fun openIntent(c: Context, i: Intent) {
 private fun setTorch(c: Context, on: Boolean): String {
   return try {
     val cam = c.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-    val id =
-      cam.cameraIdList.firstOrNull { cid ->
-        cam.getCameraCharacteristics(cid).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-      } ?: return "এই ফোনে ফ্ল্যাশ নেই"
-    cam.setTorchMode(id, on)
-    if (on) "ফ্ল্যাশলাইট চালু" else "ফ্ল্যাশলাইট বন্ধ"
+    val ids =
+      cam.cameraIdList
+        .filter { cid ->
+          try {
+            cam.getCameraCharacteristics(cid).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+          } catch (_: Exception) {
+            false
+          }
+        }
+        .sortedByDescending { cid ->
+          try {
+            cam.getCameraCharacteristics(cid).get(CameraCharacteristics.LENS_FACING) ==
+              CameraCharacteristics.LENS_FACING_BACK
+          } catch (_: Exception) {
+            false
+          }
+        }
+    if (ids.isEmpty()) return "এই ফোনে ফ্ল্যাশ নেই"
+    for (id in ids) {
+      try {
+        cam.setTorchMode(id, on)
+        return if (on) "ফ্ল্যাশলাইট চালু" else "ফ্ল্যাশলাইট বন্ধ"
+      } catch (_: Exception) {}
+    }
+    "ফ্ল্যাশ নিয়ন্ত্রণ করা গেল না"
   } catch (_: Exception) {
     "ফ্ল্যাশ নিয়ন্ত্রণ করা গেল না"
   }
@@ -1374,18 +1393,47 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
 
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
       StateTile(Modifier.weight(1f), "Wi-Fi", "wifi", wifiOn, if (wifiOn) "ON" else "OFF") {
-        openIntent(ctx, Intent(Settings.Panel.ACTION_WIFI))
-        note = "খোলা প্যানেলে Wi-Fi চালু/বন্ধ করুন"
+        val acc = com.example.service.RiyaAccessibilityService.instance
+        if (acc != null) {
+          note = if (!wifiOn) "Wi-Fi চালু করা হচ্ছে..." else "Wi-Fi বন্ধ করা হচ্ছে..."
+          Thread {
+            acc.toggleQuickSettingTile(
+              enable = !wifiOn,
+              labels = listOf("wi-fi", "wifi", "wlan", "internet", "ওয়াইফাই"),
+              excludeLabels = listOf("calling", "hotspot", "tethering", "scanning"),
+              hardwareStateKnown = wifiOn,
+            )
+            tick++
+          }.start()
+        } else {
+          openIntent(ctx, Intent(Settings.ACTION_WIFI_SETTINGS))
+          note = "Wi-Fi সেটিংস খোলা হয়েছে"
+        }
       }
       StateTile(Modifier.weight(1f), "Bluetooth", "bt", btOn, if (btOn) "ON" else "OFF") {
-        openIntent(ctx, Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-        note = "Bluetooth সেটিংসে LxR ও হেডসেট সংযোগ করুন"
+        val acc = com.example.service.RiyaAccessibilityService.instance
+        if (acc != null) {
+          note = if (!btOn) "Bluetooth চালু করা হচ্ছে..." else "Bluetooth বন্ধ করা হচ্ছে..."
+          Thread {
+            acc.toggleQuickSettingTile(
+              enable = !btOn,
+              labels = listOf("bluetooth", "ব্লুটুথ"),
+              excludeLabels = listOf("tethering", "scanning"),
+              hardwareStateKnown = btOn,
+            )
+            tick++
+          }.start()
+        } else {
+          openIntent(ctx, Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+          note = "Bluetooth সেটিংস খোলা হয়েছে"
+        }
       }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
       StateTile(Modifier.weight(1f), "Flashlight", "torch", torchOn, if (torchOn) "ON" else "OFF") {
-        torchOn = !torchOn
-        note = setTorch(ctx, torchOn)
+        val next = !torchOn
+        torchOn = next
+        note = setTorch(ctx, next)
       }
       StateTile(Modifier.weight(1f), "Sound mode", "sound", mode == "NORMAL", mode) {
         val next = when (mode) { "NORMAL" -> "vibrate"; "VIBRATE" -> "silent"; else -> "normal" }
@@ -1393,6 +1441,40 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       }
     }
     StateTile(Modifier.fillMaxWidth(), "Battery", "battery", true, if (pct >= 0) "$pct%" else "N/A") {}
+
+    // LxR 50%-Opacity Rotating Planet Wake Orb quick test / control card
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("lxr_wake_orb_card")
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_AMBER.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+          .clickable {
+            if (com.example.service.LxrFloatingOverlayManager.isShowing) {
+              com.example.service.LxrFloatingOverlayManager.hide(ctx)
+              note = "LxR ভাসমান অরব বন্ধ — আবার 'LxR' বললেই সব স্ক্রিনে দেখাবে"
+            } else {
+              val shown = com.example.service.LxrFloatingOverlayManager.show(ctx, openPermissionIfMissing = true)
+              note =
+                if (shown) "LxR ৫০% স্বচ্ছ ঘূর্ণায়মান অরব চালু ✓"
+                else "অন্য অ্যাপের ওপর দেখাতে 'Display over apps' অনুমতি দিন"
+            }
+          }
+          .padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      PremiumIconBadge(Icons.Filled.Layers, "LxR Wake Orb", listOf(CYBER_AMBER, CYBER_RED), sizeDp = 40)
+      Spacer(Modifier.width(12.dp))
+      Column(Modifier.weight(1f)) {
+        Text("LxR ভাসমান ঘূর্ণায়মান অরব (৫০% স্বচ্ছ)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(
+          "'LxR' বললেই যেকোনো অ্যাপের ওপর ঘুরবে — ট্যাপ করে টেস্ট করুন",
+          color = CYBER_AMBER,
+          fontSize = 11.5.sp,
+        )
+      }
+    }
 
     // Live LxR Bluetooth & Low-Network Status Card
     Row(

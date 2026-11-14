@@ -72,7 +72,16 @@ object MessageAgent {
   fun find(name: String): AppSpec? {
     val n = name.lowercase().trim()
     if (n.isEmpty()) return null
-    return APPS.firstOrNull { a -> a.aliases.any { al -> n == al.lowercase() || n.contains(al.lowercase()) } }
+    APPS.firstOrNull { a ->
+      a.key == n || a.label.lowercase() == n || a.aliases.any { al -> n == al.lowercase() }
+    }?.let { return it }
+    return APPS.firstOrNull { a -> a.aliases.any { al -> n.contains(al.lowercase()) } }
+  }
+
+  fun launchIntentFor(ctx: Context, app: AppSpec): Intent? {
+    val allowedPkgs = listOf(app.pkg) + app.fallbackPkgs
+    return allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
+      ?: launchByLabel(ctx, app)
   }
 
   private fun norm(s: String) = s.lowercase().replace(Regex("[\\s._\\-]+"), "")
@@ -148,10 +157,7 @@ object MessageAgent {
       return true
     }
 
-    val intent =
-      allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
-        ?: launchByLabel(ctx, app)
-        ?: return false
+    val intent = launchIntentFor(ctx, app) ?: return false
     ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     val deadline = System.currentTimeMillis() + 5500
     while (System.currentTimeMillis() < deadline) {
@@ -170,6 +176,128 @@ object MessageAgent {
     return bottomEditable(acc, h) != null
   }
 
+  private fun hasBengali(s: String): Boolean = s.any { it in '\u0980'..'\u09FF' }
+
+  private fun bengaliWordToRoman(word: String): String {
+    val normWord = java.text.Normalizer.normalize(word, java.text.Normalizer.Form.NFC)
+    val sb = StringBuilder()
+    var i = 0
+    while (i < normWord.length) {
+      val ch = normWord[i]
+      // Handle hasanta / virama (্) by omitting implicit 'o' and skipping separator
+      val nextIsVirama = (i + 1 < normWord.length && normWord[i + 1] == '্')
+      val mapped =
+        when (ch) {
+          'অ' -> "o"
+          'আ', 'া' -> "a"
+          'ই', 'ঈ', 'ি', 'ী' -> "i"
+          'উ', 'ঊ', 'ু', 'ূ' -> "u"
+          'ঋ', 'ৃ' -> "ri"
+          'এ', 'ঐ', 'ে', 'ৈ' -> "e"
+          'ও', 'ঔ', 'ো', 'ৌ' -> "o"
+          'ক', 'খ' -> "k"
+          'গ', 'ঘ' -> "g"
+          'ঙ', 'ং' -> "ng"
+          'চ', 'ছ' -> "c"
+          'জ', 'ঝ', 'য' -> "j"
+          'ঞ' -> "n"
+          'ট', 'ঠ', 'ত', 'থ' -> "t"
+          'ড', 'ঢ', 'দ', 'ধ' -> "d"
+          'ণ', 'ন' -> "n"
+          'প' -> "p"
+          'ফ' -> "f"
+          'ব', 'ভ' -> "b"
+          'ম' -> "m"
+          'র', '\u09DC', '\u09DD' -> "r"
+          'ল' -> "l"
+          'শ', 'ষ', 'স' -> "s"
+          'হ' -> "h"
+          '\u09DF' -> "y"
+          'ৎ' -> "t"
+          '্', 'ঁ', 'ঃ', '\u09BC' -> ""
+          in 'a'..'z', in 'A'..'Z', in '0'..'9' -> ch.lowercaseChar().toString()
+          else -> ""
+        }
+      sb.append(mapped)
+      if (!nextIsVirama && ch in listOf('ক','খ','গ','ঘ','চ','ছ','জ','ঝ','ট','ঠ','ড','ঢ','ণ','ত','থ','দ','ধ','ন','প','ফ','ব','ভ','ম','য','র','ল','শ','ষ','স','হ','\u09DC','\u09DD','\u09DF')) {
+        val next = normWord.getOrNull(i + 1)
+        val hasVowelSign = next in listOf('া','ি','ী','ু','ূ','ৃ','ে','ৈ','ো','ৌ','্')
+        if (!hasVowelSign && i < normWord.length - 1) {
+          sb.append('o')
+        }
+      }
+      i++
+    }
+    return sb.toString()
+  }
+
+  private fun normalizeLatinPhonetic(word: String): String {
+    var s = word.lowercase().replace(Regex("[^a-z0-9]"), "")
+    if (s.isEmpty()) return ""
+    s = s
+      .replace("ph", "f")
+      .replace("bh", "b")
+      .replace("kh", "k")
+      .replace("gh", "g")
+      .replace("th", "t")
+      .replace("dh", "d")
+      .replace("sh", "s")
+      .replace("ch", "c")
+      .replace("v", "b")
+      .replace("z", "j")
+      .replace("q", "k")
+      .replace("w", "o")
+    val dedup = StringBuilder()
+    for (c in s) {
+      if (dedup.isEmpty() || dedup.last() != c) dedup.append(c)
+    }
+    return dedup.toString()
+  }
+
+  private fun consonantSkeleton(phonetic: String): String {
+    if (phonetic.isEmpty()) return ""
+    val sb = StringBuilder()
+    for (c in phonetic) {
+      if (c !in charArrayOf('a', 'e', 'i', 'o', 'u', 'y')) {
+        if (sb.isEmpty() || sb.last() != c) sb.append(c)
+      }
+    }
+    return sb.toString()
+  }
+
+  private fun splitCleanWords(s: String): List<String> =
+    s.lowercase()
+      .split(Regex("[\\s.,:/\\-_()]+"))
+      .map { it.trim() }
+      .filter {
+        it.length >= 2 &&
+          it !in setOf("ভাই", "ভাইয়া", "আপু", "স্যার", "বস", "ডাক্তার", "bhai", "vai", "md", "dr", "mr", "ms")
+      }
+
+  fun matchesContactName(haystackRaw: String, queryRaw: String): Boolean {
+    if (tokensMatch(haystackRaw, queryRaw)) return true
+    val hWords = splitCleanWords(haystackRaw)
+    val qWords = splitCleanWords(queryRaw)
+    if (hWords.isEmpty() || qWords.isEmpty()) return false
+
+    fun wordMatches(hw: String, qw: String): Boolean {
+      val hLat = normalizeLatinPhonetic(if (hasBengali(hw)) bengaliWordToRoman(hw) else hw)
+      val qLat = normalizeLatinPhonetic(if (hasBengali(qw)) bengaliWordToRoman(qw) else qw)
+      if (hLat.isEmpty() || qLat.isEmpty()) return false
+      if (hLat == qLat) return true
+      if (minOf(hLat.length, qLat.length) >= 4 && (hLat.contains(qLat) || qLat.contains(hLat))) return true
+      val hSk = consonantSkeleton(hLat)
+      val qSk = consonantSkeleton(qLat)
+      if (hSk.length >= 3 && qSk.length >= 3) {
+        if (hSk == qSk) return true
+        if (hSk.first() == qSk.first() && (hSk.startsWith(qSk) || qSk.startsWith(hSk))) return true
+      }
+      return false
+    }
+
+    return qWords.all { qw -> hWords.any { hw -> wordMatches(hw, qw) } }
+  }
+
   private fun tokensMatch(haystackRaw: String, queryRaw: String): Boolean {
     val h = norm(haystackRaw)
     val q = norm(queryRaw)
@@ -181,7 +309,7 @@ object MessageAgent {
         .lowercase()
         .split(Regex("[\\s.,:\\-_]+"))
         .map { norm(it) }
-        .filter { it.length >= 2 && it !in setOf("ভাই", "ভাইয়া", "আপু", "স্যার", "বস", "bhai", "vai", "md") }
+        .filter { it.length >= 2 && it !in setOf("ভাই", "ভাইয়া", "ভাইয়া", "আপু", "স্যার", "বস", "bhai", "vai", "md") }
     if (tokens.isNotEmpty() && tokens.all { tok -> h.contains(tok) }) return true
     return false
   }
@@ -190,10 +318,11 @@ object MessageAgent {
     val h = norm(haystackRaw)
     val q = norm(queryRaw)
     return when {
-      h == q -> 4
-      h.startsWith(q) -> 3
-      h.contains(q) -> 2
-      tokensMatch(haystackRaw, queryRaw) -> 1
+      h == q -> 5
+      h.startsWith(q) -> 4
+      h.contains(q) -> 3
+      tokensMatch(haystackRaw, queryRaw) -> 2
+      matchesContactName(haystackRaw, queryRaw) -> 1
       else -> 0
     }
   }
@@ -224,9 +353,7 @@ object MessageAgent {
       Thread.sleep(380)
       acc.readEntireScreenTree()
       if (rootPkg(acc) !in allowedPkgs) {
-        val relaunch =
-          allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
-            ?: launchByLabel(ctx, app)
+        val relaunch = launchIntentFor(ctx, app)
         if (relaunch != null) {
           ctx.startActivity(relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
           Thread.sleep(500)
@@ -252,7 +379,12 @@ object MessageAgent {
 
     // 2. Not visible on initial top screen -> search autonomously WITHOUT asking Boss
     searchInApp(acc, contact)
-    Thread.sleep(700)
+    Thread.sleep(750)
+    acc.readEntireScreenTree()
+    if (clickRowFor(acc, contact)) return true
+
+    // Retry briefly for async search result population
+    Thread.sleep(550)
     acc.readEntireScreenTree()
     if (clickRowFor(acc, contact)) return true
 
@@ -302,11 +434,11 @@ object MessageAgent {
           val t = norm(labelStr)
           if (t.isEmpty() || t in ignoredLabels || t.contains("metaai")) return@mapNotNull null
           val r = bounds(n)
-          // Chat list rows lie below top app/search bar (y >= 0.16*h) and above bottom navigation (y <= 0.90*h)
-          val inListArea = r.top >= (h * 0.16f).toInt() && r.bottom <= (h * 0.90f).toInt()
-          val notLeftAvatar = r.left >= (w * 0.12f).toInt() || rawText.isNotEmpty()
+          // Chat/search result rows lie below top app/search bar (y >= 0.115*h) and above bottom nav (y <= 0.90*h)
+          val inListArea = r.top >= (h * 0.115f).toInt() && r.bottom <= (h * 0.90f).toInt()
+          val notLeftAvatarOnly = r.right > (w * 0.22f).toInt() && (r.left >= (w * 0.12f).toInt() || rawText.isNotEmpty() || rawDesc.isNotEmpty())
           val score = matchScore(labelStr, query)
-          if (score > 0 && inListArea && notLeftAvatar) Triple(n, score, r.top) else null
+          if (score > 0 && inListArea && notLeftAvatarOnly) Triple(n, score, r.top) else null
         }
         .sortedWith(compareByDescending<Triple<AccessibilityNodeInfo, Int, Int>> { it.second }.thenBy { it.third })
 
@@ -314,12 +446,17 @@ object MessageAgent {
       val nr = bounds(n)
       val row = clickableAncestor(n)
       if (row != null && !row.isEditable && row.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-        Thread.sleep(380)
+        Thread.sleep(400)
         return true
       }
-      if (nr.width() > 0 && nr.height() > 0 && acc.tapAt(nr.exactCenterX(), nr.exactCenterY())) {
-        Thread.sleep(380)
-        return true
+      if (nr.width() > 0 && nr.height() > 0) {
+        val safeTapX =
+          if (nr.width() > (w * 0.35f).toInt()) maxOf(nr.exactCenterX(), w * 0.48f).coerceAtMost(w * 0.85f)
+          else nr.exactCenterX()
+        if (acc.tapAt(safeTapX, nr.exactCenterY())) {
+          Thread.sleep(400)
+          return true
+        }
       }
     }
     return false
@@ -383,7 +520,7 @@ object MessageAgent {
   fun headerHas(acc: RiyaAccessibilityService, contact: String): Boolean {
     val h = screenH(acc)
     return all(acc).any { n ->
-      !n.isEditable && bounds(n).top < h * 0.24f && tokensMatch(label(n), contact)
+      !n.isEditable && bounds(n).top < h * 0.24f && matchesContactName(label(n), contact)
     }
   }
 

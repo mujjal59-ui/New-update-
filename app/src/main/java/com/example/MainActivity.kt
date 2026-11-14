@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
       Keep.ensureAccessibility(this)
     } catch (_: Exception) {}
     AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = true)
+    com.example.service.AccessibilityKeepAliveService.sync(this)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -152,7 +153,11 @@ class MainActivity : ComponentActivity() {
   }
 
   override fun onDestroy() {
-    if (isFinishing) {
+    if (isFinishing &&
+      !Keep.isEnabledInSettingsOrAm(this) &&
+      com.example.service.RiyaAccessibilityService.instance == null &&
+      !RiyaState.running.value
+    ) {
       RiyaVoiceManager.shutdown()
     }
     super.onDestroy()
@@ -242,6 +247,10 @@ fun RiyaApp() {
   }
 
   BackHandler(page != "home") { page = "home" }
+  BackHandler(page == "home") {
+    // Move task to background cleanly instead of finishing Activity so Infinix XOS never drops Accessibility
+    (ctx as? android.app.Activity)?.moveTaskToBack(true)
+  }
 
   AnimatedContent(
     targetState = page,

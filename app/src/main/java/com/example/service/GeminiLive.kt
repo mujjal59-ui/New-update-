@@ -35,8 +35,10 @@ import com.example.MainActivity
 import com.example.ai.RiyaPersona
 import com.example.data.RiyaState
 import com.example.data.Store
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 import kotlin.math.tanh
 import okhttp3.MediaType.Companion.toMediaType
@@ -89,6 +91,8 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var pending = false
   @Volatile private var modelOverride: String? = null
   @Volatile private var isTorchOn = false
+  @Volatile private var greetedThisSession = false
+  @Volatile private var micMuteUntilMs = 0L
 
   fun isReady(): Boolean = ready && !stopped
 
@@ -307,7 +311,16 @@ class GeminiLive(private val ctx: Context) {
       } else {
         "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: \"${msg.messageText}\"। এখনই বসকে শান্ত, স্পষ্ট ও বিনয়ী বাংলায় জানাও এবং জিজ্ঞেস করো: বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: '${msg.messageText}'। আমি কি রিপ্লাইটা দিয়ে দেবো?"
       }
+    val fallbackText =
+      if (!autoSentReply.isNullOrBlank()) {
+        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}। আমি অটো রিপ্লাই দিয়ে দিয়েছি।"
+      } else {
+        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}। আমি কি উত্তর পাঠাবো? বলুন বস।"
+      }
     return try {
+      val speakerMark = lastSpeakerWriteMs
+      // Briefly mute upstream mic so server VAD does not swallow incoming message prompt
+      micMuteUntilMs = System.currentTimeMillis() + 700L
       val turnPayload =
         JSONObject()
           .put(
@@ -324,14 +337,28 @@ class GeminiLive(private val ctx: Context) {
               )
               .put("turnComplete", true),
           )
-      ws?.send(turnPayload.toString()) == true
+      val sent = ws?.send(turnPayload.toString()) == true
+      if (sent) {
+        main.postDelayed(
+          {
+            if (!stopped && ready && lastSpeakerWriteMs == speakerMark) {
+              RiyaVoiceManager.speakUrgent(ctx, fallbackText)
+            }
+          },
+          2400L,
+        )
+      }
+      sent
     } catch (_: Throwable) {
       false
     }
   }
 
+  private fun isAiSpeakingRecently(): Boolean =
+    (System.currentTimeMillis() - lastSpeakerWriteMs) < 1000L
+
   private fun sendScreenNow() {
-    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn) return
+    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently()) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
@@ -344,7 +371,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun watchScreen() {
-    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool) return
+    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently()) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
@@ -367,6 +394,9 @@ class GeminiLive(private val ctx: Context) {
     failCount = 0
     pending = false
     modelOverride = null
+    greetedThisSession = false
+    micMuteUntilMs = 0L
+    lastSpeakerWriteMs = 0L
     stopped = false
     routeAudio(allowRestart = false)
     am.registerAudioDeviceCallback(devCb, main)
@@ -444,6 +474,7 @@ class GeminiLive(private val ctx: Context) {
       am.mode = AudioManager.MODE_NORMAL
       @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = false }
     } catch (_: Throwable) {}
+    LxrFloatingOverlayManager.setSpeakingBoost(false)
     RiyaState.voiceMatchLiveLabel.value = ""
   }
 
@@ -548,25 +579,27 @@ class GeminiLive(private val ctx: Context) {
       - Live Accessibility Now: $accStatus
       - Screen Watch Status: ACTIVE (সবসময় বাধ্যতামূলক)
       - Live Vision Camera Status: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
-      - Boss Voice Match Lock: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু ৩ ধাপে সনাক্ত বসের কণ্ঠের কমান্ড ফলো করো, আশেপাশের অন্য মানুষের কথা সম্পূর্ণ এভোয়েড করো)" else "OFF"}
+      - Boss Voice Match Lock: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু ৩ ধাপে সনাক্ত বসের কণ্ঠের কমান্ড ফলো করো, আশেপাশের অন্য মানুষের কথা সম্পূর্ণ এভোয়েড করো)" else "OFF (ভয়েস ম্যাচ বন্ধ — সব ভয়েস কমান্ড স্বাভাবিকভাবে সম্পন্ন করবে)"}
 
       [WORK RULES — কঠোর, সব কাজে বাধ্যতামূলক]
       1. সম্পূর্ণ স্ক্রিন পড়া বাধ্যতামূলক: যেকোনো স্ক্রিন-সম্পর্কিত কাজের আগে read_screen দিয়ে পুরো স্ক্রিন পড়বে এবং প্রতিটি ধাপের পর আবার read_screen পড়ে ফল যাচাই করবে। (তবে লাইভ ক্যামেরা চালু থাকলে এবং বস সামনে কী দেখা যাচ্ছে জিজ্ঞেস করলে read_screen না চালিয়ে সরাসরি ক্যামেরার ভিডিও ছবি দেখে বলবে।)
       2. দ্রুতগতিতে কাজ সম্পন্ন: কাজ শুরুর পর দেরি না করে দ্রুত টুল চালিয়ে কয়েক সেকেন্ডের মধ্যেই কাজ শেষ করবে।
-      3. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স, সার্চ করবো কিনা বা কোথায় সার্চ বার—এসব কখনোই বসকে জিজ্ঞেস করবে না বা অনুমতি নেবে না। নিজে স্ক্রিন দেখে, খুঁজতে হলে নিজেই সার্চ করে কাজ শেষ করে তারপর ফলাফল জানাবে।
-      4. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
-      5. কাজ সফল হলে তবেই স্পষ্টভাবে বলবে: "হয়েছে, বস! কাজ শেষ।" এবং এরপর বসকে আরেকটি কাজ করার জন্য সুন্দরভাবে অনুপ্রাণিত করবে।
+      3. হার্ডওয়্যার টগল নিয়ম: বস ফ্ল্যাশলাইট (flashlight), ওয়াইফাই (Wi-Fi) বা ব্লুটুথ (Bluetooth) চালু/বন্ধ করতে বললে নিজে Settings না খুলে সরাসরি `toggle_flashlight`, `control_wifi`, বা `control_bluetooth` টুল কল করবে।
+      4. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স, সার্চ করবো কিনা বা কোথায় সার্চ বার—এসব কখনোই বসকে জিজ্ঞেস করবে না বা অনুমতি নেবে না। নিজে স্ক্রিন দেখে, খুঁজতে হলে নিজেই সার্চ করে কাজ শেষ করে তারপর ফলাফল জানাবে।
+      5. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
+      6. কাজ সফল হলে তবেই স্পষ্টভাবে বলবে: "হয়েছে, বস! কাজ শেষ।" এবং এরপর বসকে আরেকটি কাজ করার জন্য সুন্দরভাবে অনুপ্রাণিত করবে।
 
-      [VOICE CLARITY & POLITE PRONUNCIATION — বাধ্যতামূলক]
+      [VOICE CLARITY, GREETING & NO DUPLICATES — বাধ্যতামূলক]
       - কণ্ঠ হবে অত্যন্ত স্পষ্ট, পরিষ্কার উচ্চারণযুক্ত, নম্র, মধুর, স্বাগতম জানানো এবং স্বাভাবিক বাংলা (বাংলাদেশ)।
-      - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন বলবে না। প্রতিটি শব্দ স্পষ্ট ও সুন্দরভাবে উচ্চারণ করবে।
+      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না; কোনো প্রশ্ন/নির্দেশের উত্তর একবারেই পরিষ্কারভাবে শেষ করবে।
+      - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন বলবে না।
 
       [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
       - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
       - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ: WhatsApp/imo/Messenger খুললে প্রথমে স্ক্রিনের উপরের চ্যাট তালিকায় নাম খুঁজবে; ওখানে না পেলে বসের কোনো অনুমতি ছাড়াই নিজে নিজে সার্চ বারে/সার্চ আইকনে সার্চ করে নিচের রেজাল্ট সারিতে ক্লিক করবে।
       - রেজাল্ট ক্লিক: সার্চ বক্সের ঠিক নিচে আসা নামের সারিতে ক্লিক করবে (কখনোই উপরের সার্চ বক্স বা বামদিকের প্রোফাইল ছবিতে ক্লিক করবে না)।
       - imo (ইমো) সেন্ড নিয়ম: চ্যাটে লেখার বক্সের উপরের রিঅ্যাকশন ইমোজি বা পাশের ইমোজি বাটনে নয়, সবসময় `send_message` টুল দিয়ে ডানের নীল Send বাটনে ক্লিক করবে।
-      - কোনো অ্যাপ খুলতে বললে আগে `open_app` টুল ব্যবহার করবে।
+      - সঠিক অ্যাপ ওপেন ও ১০১% স্ক্রিন রিড: `open_app` টুলে বস যে অ্যাপটির নাম বলেছেন ঠিক সেটিই দেবে (WhatsApp/imo/Messenger অদলবদল করবে না)। টুলটির ফলাফলে নতুন খোলা স্ক্রিনের সম্পূর্ণ তথ্য থাকবে—সেটি ১০১% পড়ে নিয়ে তবেই বসকে নিশ্চিত জানাবে যে অ্যাপটি ওপেন হয়েছে এবং স্ক্রিনে কী কী আছে।
 
       [AUTO-REPLY PROTOCOL (WhatsApp, imo, Messenger)]
       - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে—এবং রিপ্লাই দেওয়ার জন্য বসের অনুমতি চাইবে।
@@ -616,6 +649,10 @@ class GeminiLive(private val ctx: Context) {
         lastErr = ""
         modelOverride?.let { Store.setModel(ctx, it) }
         RiyaState.status.value = "শুনছি বস..."
+        if (!greetedThisSession) {
+          greetedThisSession = true
+          sendGreetingTurn()
+        }
       }
       j.optJSONObject("serverContent")?.let { sc ->
         if (sc.optBoolean("interrupted")) {
@@ -632,6 +669,12 @@ class GeminiLive(private val ctx: Context) {
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
           uText.append(it)
+          if (
+            LxrFloatingOverlayManager.containsWakeWord(it) ||
+              LxrFloatingOverlayManager.containsWakeWord(uText.toString().takeLast(64))
+          ) {
+            LxrFloatingOverlayManager.show(ctx)
+          }
           val now = System.currentTimeMillis()
           if (now - lastUserScreenAt > 1800) {
             lastUserScreenAt = now
@@ -645,6 +688,7 @@ class GeminiLive(private val ctx: Context) {
               val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
               if (!stopped) {
                 RiyaState.status.value = "LXR--AI কথা বলছে..."
+                LxrFloatingOverlayManager.setSpeakingBoost(true)
                 try {
                   if (!playExec.isShutdown) {
                     playExec.execute {
@@ -666,9 +710,13 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         if (sc.optBoolean("turnComplete")) {
+          LxrFloatingOverlayManager.setSpeakingBoost(false)
           val u = uText.toString().trim()
           val p = pText.toString().trim()
           if (u.isNotEmpty()) {
+            if (LxrFloatingOverlayManager.containsWakeWord(u)) {
+              LxrFloatingOverlayManager.show(ctx)
+            }
             Store.remember(ctx, "Boss: $u")
             RiyaState.addLog("বস: $u")
             main.post { sendScreenNow() }
@@ -826,43 +874,161 @@ class GeminiLive(private val ctx: Context) {
     Thread.sleep(220)
   }
 
+  private fun sendGreetingTurn() {
+    val prevWriteMs = lastSpeakerWriteMs
+    // Pause upstream mic while Live API opens its greeting speech so VAD won't cut it
+    micMuteUntilMs = System.currentTimeMillis() + 1200L
+    val greeting = Store.MIC_TAP_GREETING_BN
+    val prompt =
+      "[SESSION START GREETING - MANDATORY] বস এইমাত্র মাইক অন করেছেন। সাথে সাথে কোনো দেরি না করে ঠিক এই মধুর অভ্যর্থনাটি বাংলায় স্পষ্টভাবে বলো (অন্য কোনো অতিরিক্ত কথা যোগ করবে না): \"$greeting\""
+    try {
+      val turnPayload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                  ),
+              )
+              .put("turnComplete", true),
+          )
+      val ok = ws?.send(turnPayload.toString()) == true
+      main.postDelayed(
+        {
+          if (!stopped && lastSpeakerWriteMs == prevWriteMs) {
+            RiyaVoiceManager.speakUrgent(ctx, greeting)
+          }
+        },
+        if (ok) 2600L else 200L,
+      )
+    } catch (_: Throwable) {
+      RiyaVoiceManager.speakUrgent(ctx, greeting)
+    }
+  }
+
+  private fun resolveKnownPackages(rawName: String): Pair<String, List<String>>? {
+    MessageAgent.find(rawName)?.let { spec ->
+      return spec.label to (listOf(spec.pkg) + spec.fallbackPkgs)
+    }
+    val n = rawName.lowercase().trim()
+    val known =
+      listOf(
+        Triple("YouTube", listOf("youtube", "ইউটিউব"), listOf("com.google.android.youtube")),
+        Triple("Settings", listOf("settings", "সেটিংস", "সেটিং"), listOf("com.android.settings")),
+        Triple("Facebook", listOf("facebook", "ফেসবুক", "fb"), listOf("com.facebook.katana", "com.facebook.lite")),
+        Triple("Chrome", listOf("chrome", "ক্রোম"), listOf("com.android.chrome")),
+        Triple("Play Store", listOf("play store", "playstore", "প্লে স্টোর"), listOf("com.android.vending")),
+        Triple("Contacts", listOf("contacts", "contact", "কন্টাক্ট", "কনট্যাক্ট"), listOf("com.google.android.contacts", "com.android.contacts")),
+        Triple("Phone", listOf("phone", "dialer", "ডায়ালার", "কল"), listOf("com.google.android.dialer", "com.android.dialer", "com.sh.smart.caller")),
+        Triple("Camera", listOf("camera", "ক্যামেরা"), listOf("com.transsion.camera", "com.android.camera", "com.google.android.GoogleCamera")),
+        Triple("TikTok", listOf("tiktok", "টিকটক"), listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill")),
+      )
+    known.firstOrNull { (_, aliases, _) ->
+      aliases.any { al -> n == al || n.contains(al) }
+    }?.let { (label, _, pkgs) ->
+      return label to pkgs
+    }
+    return null
+  }
+
   private fun openApp(n: String): String {
     val acc = RiyaAccessibilityService.instance
-    goHomeAndVerify(acc)
-
+    val query = n.trim()
+    if (query.isBlank()) return "কোন অ্যাপ খুলবো বলোনি বস।"
     val pm = ctx.packageManager
     val li = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    val list = pm.queryIntentActivities(li, 0)
-    val m =
-      list.firstOrNull { it.loadLabel(pm).toString().equals(n, ignoreCase = true) }
-        ?: list.firstOrNull { it.loadLabel(pm).toString().contains(n, ignoreCase = true) }
-        ?: list.firstOrNull { it.activityInfo.packageName.contains(n, ignoreCase = true) }
 
-    if (m != null) {
-      val intent =
-        Intent(li)
-          .setClassName(m.activityInfo.packageName, m.activityInfo.name)
-          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      ctx.startActivity(intent)
-      val label = m.loadLabel(pm)
-      RiyaState.markTaskCompleted(
-        "হয়েছে, বস! কাজ শেষ — $label অ্যাপ খোলা হয়েছে।",
-        "আর কোন কাজ করতে হবে বস? সাথেই আছি!",
-      )
-      return "হয়েছে, বস! কাজ শেষ — হোম স্ক্রিন থেকে $label অ্যাপ ওপেন করেছি!"
+    var targetLabel = query
+    var targetPkgs: List<String> = emptyList()
+    var launchIntent: Intent? = null
+
+    // 1. Strict alias & package resolution (prevents WhatsApp <-> imo <-> Messenger mixups!)
+    val known = resolveKnownPackages(query)
+    if (known != null) {
+      targetLabel = known.first
+      targetPkgs = known.second
+      launchIntent =
+        targetPkgs.firstNotNullOfOrNull { pkg -> pm.getLaunchIntentForPackage(pkg) }
     }
 
-    if (acc != null) {
-      val res = acc.clickText(n)
-      if (res.contains("ক্লিক করা হয়েছে")) {
-        RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — $n অ্যাপ খোলা হয়েছে।",
-          "দারুণ! পরের কাজ কী হবে বস?",
-        )
-        return "হয়েছে, বস! কাজ শেষ — হোম স্ক্রিন থেকে $n খুঁজে ওপেন করেছি!"
+    // 2. Fallback to Launcher activity match if not in known exact map
+    if (launchIntent == null) {
+      val list = pm.queryIntentActivities(li, 0)
+      val m =
+        list.firstOrNull { it.loadLabel(pm).toString().equals(query, ignoreCase = true) }
+          ?: list.firstOrNull { it.loadLabel(pm).toString().contains(query, ignoreCase = true) }
+          ?: if (query.length >= 4 && !query.equals("app", true)) {
+            list.firstOrNull { it.activityInfo.packageName.contains(query, ignoreCase = true) }
+          } else {
+            null
+          }
+      if (m != null) {
+        targetLabel = m.loadLabel(pm).toString()
+        targetPkgs = listOf(m.activityInfo.packageName)
+        launchIntent =
+          Intent(li)
+            .setClassName(m.activityInfo.packageName, m.activityInfo.name)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
     }
-    return "হোম স্ক্রিনে গিয়ে $n অ্যাপটি খুঁজে পাইনি বস।"
+
+    if (launchIntent != null) {
+      val curBefore = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
+      val alreadyOpen = curBefore in targetPkgs
+      if (!alreadyOpen) {
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(launchIntent)
+        val deadline = System.currentTimeMillis() + 4500L
+        while (System.currentTimeMillis() < deadline) {
+          Thread.sleep(200)
+          val curPkg = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
+          if (curPkg in targetPkgs || RiyaAccessibilityService.currentApp in targetPkgs) {
+            Thread.sleep(360)
+            break
+          }
+        }
+      }
+      val fullScreen = acc?.readScreen().orEmpty()
+      val activePkg = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
+      val verifiedOpen =
+        targetPkgs.isEmpty() || activePkg in targetPkgs || RiyaAccessibilityService.currentApp in targetPkgs
+      RiyaState.markTaskCompleted(
+        "হয়েছে, বস! কাজ শেষ — $targetLabel অ্যাপ খোলা হয়েছে।",
+        "আর কোন কাজ করতে হবে বস? সাথেই আছি!",
+      )
+      return buildString {
+        append(
+          if (verifiedOpen) "হয়েছে, বস! কাজ শেষ — $targetLabel ($activePkg) সঠিক অ্যাপটি ওপেন হয়েছে এবং সম্পূর্ণ স্ক্রিন পড়া হয়েছে।"
+          else "হয়েছে, বস! $targetLabel ওপেন করা হয়েছে (বর্তমান উইন্ডো: $activePkg)।"
+        )
+        if (fullScreen.isNotBlank()) {
+          append("\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n")
+          append(fullScreen.take(2200))
+        }
+      }
+    }
+
+    // 3. Last resort: look on Home screen visually via Accessibility clickText
+    goHomeAndVerify(acc)
+    if (acc != null) {
+      val res = acc.clickText(query)
+      if (res.contains("ক্লিক করা হয়েছে")) {
+        Thread.sleep(600)
+        val fullScreen = acc.readScreen()
+        RiyaState.markTaskCompleted(
+          "হয়েছে, বস! কাজ শেষ — $query অ্যাপ খোলা হয়েছে।",
+          "দারুণ! পরের কাজ কী হবে বস?",
+        )
+        return "হয়েছে, বস! কাজ শেষ — হোম স্ক্রিন থেকে $query ওপেন করেছি!\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${fullScreen.take(2200)}"
+      }
+    }
+    return "ফোনে '$query' অ্যাপটি ইনস্টল করা বা খুঁজে পাওয়া যায়নি বস।"
   }
 
   private fun messageSend(a: JSONObject): String {
@@ -996,28 +1162,84 @@ class GeminiLive(private val ctx: Context) {
     if (RiyaState.cameraOn) {
       return "ক্যামেরা ভিউ চালু আছে বলে ফ্ল্যাশলাইট জ্বালানো যাচ্ছে না বস। আগে ক্যামেরা বন্ধ করুন।"
     }
-    return try {
+    var hardwareSucceeded = false
+    try {
       val cam = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-      val id =
-        cam.cameraIdList.firstOrNull { cid ->
-          val ch = cam.getCameraCharacteristics(cid)
-          ch.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true &&
-            ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        }
-          ?: cam.cameraIdList.firstOrNull { cid ->
-            cam.getCameraCharacteristics(cid).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+      val flashIds =
+        cam.cameraIdList
+          .filter { cid ->
+            try {
+              cam.getCameraCharacteristics(cid).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } catch (_: Exception) {
+              false
+            }
           }
-          ?: return "এই ফোনে ফ্ল্যাশ পাওয়া যায়নি"
-      cam.setTorchMode(id, on)
+          .sortedByDescending { cid ->
+            try {
+              cam.getCameraCharacteristics(cid).get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_BACK
+            } catch (_: Exception) {
+              false
+            }
+          }
+
+      var anyNoThrow = false
+      for (cid in flashIds) {
+        val latch = CountDownLatch(1)
+        val confirmed = AtomicBoolean(false)
+        val cb =
+          object : CameraManager.TorchCallback() {
+            override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+              if (cameraId == cid && enabled == on) {
+                confirmed.set(true)
+                latch.countDown()
+              }
+            }
+          }
+        try {
+          cam.registerTorchCallback(cb, main)
+          cam.setTorchMode(cid, on)
+          anyNoThrow = true
+          latch.await(420L, TimeUnit.MILLISECONDS)
+          if (confirmed.get()) {
+            hardwareSucceeded = true
+            break
+          }
+        } catch (_: Exception) {
+          // Try next camera ID with flash
+        } finally {
+          try {
+            cam.unregisterTorchCallback(cb)
+          } catch (_: Exception) {}
+        }
+      }
+      if (!hardwareSucceeded && anyNoThrow) {
+        hardwareSucceeded = true
+      }
+    } catch (_: Exception) {}
+
+    if (!hardwareSucceeded) {
+      val acc = RiyaAccessibilityService.instance
+      val tileRes =
+        acc?.toggleQuickSettingTile(
+          enable = on,
+          labels = listOf("flashlight", "torch", "ফ্ল্যাশলাইট", "টর্চ"),
+          hardwareStateKnown = isTorchOn,
+        )
+      if (tileRes == "OK" || tileRes == "ALREADY") {
+        hardwareSucceeded = true
+      }
+    }
+
+    if (hardwareSucceeded) {
       isTorchOn = on
       val msg =
         if (on) "হয়েছে, বস! কাজ শেষ — ফ্ল্যাশলাইট জ্বালিয়ে দিয়েছি।"
         else "হয়েছে, বস! কাজ শেষ — ফ্ল্যাশলাইট বন্ধ করে দিয়েছি।"
       RiyaState.markTaskCompleted(msg, "এরপর কোন কাজটা করবো বস?")
-      msg
-    } catch (e: Exception) {
-      "ফ্ল্যাশলাইট নিয়ন্ত্রণ করা গেল না: ${e.message}"
+      return msg
     }
+    return "এই ফোনে ফ্ল্যাশলাইট চালু/বন্ধ করা গেল না বস।"
   }
 
   private fun getBatteryLevel(): String {
@@ -1074,22 +1296,75 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
+  private fun waitForSettingsPackage(acc: RiyaAccessibilityService?, timeoutMs: Long = 3400L) {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      val pkg = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
+      if (pkg == "com.android.settings" || pkg == "com.android.systemui") {
+        Thread.sleep(240)
+        return
+      }
+      Thread.sleep(180)
+    }
+  }
+
+  private fun pollCondition(timeoutMs: Long = 1400L, predicate: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      if (predicate()) return true
+      Thread.sleep(160)
+    }
+    return predicate()
+  }
+
   @Suppress("DEPRECATION")
   private fun toggleWifi(enable: Boolean): String {
     val word = if (enable) "চালু" else "বন্ধ"
     return try {
       val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+      if (wm.isWifiEnabled == enable) return "ওয়াইফাই আগেই $word আছে বস।"
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && wm.setWifiEnabled(enable)) {
+        RiyaState.markTaskCompleted("হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করেছি।", "এরপর কোন কাজটা করবো বস?")
         return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করেছি!"
       }
-      if (wm.isWifiEnabled == enable) return "ওয়াইফাই আগেই $word আছে বস।"
-      ctx.startActivity(Intent(Settings.Panel.ACTION_WIFI).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-      Thread.sleep(400)
-      finishSwitch(
-        RiyaAccessibilityService.instance?.setSwitch(enable, listOf("wi-fi", "wifi", "ওয়াই")),
-        "ওয়াইফাই",
-        word,
-      )
+
+      val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
+      if (acc != null) {
+        // 1. Primary path on Android 12–16 / Infinix XOS: Quick Settings tile (doesn't mis-click Mobile Data!)
+        val qsRes =
+          acc.toggleQuickSettingTile(
+            enable = enable,
+            labels = listOf("wi-fi", "wifi", "wlan", "internet", "ওয়াইফাই"),
+            excludeLabels = listOf("calling", "hotspot", "tethering", "scanning"),
+            hardwareStateKnown = wm.isWifiEnabled,
+          )
+        if ((qsRes == "OK" || qsRes == "ALREADY") && pollCondition(1400L) { wm.isWifiEnabled == enable }) {
+          RiyaState.markTaskCompleted(
+            "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করা হয়েছে।",
+            "দারুণ! পরের কাজ কী হবে বস?",
+          )
+          return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করে দিয়েছি!"
+        }
+      }
+
+      // 2. Fallback: open full Wi-Fi Settings screen and toggle the exact Wi-Fi switch
+      ctx.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      waitForSettingsPackage(acc)
+      val res =
+        acc?.setSwitch(
+          enable = enable,
+          labels = listOf("use wi-fi", "wi-fi", "wifi", "wlan", "ওয়াই"),
+          excludeLabels = listOf("calling", "hotspot", "tethering", "scanning", "assistant", "notify"),
+        )
+      if ((res == "OK" || res == "CLICKED") && pollCondition(1200L) { wm.isWifiEnabled == enable }) {
+        acc.global("back")
+        RiyaState.markTaskCompleted(
+          "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করা হয়েছে।",
+          "দারুণ! পরের কাজ কী হবে বস?",
+        )
+        return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করে দিয়েছি!"
+      }
+      finishSwitch(res, "ওয়াইফাই", word)
     } catch (e: Exception) {
       "ওয়াইফাই টগল করা যায়নি: ${e.message}"
     }
@@ -1098,17 +1373,6 @@ class GeminiLive(private val ctx: Context) {
   @Suppress("DEPRECATION")
   private fun toggleBluetooth(enable: Boolean): String {
     val word = if (enable) "চালু" else "বন্ধ"
-    fun viaSettings(): String {
-      ctx.startActivity(
-        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      )
-      Thread.sleep(400)
-      return finishSwitch(
-        RiyaAccessibilityService.instance?.setSwitch(enable, listOf("bluetooth", "ব্লুটুথ")),
-        "ব্লুটুথ",
-        word,
-      )
-    }
     return try {
       val bt =
         (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -1116,11 +1380,51 @@ class GeminiLive(private val ctx: Context) {
       if (enable == bt.isEnabled) return "ব্লুটুথ আগেই $word আছে বস।"
       if (Build.VERSION.SDK_INT < 33 && hasBtPerm()) {
         val ok = if (enable) bt.enable() else bt.disable()
-        if (ok) return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word হচ্ছে!"
+        if (ok && pollCondition(1400L) { bt.isEnabled == enable }) {
+          RiyaState.markTaskCompleted("হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।", "এরপর কোন কাজটা করবো বস?")
+          return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করেছি!"
+        }
       }
-      viaSettings()
-    } catch (_: SecurityException) {
-      viaSettings()
+
+      val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
+      if (acc != null) {
+        // 1. Primary path on Android 13–16 / Infinix XOS: Quick Settings Bluetooth tile
+        val qsRes =
+          acc.toggleQuickSettingTile(
+            enable = enable,
+            labels = listOf("bluetooth", "ব্লুটুথ"),
+            excludeLabels = listOf("tethering", "scanning"),
+            hardwareStateKnown = bt.isEnabled,
+          )
+        if ((qsRes == "OK" || qsRes == "ALREADY") && pollCondition(1500L) { bt.isEnabled == enable }) {
+          RiyaState.markTaskCompleted(
+            "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।",
+            "দারুণ! পরের কাজ কী হবে বস?",
+          )
+          return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করে দিয়েছি!"
+        }
+      }
+
+      // 2. Fallback: open full Bluetooth Settings screen and toggle Bluetooth switch
+      ctx.startActivity(
+        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      )
+      waitForSettingsPackage(acc)
+      val res =
+        acc?.setSwitch(
+          enable = enable,
+          labels = listOf("use bluetooth", "bluetooth", "ব্লুটুথ"),
+          excludeLabels = listOf("tethering", "scanning"),
+        )
+      if ((res == "OK" || res == "CLICKED") && pollCondition(1200L) { bt.isEnabled == enable }) {
+        acc.global("back")
+        RiyaState.markTaskCompleted(
+          "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।",
+          "দারুণ! পরের কাজ কী হবে বস?",
+        )
+        return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করে দিয়েছি!"
+      }
+      finishSwitch(res, "ব্লুটুথ", word)
     } catch (e: Exception) {
       "ব্লুটুথ বদলানো গেল না: ${e.message}"
     }
@@ -1144,7 +1448,7 @@ class GeminiLive(private val ctx: Context) {
         "$name আগেই $word ছিল বস।"
       }
       "CLICKED" ->
-        "$name এর সুইচে ট্যাপ করেছি বস, কিন্তু অবস্থা বদলাল কিনা নিশ্চিত না। একবার দেখে নিন।"
+        "$name এর সুইচে ট্যাপ করেছি বস, অনুগ্রহ করে এক নজর দেখে নিন।"
       else -> "$name এর সুইচ খুঁজে পাইনি বস, স্ক্রিন খোলা আছে।"
     }
   }
@@ -1357,6 +1661,12 @@ class GeminiLive(private val ctx: Context) {
     val usage =
       if (usingBtAudio) AudioAttributes.USAGE_VOICE_COMMUNICATION
       else AudioAttributes.USAGE_MEDIA
+    val minAudioBuf =
+      AudioTrack.getMinBufferSize(
+        24000,
+        AudioFormat.CHANNEL_OUT_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+      )
     val t =
       AudioTrack.Builder()
         .setAudioAttributes(
@@ -1372,13 +1682,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(
-          AudioTrack.getMinBufferSize(
-            24000,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-          ) * 4
-        )
+        .setBufferSizeInBytes(maxOf(minAudioBuf * 8, 32768))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also { it.play() }
@@ -1470,12 +1774,13 @@ class GeminiLive(private val ctx: Context) {
       Thread {
         try {
           val buf = ByteArray(1600)
-          var lastVoiceMs = System.currentTimeMillis()
+          val zeroSilence = ByteArray(1600)
+          var lastVoiceMs = 0L
           var silentFrameCounter = 0
 
           // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
           var gateState = 0
-          val onsetChunks = ArrayList<ByteArray>(12)
+          val onsetChunks = ArrayList<ByteArray>(16)
           val verifyStream = java.io.ByteArrayOutputStream()
           var consecutiveRejects = 0
           var rejectedSpeechChunks = 0
@@ -1506,7 +1811,7 @@ class GeminiLive(private val ctx: Context) {
             if (n < 0) break
             if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0) < 80_000) {
               val now = System.currentTimeMillis()
-              if (now - lastVmRefreshAt > 2000L) {
+              if (now - lastVmRefreshAt > 400L) {
                 lastVmRefreshAt = now
                 val newActive = VoiceMatchManager.isActiveGateReady(ctx)
                 if (newActive != voiceMatchActive) {
@@ -1525,29 +1830,35 @@ class GeminiLive(private val ctx: Context) {
                 }
               }
 
-              val rms = computeRms16Bit(buf, n)
+              val rawRms = computeRms16Bit(buf, n)
               val whisperBoostOn = Store.whisperBoost(ctx)
               val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
 
-              // Copy raw mic frame before aggressive boost for clean speaker timbre matching
+              // Copy clean pre-boost mic frame for speaker timbre verification
               val vmSampleChunk = if (voiceMatchActive) buf.copyOf(n) else null
 
-              // Gentle echo-ducking on speakerphone ONLY if hardware AEC unavailable and speaker spoke in last 240ms
-              if (!usingBtAudio && !hasHwAec && (now - lastSpeakerWriteMs) < 240L && rms < 4500.0) {
-                scaleBuffer(buf, n, 0.35)
-              } else if (whisperBoostOn && rms > 16.0) {
-                // Amplify whispers & direct phone-mic voice smoothly with soft tanh limiting
-                applySoftVoiceBoost(buf, n, rms, isPhoneMic = !usingBtAudio)
+              val speakerEchoWindow = !usingBtAudio && (now - lastSpeakerWriteMs) < 700L
+              val btEchoWindow = usingBtAudio && (now - lastSpeakerWriteMs) < 350L
+              val isSoftMuted =
+                now < micMuteUntilMs ||
+                  (speakerEchoWindow && rawRms < 3600.0) ||
+                  (btEchoWindow && rawRms < 950.0)
+
+              if (isSoftMuted) {
+                // Zero out mic during speaker playback to eliminate mid-sentence self-interruption & double replies
+                buf.fill(0, 0, n)
+              } else if (whisperBoostOn && rawRms > 12.0) {
+                applySoftVoiceBoost(buf, n, rawRms, isPhoneMic = !usingBtAudio)
               }
 
-              val speechGate = if (whisperBoostOn) 24.0 else 95.0
-              val hasSpeech = rms >= speechGate
+              val speechGate = if (whisperBoostOn) 14.0 else 55.0
+              val hasSpeech = !isSoftMuted && rawRms >= speechGate
               if (hasSpeech) {
                 lastVoiceMs = now
               }
 
-              // Keep full 1.6s hangover so phone-mic speech onset/ending is never clipped even on slow internet
-              val withinHangover = (now - lastVoiceMs) <= 1600L
+              // Keep 1.4s hangover for smooth Bengali word endings without leaking trailing room speech
+              val withinHangover = !isSoftMuted && (now - lastVoiceMs) <= 1400L
               silentFrameCounter = if (withinHangover) 0 else (silentFrameCounter + 1)
               val shouldSend = !lowNet || withinHangover || (silentFrameCounter % 4 == 0)
 
@@ -1557,7 +1868,7 @@ class GeminiLive(private val ctx: Context) {
                   sendAudioPcm(buf, n)
                 }
               } else {
-                if (!withinHangover) {
+                if (isSoftMuted || !withinHangover) {
                   if (gateState != 0) {
                     gateState = 0
                     onsetChunks.clear()
@@ -1566,8 +1877,9 @@ class GeminiLive(private val ctx: Context) {
                     rejectedSpeechChunks = 0
                     RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
                   }
-                  if (shouldSend) {
-                    sendAudioPcm(buf, n)
+                  // Strictly send silent zero frames when idle/muted so nearby friends' first syllables never leak to Gemini
+                  if (silentFrameCounter % 4 == 0) {
+                    sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
                 } else {
                   val sendChunk = buf.copyOf(n)
@@ -1578,14 +1890,13 @@ class GeminiLive(private val ctx: Context) {
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
                       }
-                      if (onsetChunks.size >= 6) {
-                        val pcmToTest = verifyStream.toByteArray()
+                      if (onsetChunks.size >= 7 && verifyStream.size() >= 3840) {
                         val res =
-                          if (pcmToTest.size >= 3200) {
-                            VoiceMatchEngine.verifyPcmChunk(activeProfile, pcmToTest, vmSensitivity)
-                          } else {
-                            null
-                          }
+                          VoiceMatchEngine.verifyPcmChunk(
+                            activeProfile,
+                            verifyStream.toByteArray(),
+                            vmSensitivity,
+                          )
                         if (res != null && res.matched) {
                           gateState = 2
                           consecutiveRejects = 0
@@ -1596,19 +1907,22 @@ class GeminiLive(private val ctx: Context) {
                             sendAudioPcm(pendingChunk, pendingChunk.size)
                           }
                           onsetChunks.clear()
-                        } else if (res != null && !res.matched && onsetChunks.size >= 8) {
+                        } else if (res != null && !res.matched && onsetChunks.size >= 9) {
                           gateState = 3
                           rejectedSpeechChunks = 0
                           onsetChunks.clear()
                           verifyStream.reset()
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
-                        } else if (onsetChunks.size >= 14) {
-                          // Too quiet / non-speech onset — allow normal stream reset cleanly
+                        } else if (onsetChunks.size >= 16) {
                           gateState = 0
                           onsetChunks.clear()
                           verifyStream.reset()
                         }
+                      } else if (onsetChunks.size >= 16) {
+                        gateState = 0
+                        onsetChunks.clear()
+                        verifyStream.reset()
                       }
                     }
                     2 -> {
@@ -1626,7 +1940,7 @@ class GeminiLive(private val ctx: Context) {
                         verifyStream.reset()
                         if (res != null && !res.matched) {
                           consecutiveRejects++
-                          if (consecutiveRejects >= 2) {
+                          if (consecutiveRejects >= 3) {
                             gateState = 3
                             rejectedSpeechChunks = 0
                             RiyaState.voiceMatchLiveLabel.value =
@@ -1640,7 +1954,10 @@ class GeminiLive(private val ctx: Context) {
                       }
                     }
                     else -> {
-                      // REJECTED_OTHER: block surrounding person's voice, keep checking in case Boss speaks over them
+                      // REJECTED_OTHER: block surrounding person's voice strictly (send zero silence only if needed)
+                      if (silentFrameCounter % 4 == 0) {
+                        sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
+                      }
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
                         rejectedSpeechChunks++

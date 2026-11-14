@@ -201,7 +201,7 @@ object VoiceMatchEngine {
   fun extractSignatureFromSamples(samples: ShortArray): SpeakerSignature? {
     if (samples.size < FRAME_SIZE) return null
 
-    // Compute per-frame RMS to adaptively identify voiced speech vs ambient room hum
+    // Compute per-frame RMS to adaptively identify voiced speech (including quiet/soft Boss voice) vs room hum
     val frameStarts = ArrayList<Int>()
     val frameRmsList = ArrayList<Float>()
     var idx = 0
@@ -221,7 +221,23 @@ object VoiceMatchEngine {
     val sortedRms = frameRmsList.sorted()
     val noiseFloor = sortedRms[(sortedRms.size * 0.15).toInt().coerceIn(0, sortedRms.lastIndex)]
     val peakRms = sortedRms.last()
-    val adaptiveGate = maxOf(42f, minOf(peakRms * 0.24f, noiseFloor * 2.1f + 35f))
+    // Reject near-zero digital silence while keeping soft whisper speech & sustained vowels cleanly
+    if (peakRms < 14f) return null
+    val adaptiveGate = maxOf(14f, minOf(peakRms * 0.20f, noiseFloor * 1.48f + 12f))
+
+    // Compute mean active RMS so soft voice gets clean gain normalization before FFT & pitch estimation
+    var activeRmsSum = 0.0
+    var activeFrames = 0
+    for (fIdx in frameStarts.indices) {
+      val r = frameRmsList[fIdx]
+      if (r >= adaptiveGate) {
+        activeRmsSum += r
+        activeFrames++
+      }
+    }
+    if (activeFrames < 4) return null
+    val meanActiveRms = (activeRmsSum / activeFrames).toFloat().coerceAtLeast(14f)
+    val normGain = (2200f / meanActiveRms).coerceIn(1f, 16f)
 
     val accumMfcc = FloatArray(MFCC_COUNT)
     val re = FloatArray(FFT_SIZE)
@@ -236,16 +252,16 @@ object VoiceMatchEngine {
       if (frameRmsList[fIdx] < adaptiveGate) continue
       val start = frameStarts[fIdx]
 
-      // Zero-mean + pre-emphasis + Hamming window into FFT real buffer
+      // Zero-mean + soft-voice normalization + pre-emphasis + Hamming window into FFT real buffer
       re.fill(0f)
       im.fill(0f)
       var mean = 0f
-      for (n in 0 until FRAME_SIZE) mean += samples[start + n].toFloat()
+      for (n in 0 until FRAME_SIZE) mean += samples[start + n].toFloat() * normGain
       mean /= FRAME_SIZE
 
       var prev = 0f
       for (n in 0 until FRAME_SIZE) {
-        val centered = samples[start + n].toFloat() - mean
+        val centered = (samples[start + n].toFloat() * normGain) - mean
         val emphasized = centered - 0.95f * prev
         prev = centered
         re[n] = emphasized * hammingWindow[n]
@@ -353,7 +369,7 @@ object VoiceMatchEngine {
       }
     }
 
-    return if (bestLag > 0 && bestCorr >= 0.42) {
+    return if (bestLag > 0 && bestCorr >= 0.36) {
       (SAMPLE_RATE.toFloat() / bestLag.toFloat()).coerceIn(75f, 355f)
     } else {
       0f
@@ -495,21 +511,35 @@ object VoiceMatchEngine {
       profile.stepSignatures.values.maxOfOrNull { cosineSimilarity(candidate.mfcc, it.mfcc) }
         ?: cosCentroid
     val mfccSim = ((0.60f * cosCentroid) + (0.40f * maxStepCos)).coerceIn(-1f, 1f)
-    // Remap cosine [-0.2 .. 1.0] smoothly into [0..1] discriminative score
-    val mfccUnit = ((mfccSim + 0.10f) / 1.10f).coerceIn(0f, 1f)
+    val mfccUnit = mfccSim.coerceIn(0f, 1f)
 
     val pitchScore: Float
-    val finalScore: Float
+    val rawScore: Float
     if (candidate.pitchHz > 0f && profile.meanPitchHz > 0f) {
-      val relDiff = abs(candidate.pitchHz - profile.meanPitchHz) / maxOf(profile.meanPitchHz, 100f)
-      pitchScore = exp(-(relDiff * relDiff) / (2f * 0.24f * 0.24f)).coerceIn(0f, 1f)
+      val directDiff = abs(candidate.pitchHz - profile.meanPitchHz)
+      // Only forgive autocorrelation octave jumps when the vocal-tract MFCC timbre already closely matches Boss
+      val bestDiff =
+        if (mfccUnit >= 0.72f) {
+          minOf(
+            directDiff,
+            abs(candidate.pitchHz * 2f - profile.meanPitchHz) * 1.35f,
+            abs(candidate.pitchHz * 0.5f - profile.meanPitchHz) * 1.35f,
+          )
+        } else {
+          directDiff
+        }
+      val relDiff = bestDiff / maxOf(profile.meanPitchHz, 100f)
+      pitchScore = exp(-(relDiff * relDiff) / (2f * 0.28f * 0.28f)).coerceIn(0f, 1f)
       val centroidDiff = abs(candidate.spectralCentroid - profile.meanCentroid)
-      val centroidScore = (1f - centroidDiff * 1.4f).coerceIn(0f, 1f)
-      finalScore = (0.72f * mfccUnit + 0.22f * pitchScore + 0.06f * centroidScore).coerceIn(0f, 1f)
+      val centroidScore = (1f - centroidDiff * 1.25f).coerceIn(0f, 1f)
+      rawScore = (0.80f * mfccUnit + 0.12f * pitchScore + 0.08f * centroidScore).coerceIn(0f, 1f)
     } else {
       pitchScore = mfccUnit
-      finalScore = mfccUnit
+      rawScore = mfccUnit
     }
+
+    // Never allow a stranger with unrelated vocal-tract timbre to pass on pitch/centroid alone
+    val finalScore = if (mfccSim < 0.45f) minOf(rawScore, 0.42f) else rawScore
 
     val pct = (finalScore * 100f).toInt().coerceIn(0, 100)
     return VoiceMatchResult(
@@ -638,8 +668,8 @@ object VoiceMatchManager {
             }
             out.write(buf, 0, n)
             val rms = computeRms(buf, n)
-            val normLevel = (rms / 2200f).coerceIn(0f, 1f)
-            if (rms > 65f) {
+            val normLevel = (rms / 1600f).coerceIn(0f, 1f)
+            if (rms > 32f) {
               voicedChunks++
               lastVoiceAt = now
             }
@@ -653,10 +683,10 @@ object VoiceMatchManager {
 
           val rawBytes = out.toByteArray()
           val signature = VoiceMatchEngine.extractSignature(rawBytes)
-          if (signature == null || signature.voicedFrames < 10) {
+          if (signature == null || signature.voicedFrames < 6) {
             postError(
               onDone,
-              "স্পষ্ট কণ্ঠ শোনা যায়নি বস। ফোনের কাছে ধরে পরিষ্কারভাবে বাক্যটি বলুন।",
+              "স্পষ্ট কণ্ঠ শোনা যায়নি বস। স্বাভাবিক স্বরে বাক্যটি বলুন।",
             )
             return@Thread
           }
@@ -812,7 +842,19 @@ object VoiceMatchManager {
             AudioFormat.ENCODING_PCM_16BIT,
             bufSize,
           )
-        if (candidate.state == AudioRecord.STATE_INITIALIZED) return candidate
+        if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+          if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+            try {
+              android.media.audiofx.AutomaticGainControl.create(candidate.audioSessionId)?.enabled = true
+            } catch (_: Throwable) {}
+          }
+          if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+            try {
+              android.media.audiofx.AcousticEchoCanceler.create(candidate.audioSessionId)?.enabled = true
+            } catch (_: Throwable) {}
+          }
+          return candidate
+        }
         candidate.release()
       } catch (_: Throwable) {}
     }

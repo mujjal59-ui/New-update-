@@ -83,16 +83,19 @@ object AccessibilityStatusMonitor {
     var settingsActive = liveSingletonAlive || enabledByAm || enabledInSecureSettings
     var isBound = liveSingletonAlive || RiyaRuntimeBridge.isAccessibilityServiceConnected.value
 
-    // If Settings shows ON but Android 16 / XOS left service unbound (zombie state), auto-rebind if allowed
+    // If Settings shows ON but Android 16 / XOS left service unbound (zombie state) for >3s, auto-rebind if allowed
+    val nowCheck = System.currentTimeMillis()
     if (settingsActive && !isBound && Keep.canSelfEnable(appCtx)) {
-      if (Keep.forceRebindAccessibility(appCtx)) {
-        enabledByAm = checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort)
-        enabledInSecureSettings =
-          checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
-        settingsActive = enabledByAm || enabledInSecureSettings
-        isBound =
-          RiyaAccessibilityService.instance != null ||
-            RiyaRuntimeBridge.isAccessibilityServiceConnected.value
+      if (lastDisconnectedAtMs > 0L && (nowCheck - lastDisconnectedAtMs) > 3000L) {
+        if (Keep.forceRebindAccessibility(appCtx)) {
+          enabledByAm = checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort)
+          enabledInSecureSettings =
+            checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
+          settingsActive = enabledByAm || enabledInSecureSettings
+          isBound =
+            RiyaAccessibilityService.instance != null ||
+              RiyaRuntimeBridge.isAccessibilityServiceConnected.value
+        }
       }
     }
 
@@ -202,6 +205,16 @@ object AccessibilityStatusMonitor {
     } catch (_: Exception) {
       false
     }
+  }
+
+  fun isEnabledInOsSettings(context: Context): Boolean {
+    val appCtx = context.applicationContext
+    val serviceComponent = ComponentName(appCtx, RiyaAccessibilityService::class.java)
+    val expectedLong = "${appCtx.packageName}/${RiyaAccessibilityService::class.java.name}"
+    val expectedFlatten = serviceComponent.flattenToString()
+    val expectedShort = serviceComponent.flattenToShortString()
+    return checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort) ||
+      checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
   }
 
   fun onServiceDisconnectedFromOs(context: Context) {
