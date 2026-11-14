@@ -142,34 +142,98 @@ class RiyaNotificationListenerService : NotificationListenerService() {
     RiyaVoiceManager.initialize(applicationContext)
   }
 
-  override fun onNotificationPosted(sbn: StatusBarNotification?) {
-    if (sbn == null) return
-    val pkg = sbn.packageName ?: return
-    val appLabel = SUPPORTED_MESSAGING_APPS[pkg] ?: return
+  override fun onListenerConnected() {
+    super.onListenerConnected()
+    RiyaRuntimeBridge.setNotificationListenerConnected(true)
+    AccessibilityStatusMonitor.refreshNow(applicationContext, speakIfTurnedOff = false)
+    Log.d(TAG, "LXR--AI NotificationListener connected")
+  }
 
-    val notification = sbn.notification ?: return
-    if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
-    if ((notification.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
+  override fun onListenerDisconnected() {
+    super.onListenerDisconnected()
+    RiyaRuntimeBridge.setNotificationListenerConnected(false)
+    try {
+      requestRebind(android.content.ComponentName(this, RiyaNotificationListenerService::class.java))
+    } catch (_: Throwable) {}
+    Log.w(TAG, "LXR--AI NotificationListener disconnected")
+  }
 
-    val extras = notification.extras ?: return
-    val sender =
-      extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-    val msgText =
+  @Suppress("DEPRECATION")
+  private fun extractSenderAndMessage(extras: Bundle): Pair<String, String>? {
+    val selfName = extras.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)?.toString()?.trim().orEmpty()
+    val convTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim().orEmpty()
+    val extraTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+
+    // 1. Android MessagingStyle (WhatsApp, imo, Messenger primary format on Android 14-16)
+    val rawMsgs = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+    if (!rawMsgs.isNullOrEmpty()) {
+      for (idx in rawMsgs.indices.reversed()) {
+        val b = rawMsgs[idx] as? Bundle ?: continue
+        val text = b.getCharSequence("text")?.toString()?.trim().orEmpty()
+        var sender = b.getCharSequence("sender")?.toString()?.trim().orEmpty()
+        if (sender.isEmpty() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+          val person = b.getParcelable("sender_person") as? android.app.Person
+          sender = person?.name?.toString()?.trim().orEmpty()
+        }
+        val effectiveSender = sender.ifBlank { convTitle.ifBlank { extraTitle } }
+        val isSelfEcho =
+          effectiveSender.equals("You", true) ||
+            effectiveSender.equals("আপনি", true) ||
+            (selfName.isNotEmpty() && effectiveSender.equals(selfName, true))
+        if (!isSelfEcho && effectiveSender.isNotBlank() && text.isNotBlank()) {
+          return effectiveSender to text
+        }
+      }
+    }
+
+    // 2. Fallback: EXTRA_TEXT_LINES / EXTRA_BIG_TEXT / EXTRA_TEXT
+    val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+    val lineText = textLines?.lastOrNull()?.toString()?.trim().orEmpty()
+    val rawMsg =
       (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
           ?: extras.getCharSequence(Notification.EXTRA_TEXT))
         ?.toString()
         ?.trim()
         .orEmpty()
+        .ifBlank { lineText }
 
-    if (sender.isBlank() || msgText.isBlank()) return
-    if (
-      sender.equals("WhatsApp", true) ||
-        sender.equals("imo", true) ||
-        sender.equals("Messenger", true) ||
-        sender.contains("new messages", true)
+    var sender = convTitle.ifBlank { extraTitle }
+    var msgText = rawMsg
+
+    if (msgText.contains(": ") && (sender.equals("WhatsApp", true) || sender.equals("imo", true) || sender.equals("Messenger", true) || sender.contains("new messages", true))) {
+      val splitIdx = msgText.indexOf(": ")
+      sender = msgText.substring(0, splitIdx).trim()
+      msgText = msgText.substring(splitIdx + 2).trim()
+    }
+
+    if (sender.isBlank() || msgText.isBlank()) return null
+    val lowerSender = sender.lowercase()
+    val lowerMsg = msgText.lowercase()
+    if (lowerSender in setOf("whatsapp", "imo", "messenger", "you", "আপনি") ||
+      lowerSender.contains("new messages") ||
+      lowerMsg.contains("checking for new messages")
     ) {
+      return null
+    }
+    return sender to msgText
+  }
+
+  override fun onNotificationPosted(sbn: StatusBarNotification?) {
+    if (sbn == null) return
+    val pkg = sbn.packageName ?: return
+    val appLabel = SUPPORTED_MESSAGING_APPS[pkg] ?: return
+    RiyaRuntimeBridge.setNotificationListenerConnected(true)
+
+    val notification = sbn.notification ?: return
+    if ((notification.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
+
+    val extras = notification.extras ?: return
+    val extracted = extractSenderAndMessage(extras)
+    if (extracted == null) {
+      if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
       return
     }
+    val (sender, msgText) = extracted
     if (RiyaRuntimeBridge.isDuplicateNotification("$pkg|$sender|$msgText")) return
 
     val replyPair = extractReplyAction(notification)
@@ -197,10 +261,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
         if (!isAppEnabled) return@launch
 
         Store.remember(ctx, "[$appLabel] $sender: $msgText")
-
-        // Forward to active GeminiLive WebSocket if connected
-        val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg)
-        RiyaState.live?.onIncomingMessageReceived(liveMsg)
+        RiyaState.addLog("📩 $appLabel ($sender): $msgText")
 
         // Generate clean draft reply via Firebase AI Logic (or fallback template)
         val draftReply =
@@ -245,10 +306,10 @@ class RiyaNotificationListenerService : NotificationListenerService() {
         )
 
         val senderCooldownKey = "$pkg:$sender"
+        val askBoss = Store.requireBossPermission(ctx) || settings.requireBossPermissionBeforeSend
         if (
-          !Store.requireBossPermission(ctx) &&
-            !settings.requireBossPermissionBeforeSend &&
-            replyPair != null &&
+          !askBoss &&
+            (replyPair != null || Keep.accessibilityOn(ctx)) &&
             RiyaRuntimeBridge.canAutoReplyToSender(senderCooldownKey)
         ) {
           val sent = sendApprovedReply(ctx, eventKey, draftReply)
@@ -259,11 +320,21 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           )
           if (sent) {
             RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.AUTO_SENT)
+            val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg)
+            val sentToLive = RiyaState.live?.onIncomingMessageReceived(liveMsg, autoSentReply = draftReply) == true
+            if (!sentToLive) {
+              RiyaVoiceManager.speakUrgent(
+                ctx,
+                "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি অটো রিপ্লাই দিয়ে দিয়েছি।",
+              )
+            }
           }
         } else {
-          // Inform Boss immediately via Notification + In-App card + Clear Voice!
+          // Inform Boss immediately via Notification + In-App card + Clear Live Voice / TTS!
           RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, event, notifId)
-          if (RiyaState.live?.isReady() != true) {
+          val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg)
+          val sentToLive = RiyaState.live?.onIncomingMessageReceived(liveMsg, autoSentReply = null) == true
+          if (!sentToLive) {
             RiyaVoiceManager.speakUrgent(
               ctx,
               "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি কি উত্তর পাঠাবো? অনুগ্রহ করে অনুমতি দিন।",
@@ -291,6 +362,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
   }
 
   override fun onDestroy() {
+    RiyaRuntimeBridge.setNotificationListenerConnected(false)
     scope.cancel()
     super.onDestroy()
   }

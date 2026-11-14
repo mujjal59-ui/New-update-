@@ -40,7 +40,7 @@ object InfinixDevicePlaybook {
         searchKeyword = "btn_send / send / ডানের নীল বিমান",
         xosAndroid16Path =
           "মেসেজ বক্সে লেখা -> ইমোজি/রিঅ্যাকশন সারি বাদ -> ইনপুট বারের ডান পাশের নীল সেন্ড বাটনে ক্লিক",
-        quickTip = "Riya AI এখন উপরের রিঅ্যাকশন ইমোজি বা শেষের স্মাইলি বাটনে কখনোই ভুল ক্লিক করবে না।",
+        quickTip = "LXR--AI এখন উপরের রিঅ্যাকশন ইমোজি বা শেষের স্মাইলি বাটনে কখনোই ভুল ক্লিক করবে না।",
       ),
       InfinixNavigationRule(
         id = "messenger_whatsapp_search",
@@ -48,8 +48,8 @@ object InfinixDevicePlaybook {
         appOrSection = "WhatsApp / Messenger",
         searchKeyword = "Search / Ask Meta AI or Search",
         xosAndroid16Path =
-          "উপরের সার্চ বারে/আইকনে ট্যাপ -> নাম টাইপ -> নিচের রেজাল্ট তালিকায় সরাসরি নামের টেক্সটে ট্যাপ",
-        quickTip = "WhatsApp-এ প্রোফাইল ছবিতে নয়, সরাসরি চ্যাট সারির নামের টেক্সটে ক্লিক করা হয়।",
+          "উপরের সার্চ বারে/আইকনে ট্যাপ -> নাম টাইপ -> সার্চ বক্সের নিচে আসা চ্যাট/কন্টাক্ট তালিকায় সরাসরি নামের টেক্সটে ট্যাপ (সার্চ বক্স বা প্রোফাইল ছবিতে নয়)",
+        quickTip = "সার্চ করার পর নিচে যে নামের তালিকা আসে, সেখানে নামের ওপর ট্যাপ করলেই চ্যাট খুলে যাবে।",
       ),
       InfinixNavigationRule(
         id = "ai_apps_send",
@@ -67,7 +67,7 @@ object InfinixDevicePlaybook {
         searchKeyword = "Unrestricted / Auto-start / Notification access",
         xosAndroid16Path =
           "App Info -> Battery Unrestricted + Phone Master Auto-start + Accessibility & Notification Access চালু",
-        quickTip = "Infinix Android 16-এ অ্যাক্সেসিবিলিটি বন্ধ হলে Riya AI সাথে সাথে বসকে সতর্ক করে।",
+        quickTip = "Infinix Android 16-এ অ্যাক্সেসিবিলিটি বন্ধ হলে LXR--AI সাথে সাথে বসকে সতর্ক করে।",
       ),
     )
 

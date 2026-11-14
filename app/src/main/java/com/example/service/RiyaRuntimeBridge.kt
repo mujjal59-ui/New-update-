@@ -11,6 +11,10 @@ object RiyaRuntimeBridge {
   val isAccessibilityServiceConnected: StateFlow<Boolean> =
     _isAccessibilityServiceConnected.asStateFlow()
 
+  private val _isNotificationListenerConnected = MutableStateFlow(false)
+  val isNotificationListenerConnected: StateFlow<Boolean> =
+    _isNotificationListenerConnected.asStateFlow()
+
   private val _latestScreenSnapshot = MutableStateFlow(ScreenSnapshot())
   val latestScreenSnapshot: StateFlow<ScreenSnapshot> = _latestScreenSnapshot.asStateFlow()
 
@@ -29,6 +33,10 @@ object RiyaRuntimeBridge {
 
   fun setServiceConnected(connected: Boolean) {
     _isAccessibilityServiceConnected.value = connected
+  }
+
+  fun setNotificationListenerConnected(connected: Boolean) {
+    _isNotificationListenerConnected.value = connected
   }
 
   fun updateScreenSnapshot(snapshot: ScreenSnapshot) {

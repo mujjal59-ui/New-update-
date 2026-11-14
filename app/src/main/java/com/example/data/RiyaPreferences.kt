@@ -23,7 +23,7 @@ data class RiyaSettings(
   val imoAutoReply: Boolean = true,
   val messengerAutoReply: Boolean = true,
   val customReplyTemplate: String =
-    "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি Riya AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
+    "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
   val enforceFullScreenRead: Boolean = true,
   val fastExecutionMode: Boolean = true,
   val autoAnnounceAccessibilityLoss: Boolean = true,
@@ -56,7 +56,7 @@ class RiyaPreferences(private val context: Context) {
         messengerAutoReply = prefs[Keys.MESSENGER_ENABLED] ?: true,
         customReplyTemplate =
           prefs[Keys.CUSTOM_TEMPLATE]
-            ?: "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি Riya AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
+            ?: "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
         enforceFullScreenRead = prefs[Keys.ENFORCE_SCREEN_READ] ?: true,
         fastExecutionMode = prefs[Keys.FAST_EXECUTION] ?: true,
         autoAnnounceAccessibilityLoss = prefs[Keys.ANNOUNCE_A11Y_LOSS] ?: true,

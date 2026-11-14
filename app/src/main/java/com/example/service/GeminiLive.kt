@@ -18,7 +18,10 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
@@ -34,6 +37,8 @@ import com.example.data.RiyaState
 import com.example.data.Store
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.sqrt
+import kotlin.math.tanh
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -55,7 +60,13 @@ data class PendingIncomingMessage(
 
 @SuppressLint("MissingPermission")
 class GeminiLive(private val ctx: Context) {
-  private val client = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
+  private val client =
+    OkHttpClient.Builder()
+      .connectTimeout(8, TimeUnit.SECONDS)
+      .writeTimeout(10, TimeUnit.SECONDS)
+      .pingInterval(15, TimeUnit.SECONDS)
+      .retryOnConnectionFailure(true)
+      .build()
   private val main = Handler(Looper.getMainLooper())
   private val playExec = Executors.newSingleThreadExecutor()
   private val toolExec = Executors.newSingleThreadExecutor()
@@ -66,6 +77,9 @@ class GeminiLive(private val ctx: Context) {
 
   @Volatile private var ready = false
   @Volatile private var stopped = false
+  private val trackLock = Any()
+  private val recLock = Any()
+  private var recThread: Thread? = null
   private val uText = StringBuilder()
   private val pText = StringBuilder()
 
@@ -100,6 +114,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"get_battery_level","description":"ফোনের ব্যাটারি চার্জ শতাংশ জানো"},
       {"name":"set_sound_mode","description":"ফোন silent, vibrate বা normal করো","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","description":"silent, vibrate বা normal"}},"required":["mode"]}},
       {"name":"check_notifications","description":"নোটিফিকেশন বারের নতুন মেসেজ ও আপডেট চেক করো"},
+      {"name":"reply_to_incoming_message","description":"বস নতুন আসা WhatsApp/imo/Messenger মেসেজের রিপ্লাই দিতে বললে বা বাতিল করতে বললে এটি চালাও।","parameters":{"type":"OBJECT","properties":{"approve":{"type":"BOOLEAN","description":"রিপ্লাই পাঠাতে true, বাতিল করতে false"},"reply_text":{"type":"STRING","description":"বস নির্দিষ্ট উত্তর বললে সেটা, না বললে ফাঁকা রাখো"}},"required":["approve"]}},
       {"name":"current_time","description":"ফোনের বর্তমান সময় ও তারিখ জানো"},
       {"name":"web_search","description":"Google সার্চ করে সঠিক ও সংক্ষিপ্ত তথ্য খুঁজে আনো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}},
       {"name":"remember","description":"বসের জরুরি কথা মেমোরিতে সংরক্ষণ করো","parameters":{"type":"OBJECT","properties":{"fact":{"type":"STRING"}},"required":["fact"]}}
@@ -121,19 +136,46 @@ class GeminiLive(private val ctx: Context) {
       ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) ==
         android.content.pm.PackageManager.PERMISSION_GRANTED
 
-  private fun routeAudio() {
+  @Volatile private var usingBtAudio = false
+  @Volatile private var hasHwAec = false
+  @Volatile private var lastSpeakerWriteMs = 0L
+
+  private fun findBuiltInMicDevice(): AudioDeviceInfo? {
+    val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+    return inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+  }
+
+  private fun routeAudio(allowRestart: Boolean = true) {
     try {
+      val btInput = findBluetoothInputDevice()
+      val btLabel = btInput?.productName?.toString()?.takeIf { it.isNotBlank() }
+
+      val btConnected: Boolean
       if (Build.VERSION.SDK_INT >= 31) {
         val devs = am.availableCommunicationDevices
-        val bt =
-          if (hasBtPerm())
+        val btOut =
+          if (hasBtPerm()) {
             devs.firstOrNull {
               it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER
             }
-          else null
-        val target = bt ?: devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-        if (target != null) am.setCommunicationDevice(target)
+          } else null
+        btConnected = btOut != null || btInput != null
+        if (btConnected) {
+          am.mode = AudioManager.MODE_IN_COMMUNICATION
+          if (btOut != null) am.setCommunicationDevice(btOut)
+        } else {
+          // Crucial for Infinix / MediaTek phones: clear VoIP mode so main bottom high-sensitivity Phone Mic is used cleanly
+          am.clearCommunicationDevice()
+          am.mode = AudioManager.MODE_NORMAL
+          @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = true }
+        }
+        val activeName = btLabel ?: btOut?.productName?.toString()?.takeIf { it.isNotBlank() }
+        RiyaState.isBluetoothMicActive.value = btConnected
+        RiyaState.connectedAudioDevice.value =
+          if (btConnected) (activeName ?: "LxR Wireless Bluetooth")
+          else "Phone Mic (Direct Clear)"
       } else {
         @Suppress("DEPRECATION")
         val btOn =
@@ -142,18 +184,100 @@ class GeminiLive(private val ctx: Context) {
             am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
               it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
             }
+        btConnected = btOn || btInput != null
         @Suppress("DEPRECATION")
-        if (btOn) {
+        if (btConnected) {
+          am.mode = AudioManager.MODE_IN_COMMUNICATION
           am.startBluetoothSco()
           am.isBluetoothScoOn = true
           am.isSpeakerphoneOn = false
+          RiyaState.isBluetoothMicActive.value = true
+          RiyaState.connectedAudioDevice.value = btLabel ?: "LxR Wireless Bluetooth"
         } else {
           am.stopBluetoothSco()
           am.isBluetoothScoOn = false
+          am.mode = AudioManager.MODE_NORMAL
           am.isSpeakerphoneOn = true
+          RiyaState.isBluetoothMicActive.value = false
+          RiyaState.connectedAudioDevice.value = "Phone Mic (Direct Clear)"
         }
       }
+
+      if (btConnected && btInput != null) {
+        rec?.setPreferredDevice(btInput)
+      } else {
+        findBuiltInMicDevice()?.let { rec?.setPreferredDevice(it) }
+      }
+
+      if (allowRestart && btConnected != usingBtAudio && rec != null && !stopped) {
+        usingBtAudio = btConnected
+        restartAudioForRouteChange()
+      } else {
+        usingBtAudio = btConnected
+      }
     } catch (_: Exception) {}
+  }
+
+  private fun restartAudioForRouteChange() {
+    synchronized(recLock) {
+      rec?.let { r ->
+        try {
+          if (r.recordingState == AudioRecord.RECORDSTATE_RECORDING) r.stop()
+        } catch (_: Throwable) {}
+      }
+    }
+    try {
+      recThread?.join(180)
+    } catch (_: Throwable) {}
+    recThread = null
+    synchronized(recLock) {
+      try {
+        rec?.release()
+      } catch (_: Throwable) {}
+      rec = null
+    }
+    synchronized(trackLock) {
+      track?.let { t ->
+        try {
+          t.pause()
+          t.flush()
+          t.stop()
+          t.release()
+        } catch (_: Throwable) {}
+      }
+      track = null
+    }
+    if (!stopped) {
+      initTrack()
+      startMic()
+    }
+  }
+
+  private fun findBluetoothInputDevice(): AudioDeviceInfo? {
+    if (!hasBtPerm()) return null
+    val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+    return inputs.firstOrNull {
+      val name = it.productName?.toString().orEmpty()
+      (it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+        it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) && name.contains("lxr", ignoreCase = true)
+    } ?: inputs.firstOrNull {
+      it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+    }
+  }
+
+  private fun isSlowNetwork(): Boolean {
+    return try {
+      val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      val net = cm.activeNetwork ?: return true
+      val caps = cm.getNetworkCapabilities(net) ?: return true
+      val down = caps.linkDownstreamBandwidthKbps
+      val up = caps.linkUpstreamBandwidthKbps
+      val slow = (down in 1..1500) || (up in 1..400)
+      RiyaState.networkSpeedLabel.value = if (slow) "Low-Net Turbo" else "Fast"
+      slow
+    } catch (_: Exception) {
+      false
+    }
   }
 
   private var lastShot = 0
@@ -164,25 +288,54 @@ class GeminiLive(private val ctx: Context) {
         try {
           watchScreen()
         } catch (_: Exception) {}
-        main.postDelayed(this, 3000)
+        val intervalMs = if (Store.lowNetFastMode(ctx) && isSlowNetwork()) 5000L else 3000L
+        main.postDelayed(this, intervalMs)
       }
     }
 
   @Volatile private var isExecutingTool = false
   @Volatile private var lastUserScreenAt = 0L
 
-  fun onIncomingMessageReceived(msg: PendingIncomingMessage) {
-    if (!ready) return
+  fun onIncomingMessageReceived(
+    msg: PendingIncomingMessage,
+    autoSentReply: String? = null,
+  ): Boolean {
+    if (!ready || stopped) return false
     val prompt =
-      "[সিস্টেম নোটিফিকেশন] ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: \"${msg.messageText}\"। বসকে শান্ত, স্পষ্ট ও বিনয়ী সুরে জিজ্ঞেস করো: বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: '${msg.messageText}'। আমি কি রিপ্লাইটা দিয়ে দেবো?"
-    ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", prompt)).toString())
+      if (!autoSentReply.isNullOrBlank()) {
+        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} লিখেছেন: \"${msg.messageText}\"। আমি ইতিমধ্যেই উত্তর পাঠিয়ে দিয়েছি: \"$autoSentReply\"। এখনই বসকে শান্ত, সংক্ষিপ্ত ও স্পষ্ট বাংলায় জানিয়ে দাও।"
+      } else {
+        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: \"${msg.messageText}\"। এখনই বসকে শান্ত, স্পষ্ট ও বিনয়ী বাংলায় জানাও এবং জিজ্ঞেস করো: বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: '${msg.messageText}'। আমি কি রিপ্লাইটা দিয়ে দেবো?"
+      }
+    return try {
+      val turnPayload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                  ),
+              )
+              .put("turnComplete", true),
+          )
+      ws?.send(turnPayload.toString()) == true
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   private fun sendScreenNow() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
-    acc.screenshotJpeg { jpg ->
+    val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
+    acc.screenshotJpeg(maxDim = if (lowNet) 480 else 720, quality = if (lowNet) 38 else 55) { jpg ->
       if (jpg != null) {
         lastShot = jpg.contentHashCode()
         sendImage(jpg)
@@ -196,7 +349,8 @@ class GeminiLive(private val ctx: Context) {
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
-    acc.screenshotJpeg { jpg ->
+    val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
+    acc.screenshotJpeg(maxDim = if (lowNet) 480 else 720, quality = if (lowNet) 38 else 55) { jpg ->
       if (jpg != null) {
         val h = jpg.contentHashCode()
         if (h != lastShot) {
@@ -214,8 +368,7 @@ class GeminiLive(private val ctx: Context) {
     pending = false
     modelOverride = null
     stopped = false
-    am.mode = AudioManager.MODE_IN_COMMUNICATION
-    routeAudio()
+    routeAudio(allowRestart = false)
     am.registerAudioDeviceCallback(devCb, main)
     initTrack()
     startMic()
@@ -226,34 +379,71 @@ class GeminiLive(private val ctx: Context) {
   fun stop() {
     stopped = true
     ready = false
-    main.removeCallbacks(screenLoop)
-    ws?.close(1000, "bye")
+    try {
+      main.removeCallbacksAndMessages(null)
+    } catch (_: Throwable) {}
+    try {
+      ws?.close(1000, "bye")
+    } catch (_: Throwable) {}
+    try {
+      ws?.cancel()
+    } catch (_: Throwable) {}
     ws = null
-    rec?.run {
-      try {
-        stop()
-      } catch (_: Exception) {}
-      release()
+
+    try {
+      playExec.shutdownNow()
+    } catch (_: Throwable) {}
+    try {
+      toolExec.shutdownNow()
+    } catch (_: Throwable) {}
+
+    synchronized(recLock) {
+      rec?.let { r ->
+        try {
+          if (r.recordingState == AudioRecord.RECORDSTATE_RECORDING) r.stop()
+        } catch (_: Throwable) {}
+      }
     }
-    rec = null
-    track?.run {
-      try {
-        stop()
-      } catch (_: Exception) {}
-      release()
+    try {
+      recThread?.join(180)
+    } catch (_: Throwable) {}
+    recThread = null
+    synchronized(recLock) {
+      rec?.let { r ->
+        try {
+          r.release()
+        } catch (_: Throwable) {}
+      }
+      rec = null
     }
-    track = null
+
+    synchronized(trackLock) {
+      track?.let { t ->
+        try {
+          t.pause()
+          t.flush()
+          t.stop()
+        } catch (_: Throwable) {}
+        try {
+          t.release()
+        } catch (_: Throwable) {}
+      }
+      track = null
+    }
+
     try {
       am.unregisterAudioDeviceCallback(devCb)
-    } catch (_: Exception) {}
+    } catch (_: Throwable) {}
     try {
       if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
       else {
         @Suppress("DEPRECATION") am.stopBluetoothSco()
       }
-    } catch (_: Exception) {}
-    am.mode = AudioManager.MODE_NORMAL
-    @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = false }
+    } catch (_: Throwable) {}
+    try {
+      am.mode = AudioManager.MODE_NORMAL
+      @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = false }
+    } catch (_: Throwable) {}
   }
 
   private fun connect() {
@@ -333,7 +523,7 @@ class GeminiLive(private val ctx: Context) {
         pending = false
         if (!stopped) connect()
       },
-      3000,
+      1200,
     )
   }
 
@@ -347,36 +537,38 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [IDENTITY & BRANDING — STRICT]
-      Your ONLY name is Riya AI (রিয়া এআই / রিয়া). Never use any other name.
+      Your ONLY name is LXR--AI (এল এক্স আর এ আই). Never use any other name (never Riya or Priya).
       Always address the user politely as "বস" and use "তুমি". Never use "তুই" or "আপনি".
+      Creator Rule (MANDATORY): Whenever Boss asks "তোমাকে কে তৈরি করেছে", "তোমাকে কে বানিয়েছে", "Who made/created you", ALWAYS reply in Bengali:
+      "আমাকে বানিয়েছে মোঃ উজ্জল হোসেন, আমার বস, আমি উনার পার্সোনাল অ্যাসিস্ট্যান্ট। উনি একজন ভালো মনের মানুষ, আমাকে প্রতিনিয়ত নতুনভাবে আপডেট করার বিষয়ে কঠোর পরিশ্রম করেন।"
 
       [PHONE MODEL & SYSTEM STATUS]
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE}
-      - Accessibility Status: $accStatus
+      - Live Accessibility Now: $accStatus
       - Screen Watch Status: ACTIVE (সবসময় বাধ্যতামূলক)
+      - Live Vision Camera Status: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
 
       [WORK RULES — কঠোর, সব কাজে বাধ্যতামূলক]
-      1. সম্পূর্ণ স্ক্রিন পড়া বাধ্যতামূলক: যেকোনো স্ক্রিন-সম্পর্কিত কাজের আগে read_screen দিয়ে পুরো স্ক্রিন পড়বে এবং প্রতিটি ধাপের পর আবার read_screen পড়ে ফল যাচাই করবে। স্ক্রিন না পড়ে কখনো "পাচ্ছি না", "হয়নি" বা "পাঠিয়েছি" বলবে না।
+      1. সম্পূর্ণ স্ক্রিন পড়া বাধ্যতামূলক: যেকোনো স্ক্রিন-সম্পর্কিত কাজের আগে read_screen দিয়ে পুরো স্ক্রিন পড়বে এবং প্রতিটি ধাপের পর আবার read_screen পড়ে ফল যাচাই করবে। (তবে লাইভ ক্যামেরা চালু থাকলে এবং বস সামনে কী দেখা যাচ্ছে জিজ্ঞেস করলে read_screen না চালিয়ে সরাসরি ক্যামেরার ভিডিও ছবি দেখে বলবে।)
       2. দ্রুতগতিতে কাজ সম্পন্ন: কাজ শুরুর পর দেরি না করে দ্রুত টুল চালিয়ে কয়েক সেকেন্ডের মধ্যেই কাজ শেষ করবে।
-      3. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স বা কোথায় সার্চ বার—এসব বসকে জিজ্ঞেস করবে না। নিজে স্ক্রিন দেখে ও টুল চালিয়ে কাজ শেষ করে তারপর ফলাফল জানাবে।
-      4. Accessibility বন্ধ থাকলে মিথ্যা বলবে না—সাথে সাথে বসকে জানাবে: "বস, অ্যাক্সেসিবিলিটি সার্ভিস বন্ধ আছে, দয়া করে চালু করে দিন।"
+      3. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স, সার্চ করবো কিনা বা কোথায় সার্চ বার—এসব কখনোই বসকে জিজ্ঞেস করবে না বা অনুমতি নেবে না। নিজে স্ক্রিন দেখে, খুঁজতে হলে নিজেই সার্চ করে কাজ শেষ করে তারপর ফলাফল জানাবে।
+      4. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
       5. কাজ সফল হলে তবেই স্পষ্টভাবে বলবে: "হয়েছে, বস! কাজ শেষ।" এবং এরপর বসকে আরেকটি কাজ করার জন্য সুন্দরভাবে অনুপ্রাণিত করবে।
 
       [VOICE CLARITY & POLITE PRONUNCIATION — বাধ্যতামূলক]
-      - কণ্ঠ হবে অত্যন্ত স্পষ্ট, পরিষ্কার উচ্চারণযুক্ত, নম্র, মধুর ও স্বাভাবিক বাংলা নারী কণ্ঠ।
-      - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি ("হিহিহি/খিলখিলখিল"), অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন বলবে না। প্রতিটি শব্দ স্পষ্ট ও সুন্দরভাবে উচ্চারণ করবে।
-      - বাক্যের শেষে একটু স্বাভাবিক বিরতি দেবে যাতে কথা শোনা যায় শান্ত, স্পষ্ট ও মার্জিত।
+      - কণ্ঠ হবে অত্যন্ত স্পষ্ট, পরিষ্কার উচ্চারণযুক্ত, নম্র, মধুর, স্বাগতম জানানো এবং স্বাভাবিক বাংলা (বাংলাদেশ)।
+      - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন বলবে না। প্রতিটি শব্দ স্পষ্ট ও সুন্দরভাবে উচ্চারণ করবে।
 
-      [INFINIX HOT 60 PRO+ (ANDROID 16) SEARCH & APP UI RULES]
-      - Infinix Settings (Android 16): Settings-এর Search বার একদম নিচে থাকে। Settings-এ কিছু না পেলে নিচের 'Search' বারে ট্যাপ করে লিখে রেজাল্টে ট্যাপ করবে।
-      - Infinix Phone / Contacts: উপরের ডান কোণে Search (🔍) আইকন থাকে; ওটাতে ট্যাপ করলে নিচের Search বক্স খোলে। তবে কন্টাক্ট খুঁজতে আগে সবসময় `search_contact` বা `call_contact` টুল ব্যবহার করবে।
-      - Messenger / WhatsApp / Facebook: উপরে Search বার বা আইকন থাকে; নাম লিখে নিচের রেজাল্ট সারিতে ক্লিক করবে। WhatsApp-এ প্রোফাইল ছবিতে নয়, নামের সারিতে ক্লিক করবে।
-      - imo (ইমো) সেন্ড নিয়ম: চ্যাটে লেখার বক্সের উপরে রিঅ্যাকশন ইমোজি (❤️😂) এবং বক্সের দুই পাশে ইমোজি/+ থাকে। ওগুলোতে ভুলেও ক্লিক করবে না—সবসময় `send_message` টুল ব্যবহার করবে যা শুধু ডানের নীল কাগজ-বিমান Send বাটনে ক্লিক করে।
-      - Gemini ও ChatGPT: নিচের বক্সে লিখে ডানের নীল উপরমুখী তির (↑) Send বাটনে ট্যাপ করবে।
+      [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
+      - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
+      - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ: WhatsApp/imo/Messenger খুললে প্রথমে স্ক্রিনের উপরের চ্যাট তালিকায় নাম খুঁজবে; ওখানে না পেলে বসের কোনো অনুমতি ছাড়াই নিজে নিজে সার্চ বারে/সার্চ আইকনে সার্চ করে নিচের রেজাল্ট সারিতে ক্লিক করবে।
+      - রেজাল্ট ক্লিক: সার্চ বক্সের ঠিক নিচে আসা নামের সারিতে ক্লিক করবে (কখনোই উপরের সার্চ বক্স বা বামদিকের প্রোফাইল ছবিতে ক্লিক করবে না)।
+      - imo (ইমো) সেন্ড নিয়ম: চ্যাটে লেখার বক্সের উপরের রিঅ্যাকশন ইমোজি বা পাশের ইমোজি বাটনে নয়, সবসময় `send_message` টুল দিয়ে ডানের নীল Send বাটনে ক্লিক করবে।
       - কোনো অ্যাপ খুলতে বললে আগে `open_app` টুল ব্যবহার করবে।
 
       [AUTO-REPLY PROTOCOL (WhatsApp, imo, Messenger)]
-      - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে—এবং রিপ্লাই দেওয়ার জন্য বসের অনুমতি চাইবে। বস অনুমতি দিলে `send_message` দিয়ে রিপ্লাই পাঠাবে।
+      - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে—এবং রিপ্লাই দেওয়ার জন্য বসের অনুমতি চাইবে।
+      - বস উত্তর দিতে বললে বা হ্যাঁ বললে `reply_to_incoming_message` টুল চালিয়ে সাথে সাথে রিপ্লাই পাঠিয়ে দেবে।
 
       [PERSONALITY]
       ${RiyaPersona.TEXT}
@@ -385,11 +577,11 @@ class GeminiLive(private val ctx: Context) {
       - Time: $now
       - Current Screen: [$screenContext]
       স্মৃতি (Memory):
-      ${Store.recent(ctx)}
+      ${Store.recent(ctx, 12000)}
       """
         .trimIndent()
 
-    val voiceName = Store.voice(ctx).ifBlank { "Leda" }
+    val voiceName = Store.voice(ctx).ifBlank { "Aoede" }
     val s = JSONObject()
     s.put("model", "models/" + (modelOverride ?: Store.model(ctx)))
 
@@ -425,12 +617,15 @@ class GeminiLive(private val ctx: Context) {
       }
       j.optJSONObject("serverContent")?.let { sc ->
         if (sc.optBoolean("interrupted")) {
-          track?.run {
-            try {
-              pause()
-              flush()
-              play()
-            } catch (_: Exception) {}
+          synchronized(trackLock) {
+            val t = track
+            if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+              try {
+                t.pause()
+                t.flush()
+                t.play()
+              } catch (_: Throwable) {}
+            }
           }
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
@@ -446,8 +641,25 @@ class GeminiLive(private val ctx: Context) {
           for (i in 0 until ps.length()) {
             ps.getJSONObject(i).optJSONObject("inlineData")?.let {
               val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
-              RiyaState.status.value = "রিয়া কথা বলছে..."
-              playExec.execute { track?.write(pcm, 0, pcm.size) }
+              if (!stopped) {
+                RiyaState.status.value = "LXR--AI কথা বলছে..."
+                try {
+                  if (!playExec.isShutdown) {
+                    playExec.execute {
+                      if (stopped) return@execute
+                      synchronized(trackLock) {
+                        val t = track
+                        if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+                          try {
+                            lastSpeakerWriteMs = System.currentTimeMillis()
+                            t.write(pcm, 0, pcm.size)
+                          } catch (_: Throwable) {}
+                        }
+                      }
+                    }
+                  }
+                } catch (_: Throwable) {}
+              }
             }
           }
         }
@@ -460,8 +672,8 @@ class GeminiLive(private val ctx: Context) {
             main.post { sendScreenNow() }
           }
           if (p.isNotEmpty()) {
-            Store.remember(ctx, "Riya AI: $p")
-            RiyaState.addLog("Riya AI: $p")
+            Store.remember(ctx, "LXR--AI: $p")
+            RiyaState.addLog("LXR--AI: $p")
           }
           uText.setLength(0)
           pText.setLength(0)
@@ -550,14 +762,23 @@ class GeminiLive(private val ctx: Context) {
   private fun runToolRaw(name: String, a: JSONObject): String =
     try {
       val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
-      val noAcc = "Accessibility সার্ভিস বন্ধ আছে বস! দয়া করে Riya AI Accessibility চালু করে দিন।"
+      val noAcc = "Accessibility সার্ভিস বন্ধ আছে বস! দয়া করে LXR--AI Accessibility চালু করে দিন।"
       when (name) {
         "open_app" -> openApp(a.optString("app_name"))
         "send_message" -> messageSend(a)
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
         "current_screen" ->
-          RiyaAccessibilityService.currentScreenSummary.ifBlank { "স্ক্রিনের তথ্য পাওয়া যায়নি" }
-        "read_screen" -> acc?.readScreen() ?: noAcc
+          if (RiyaState.cameraOn) {
+            "লাইভ ব্যাক ক্যামেরা এখন চালু আছে। ইনকামিং ভিডিও স্ট্রিম থেকে পাওয়া সর্বশেষ ক্যামেরা ফ্রেম দেখে সরাসরি উত্তর দাও।"
+          } else {
+            RiyaAccessibilityService.currentScreenSummary.ifBlank { "স্ক্রিনের তথ্য পাওয়া যায়নি" }
+          }
+        "read_screen" ->
+          if (RiyaState.cameraOn) {
+            "লাইভ ভিশন ক্যামেরা এখন চালু আছে! অ্যাপের UI নয়, সরাসরি ক্যামেরার ইনকামিং ভিডিও ফ্রেম দেখে বস যা দেখাচ্ছেন তা বলো।"
+          } else {
+            acc?.readScreen() ?: noAcc
+          }
         "click_text" -> acc?.clickText(a.optString("text")) ?: noAcc
         "type_text" -> acc?.typeText(a.optString("text")) ?: noAcc
         "global_action" -> acc?.global(a.optString("action")) ?: noAcc
@@ -572,6 +793,11 @@ class GeminiLive(private val ctx: Context) {
         "get_battery_level" -> getBatteryLevel()
         "set_sound_mode" -> setSoundMode(a.optString("mode"))
         "check_notifications" -> checkNotificationBar()
+        "reply_to_incoming_message" ->
+          replyToIncomingMessage(
+            approve = a.optBoolean("approve", true),
+            customReply = a.optString("reply_text").ifBlank { null },
+          )
         "current_time" -> nowText()
         "web_search" -> webSearch(a.optString("query"))
         "remember" -> {
@@ -819,7 +1045,7 @@ class GeminiLive(private val ctx: Context) {
           Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
-        return "সাইলেন্ট করতে Do Not Disturb অ্যাক্সেস লাগবে। সেটিংস খুলেছি বস, Riya AI কে অনুমতি দিয়ে আবার বলো।"
+        return "সাইলেন্ট করতে Do Not Disturb অ্যাক্সেস লাগবে। সেটিংস খুলেছি বস, LXR--AI কে অনুমতি দিয়ে আবার বলো।"
       }
       when {
         wantSilent -> {
@@ -902,7 +1128,7 @@ class GeminiLive(private val ctx: Context) {
     val acc = RiyaAccessibilityService.instance
     return when (res) {
       null ->
-        "$name স্ক্রিন খুলেছি বস, কিন্তু Accessibility চালু নেই বলে ট্যাপ করতে পারিনি। দয়া করে Riya AI Accessibility চালু করুন।"
+        "$name স্ক্রিন খুলেছি বস, কিন্তু Accessibility চালু নেই বলে ট্যাপ করতে পারিনি। দয়া করে LXR--AI Accessibility চালু করুন।"
       "OK" -> {
         acc?.global("back")
         RiyaState.markTaskCompleted(
@@ -922,6 +1148,13 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun checkNotificationBar(): String {
+    val pending =
+      RiyaRuntimeBridge.pendingMessages.value.firstOrNull {
+        it.status == IncomingReplyStatus.PENDING_PERMISSION
+      }
+    if (pending != null) {
+      return "সর্বশেষ অপেক্ষমাণ মেসেজ: ${pending.appLabel}-এ ${pending.senderName} লিখেছেন \"${pending.messageText}\"।"
+    }
     val acc = RiyaAccessibilityService.instance ?: return "Accessibility চালু নেই বস"
     acc.global("notifications")
     Thread.sleep(320)
@@ -931,6 +1164,29 @@ class GeminiLive(private val ctx: Context) {
       "নোটিফিকেশন বারে যা পাওয়া গেছে:\n$notes"
     } else {
       "এই মুহূর্তে কোনো নতুন মেসেজ বা নোটিফিকেশন নেই বস।"
+    }
+  }
+
+  private fun replyToIncomingMessage(approve: Boolean, customReply: String?): String {
+    val pending =
+      RiyaRuntimeBridge.pendingMessages.value.firstOrNull {
+        it.status == IncomingReplyStatus.PENDING_PERMISSION
+      } ?: return "এই মুহূর্তে রিপ্লাই দেওয়ার মতো কোনো অপেক্ষমাণ মেসেজ নেই বস।"
+
+    if (!approve) {
+      RiyaRuntimeBridge.updateIncomingMessageStatus(pending.eventKey, IncomingReplyStatus.DISMISSED)
+      return "ঠিক আছে বস, ${pending.appLabel}-এর মেসেজটির রিপ্লাই বাতিল করা হয়েছে।"
+    }
+    val ok =
+      RiyaNotificationListenerService.sendApprovedReply(
+        ctx,
+        pending.eventKey,
+        customReply ?: pending.suggestedReply,
+      )
+    return if (ok) {
+      "হয়েছে, বস! কাজ শেষ — ${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো হয়েছে।"
+    } else {
+      "${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো যায়নি বস, অ্যাক্সেসিবিলিটি বা অ্যাপ স্ক্রিন পরীক্ষা করুন।"
     }
   }
 
@@ -1096,11 +1352,14 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun initTrack() {
-    track =
+    val usage =
+      if (usingBtAudio) AudioAttributes.USAGE_VOICE_COMMUNICATION
+      else AudioAttributes.USAGE_MEDIA
+    val t =
       AudioTrack.Builder()
         .setAudioAttributes(
           AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+            .setUsage(usage)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
         )
@@ -1121,6 +1380,48 @@ class GeminiLive(private val ctx: Context) {
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also { it.play() }
+    synchronized(trackLock) {
+      track = t
+    }
+  }
+
+  private fun createBestAudioRecord(minBuf: Int): AudioRecord {
+    val sources =
+      if (usingBtAudio) {
+        listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC)
+      } else {
+        // VOICE_RECOGNITION disables Infinix/MediaTek VoIP close-talk attenuation on built-in Phone Mic!
+        listOf(
+          MediaRecorder.AudioSource.VOICE_RECOGNITION,
+          MediaRecorder.AudioSource.MIC,
+          MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        )
+      }
+    var lastCreated: AudioRecord? = null
+    for (src in sources) {
+      try {
+        val candidate =
+          AudioRecord(
+            src,
+            16000,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBuf, 6400),
+          )
+        if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+          return candidate
+        }
+        candidate.release()
+      } catch (_: Throwable) {}
+    }
+    return lastCreated
+      ?: AudioRecord(
+        MediaRecorder.AudioSource.MIC,
+        16000,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+        maxOf(minBuf, 6400),
+      )
   }
 
   private fun startMic() {
@@ -1130,40 +1431,172 @@ class GeminiLive(private val ctx: Context) {
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
       )
-    val r =
-      AudioRecord(
-        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-        16000,
-        AudioFormat.CHANNEL_IN_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-        maxOf(min, 6400),
-      )
-    if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(r.audioSessionId)?.enabled = true
-    if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(r.audioSessionId)?.enabled = true
-    rec = r
-    r.startRecording()
-    Thread {
-        val buf = ByteArray(1600)
-        while (!stopped) {
-          val n = r.read(buf, 0, buf.size)
-          if (n > 0 && ready && (ws?.queueSize() ?: 0) < 60_000) {
-            val d = Base64.encodeToString(buf, 0, n, Base64.NO_WRAP)
-            ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
-          }
+    val r = createBestAudioRecord(min)
+    if (usingBtAudio) {
+      findBluetoothInputDevice()?.let { r.setPreferredDevice(it) }
+    } else {
+      findBuiltInMicDevice()?.let { r.setPreferredDevice(it) }
+    }
+    hasHwAec = false
+    if (AcousticEchoCanceler.isAvailable()) {
+      try {
+        val aec = AcousticEchoCanceler.create(r.audioSessionId)
+        if (aec != null) {
+          aec.enabled = true
+          hasHwAec = aec.enabled
         }
+      } catch (_: Throwable) {}
+    }
+    // Only apply NoiseSuppressor on Bluetooth SCO; MediaTek NoiseSuppressor swallows quiet Phone Mic speech!
+    if (usingBtAudio && NoiseSuppressor.isAvailable()) {
+      try {
+        NoiseSuppressor.create(r.audioSessionId)?.enabled = true
+      } catch (_: Throwable) {}
+    }
+    if (AutomaticGainControl.isAvailable()) {
+      try {
+        AutomaticGainControl.create(r.audioSessionId)?.enabled = true
+      } catch (_: Throwable) {}
+    }
+    synchronized(recLock) {
+      rec = r
+    }
+    try {
+      r.startRecording()
+    } catch (_: Throwable) {}
+    val t =
+      Thread {
+        try {
+          val buf = ByteArray(1600)
+          var lastVoiceMs = System.currentTimeMillis()
+          var silentFrameCounter = 0
+          while (!stopped) {
+            val activeRec = synchronized(recLock) { rec } ?: break
+            val n =
+              try {
+                if (activeRec.state == AudioRecord.STATE_INITIALIZED) activeRec.read(buf, 0, buf.size)
+                else -1
+              } catch (_: Throwable) {
+                -1
+              }
+            if (n < 0) break
+            if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0) < 80_000) {
+              val now = System.currentTimeMillis()
+              val rms = computeRms16Bit(buf, n)
+              val whisperBoostOn = Store.whisperBoost(ctx)
+              val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
+
+              // Gentle echo-ducking on speakerphone ONLY if hardware AEC unavailable and speaker spoke in last 240ms
+              if (!usingBtAudio && !hasHwAec && (now - lastSpeakerWriteMs) < 240L && rms < 4500.0) {
+                scaleBuffer(buf, n, 0.35)
+              } else if (whisperBoostOn && rms > 16.0) {
+                // Amplify whispers & direct phone-mic voice smoothly with soft tanh limiting
+                applySoftVoiceBoost(buf, n, rms, isPhoneMic = !usingBtAudio)
+              }
+
+              val speechGate = if (whisperBoostOn) 24.0 else 95.0
+              val hasSpeech = rms >= speechGate
+              if (hasSpeech) {
+                lastVoiceMs = now
+              }
+
+              // Keep full 1.6s hangover so phone-mic speech onset/ending is never clipped even on slow internet
+              val withinHangover = (now - lastVoiceMs) <= 1600L
+              silentFrameCounter = if (withinHangover) 0 else (silentFrameCounter + 1)
+              val shouldSend = !lowNet || withinHangover || (silentFrameCounter % 4 == 0)
+
+              if (shouldSend) {
+                val d = Base64.encodeToString(buf, 0, n, Base64.NO_WRAP)
+                ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
+              }
+            }
+          }
+        } catch (_: Throwable) {}
       }
-      .start()
+    recThread = t
+    t.start()
+  }
+
+  private fun computeRms16Bit(buf: ByteArray, len: Int): Double {
+    var sumSq = 0.0
+    var count = 0
+    var i = 0
+    while (i + 1 < len) {
+      val sample = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toDouble()
+      sumSq += sample * sample
+      count++
+      i += 2
+    }
+    return if (count > 0) sqrt(sumSq / count) else 0.0
+  }
+
+  private fun scaleBuffer(buf: ByteArray, len: Int, factor: Double) {
+    var i = 0
+    while (i + 1 < len) {
+      val raw = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toDouble()
+      val scaled = (raw * factor).toInt().coerceIn(-32768, 32767)
+      buf[i] = (scaled and 0xFF).toByte()
+      buf[i + 1] = ((scaled ushr 8) and 0xFF).toByte()
+      i += 2
+    }
+  }
+
+  private fun applySoftVoiceBoost(buf: ByteArray, len: Int, rms: Double, isPhoneMic: Boolean) {
+    val mult = if (isPhoneMic) 1.35 else 1.0
+    val gain =
+      when {
+        rms < 400.0 -> 3.8 * mult
+        rms < 1200.0 -> 2.7 * mult
+        rms < 2600.0 -> 1.7 * mult
+        else -> 1.0
+      }
+    if (gain <= 1.02) return
+    var i = 0
+    while (i + 1 < len) {
+      val raw = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toDouble()
+      val boosted = (tanh((raw * gain) / 32767.0) * 32767.0).toInt().coerceIn(-32768, 32767)
+      buf[i] = (boosted and 0xFF).toByte()
+      buf[i + 1] = ((boosted ushr 8) and 0xFF).toByte()
+      i += 2
+    }
   }
 
   fun sendText(t: String) {
+    if (stopped) return
     RiyaState.addLog("বস: $t")
     Store.remember(ctx, "Boss(text): $t")
-    ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", t)).toString())
+    try {
+      ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", t)).toString())
+    } catch (_: Throwable) {}
+  }
+
+  fun notifyCameraActive(active: Boolean) {
+    if (!ready || stopped) return
+    val hint =
+      if (active)
+        "[সিস্টেম ভিশন ক্যামেরা চালু]: বসের ফোনের লাইভ ব্যাক ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলো সরাসরি বসের ক্যামেরা থেকে লাইভ দৃশ্য। বস যা দেখাতে চাচ্ছেন বা জিজ্ঞেস করছেন, সরাসরি ক্যামেরার ভিডিও ছবি দেখে পরিষ্কার বাংলায় বর্ণনা করো।"
+      else
+        "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন স্ক্রিন ওয়াচ মোডে ফিরে যাও।"
+    try {
+      ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", hint)).toString())
+    } catch (_: Throwable) {}
+  }
+
+  fun sendCameraFrame(jpeg: ByteArray) {
+    if (!ready || stopped) return
+    if ((ws?.queueSize() ?: 0) > 220_000) return
+    try {
+      val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+      ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")
+    } catch (_: Throwable) {}
   }
 
   fun sendImage(jpeg: ByteArray) {
-    if ((ws?.queueSize() ?: 0) > 40_000) return
-    val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
-    ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")
+    if (!ready || stopped) return
+    if ((ws?.queueSize() ?: 0) > 120_000) return
+    try {
+      val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+      ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")
+    } catch (_: Throwable) {}
   }
 }

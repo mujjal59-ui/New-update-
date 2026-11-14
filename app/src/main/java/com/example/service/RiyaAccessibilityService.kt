@@ -41,7 +41,10 @@ class RiyaAccessibilityService : AccessibilityService() {
     CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
   private val shotExec = Executors.newSingleThreadExecutor()
-  private var lastScan = 0L
+  private val snapshotExec = Executors.newSingleThreadExecutor()
+
+  @Volatile private var lastScan = 0L
+  @Volatile private var scanScheduled = false
 
   override fun onServiceConnected() {
     super.onServiceConnected()
@@ -50,56 +53,99 @@ class RiyaAccessibilityService : AccessibilityService() {
     AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = false)
     RiyaVoiceManager.initialize(this)
     com.example.data.RiyaState.resume.value++
-    Log.d(TAG, "RiyaAccessibilityService connected")
-    readEntireScreenTree()
+    Log.d(TAG, "LXR--AI AccessibilityService connected")
+    snapshotExec.execute {
+      try {
+        readEntireScreenTree()
+      } catch (_: Throwable) {}
+    }
+  }
+
+  override fun onRebind(intent: Intent?) {
+    super.onRebind(intent)
+    instance = this
+    RiyaRuntimeBridge.setServiceConnected(true)
+    AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = false)
+    Log.d(TAG, "LXR--AI AccessibilityService rebound cleanly")
   }
 
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
     if (event == null) return
     try {
+      if (instance !== this) {
+        instance = this
+        RiyaRuntimeBridge.setServiceConnected(true)
+      }
       val pkg = event.packageName?.toString().orEmpty()
       if (pkg.isNotEmpty() && pkg != packageName) {
         currentApp = pkg
       }
+      // Do not burn binder/CPU scanning our own UI or rapid content ticks
+      if (pkg == packageName) return
       val now = System.currentTimeMillis()
-      if (
-        (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-          event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) &&
-          now - lastScan >= 450L
+      val isStateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+      val minGap = if (isStateChange) 700L else 1800L
+      if ((isStateChange || event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) &&
+        now - lastScan >= minGap &&
+        !scanScheduled
       ) {
         lastScan = now
-        readEntireScreenTree()
+        scanScheduled = true
+        snapshotExec.execute {
+          try {
+            readEntireScreenTree(includeAllWindows = false)
+          } catch (_: Throwable) {
+          } finally {
+            scanScheduled = false
+          }
+        }
       }
     } catch (e: Throwable) {
+      scanScheduled = false
       Log.e(TAG, "Safe screen snapshot error", e)
     }
   }
 
   override fun onInterrupt() {
-    Log.w(TAG, "RiyaAccessibilityService interrupted")
+    Log.w(TAG, "LXR--AI AccessibilityService interrupted")
     AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = true)
   }
 
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    try {
+      Keep.ensureAccessibility(this)
+    } catch (_: Throwable) {}
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onUnbind(intent: Intent?): Boolean {
-    instance = null
-    AccessibilityStatusMonitor.onServiceDisconnectedFromOs(this)
-    Log.w(TAG, "RiyaAccessibilityService unbound by system/user")
-    return super.onUnbind(intent)
+    if (instance === this) {
+      instance = null
+      AccessibilityStatusMonitor.onServiceDisconnectedFromOs(this)
+    }
+    Log.w(TAG, "LXR--AI AccessibilityService unbound by system/user")
+    return true
   }
 
   override fun onDestroy() {
-    instance = null
-    AccessibilityStatusMonitor.onServiceDisconnectedFromOs(this)
+    if (instance === this) {
+      instance = null
+      AccessibilityStatusMonitor.onServiceDisconnectedFromOs(this)
+    }
     serviceScope.cancel()
+    try {
+      snapshotExec.shutdownNow()
+      shotExec.shutdownNow()
+    } catch (_: Throwable) {}
     super.onDestroy()
   }
 
   /**
    * Mandatory Full-Screen Tree Reader:
-   * Inspects interactive windows + rootInActiveWindow recursively so Riya reads the ENTIRE screen
+   * Inspects interactive windows + rootInActiveWindow recursively so LXR--AI reads the ENTIRE screen
    * before and during every automated task.
    */
-  fun readEntireScreenTree(): ScreenSnapshot {
+  fun readEntireScreenTree(includeAllWindows: Boolean = true): ScreenSnapshot {
     val nodes = mutableListOf<ScreenNodeInfo>()
     val summaryLines = mutableListOf<String>()
     var activePkg = ""
@@ -107,15 +153,17 @@ class RiyaAccessibilityService : AccessibilityService() {
 
     try {
       val rootList = mutableListOf<AccessibilityNodeInfo>()
-      val interactiveWindows = windows
-      if (!interactiveWindows.isNullOrEmpty()) {
-        windowCount = interactiveWindows.size
-        interactiveWindows.forEach { win ->
-          win.root?.let { root ->
-            if (activePkg.isBlank()) {
-              activePkg = root.packageName?.toString().orEmpty()
+      if (includeAllWindows) {
+        val interactiveWindows = windows
+        if (!interactiveWindows.isNullOrEmpty()) {
+          windowCount = interactiveWindows.size
+          interactiveWindows.forEach { win ->
+            win.root?.let { root ->
+              if (activePkg.isBlank()) {
+                activePkg = root.packageName?.toString().orEmpty()
+              }
+              rootList.add(root)
             }
-            rootList.add(root)
           }
         }
       }
@@ -417,25 +465,34 @@ class RiyaAccessibilityService : AccessibilityService() {
     readEntireScreenTree()
     val root = rootInActiveWindow ?: return "স্ক্রিন পাওয়া যায়নি"
     val query = t.trim().lowercase()
+    val screenH = resources.displayMetrics.heightPixels.coerceAtLeast(1800)
 
-    // ১. সরাসরি স্ক্রিনে ম্যাচিং টেক্সট বা বাটন ক্লিক
-    var matchedNode: AccessibilityNodeInfo? = null
+    // ১. সরাসরি স্ক্রিনে ম্যাচিং টেক্সট বা বাটন ক্লিক (সার্চ বক্স ও EditText বাদ দিয়ে রেজাল্ট সারিকে অগ্রাধিকার)
+    val matches = mutableListOf<Pair<AccessibilityNodeInfo, Int>>()
     fun findMatch(n: AccessibilityNodeInfo?) {
-      if (n == null || matchedNode != null) return
-      val txt = n.text?.toString()?.lowercase() ?: ""
-      val desc = n.contentDescription?.toString()?.lowercase() ?: ""
+      if (n == null) return
+      val txt = n.text?.toString()?.lowercase()?.trim() ?: ""
+      val desc = n.contentDescription?.toString()?.lowercase()?.trim() ?: ""
       val hit = if (isContact) txt.contains(query) else (txt.contains(query) || desc.contains(query))
-      if (hit) {
-        matchedNode = n
-        return
+      if (hit && !n.isEditable) {
+        val r = Rect()
+        n.getBoundsInScreen(r)
+        val isBelowTopSearch = r.top >= (screenH * 0.16f).toInt()
+        val exactBonus = if (txt == query || desc == query) 20 else 0
+        val zoneBonus = if (isBelowTopSearch) 50 else 0
+        matches.add(n to (zoneBonus + exactBonus))
       }
       for (i in 0 until n.childCount) findMatch(n.getChild(i))
     }
     findMatch(root)
 
-    if (matchedNode != null) {
-      if (clickNode(matchedNode!!)) {
-        Thread.sleep(200)
+    val orderedMatches = matches.sortedByDescending { it.second }
+    for ((node, _) in orderedMatches) {
+      val r = Rect()
+      node.getBoundsInScreen(r)
+      val ok = clickNode(node) || (r.width() > 0 && r.height() > 0 && tapAt(r.exactCenterX(), r.exactCenterY()))
+      if (ok) {
+        Thread.sleep(240)
         readEntireScreenTree()
         return "'$t' ক্লিক করা হয়েছে"
       }
@@ -605,7 +662,7 @@ class RiyaAccessibilityService : AccessibilityService() {
     return find(root)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
   }
 
-  fun screenshotJpeg(cb: (ByteArray?) -> Unit) {
+  fun screenshotJpeg(maxDim: Int = 720, quality: Int = 55, cb: (ByteArray?) -> Unit) {
     if (Build.VERSION.SDK_INT < 30) {
       cb(null)
       return
@@ -616,29 +673,42 @@ class RiyaAccessibilityService : AccessibilityService() {
         shotExec,
         object : TakeScreenshotCallback {
           override fun onSuccess(r: ScreenshotResult) {
+            var hw: Bitmap? = null
+            var bmp: Bitmap? = null
+            var sm: Bitmap? = null
             try {
-              val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
-              val bmp = hw?.copy(Bitmap.Config.ARGB_8888, false)
+              hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
+              bmp = hw?.copy(Bitmap.Config.ARGB_8888, false)
               r.hardwareBuffer.close()
               if (bmp == null) {
                 cb(null)
                 return
               }
-              val sc = 720f / maxOf(bmp.width, bmp.height)
-              val sm =
+              val sc = maxDim.toFloat() / maxOf(bmp.width, bmp.height)
+              sm =
                 if (sc < 1f)
                   Bitmap.createScaledBitmap(
                     bmp,
-                    (bmp.width * sc).toInt(),
-                    (bmp.height * sc).toInt(),
+                    (bmp.width * sc).toInt().coerceAtLeast(64),
+                    (bmp.height * sc).toInt().coerceAtLeast(64),
                     true,
                   )
                 else bmp
               val o = ByteArrayOutputStream()
-              sm.compress(Bitmap.CompressFormat.JPEG, 55, o)
+              sm.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(25, 85), o)
               cb(o.toByteArray())
             } catch (_: Exception) {
               cb(null)
+            } finally {
+              if (sm != null && sm !== bmp) {
+                try { sm.recycle() } catch (_: Throwable) {}
+              }
+              if (bmp != null) {
+                try { bmp.recycle() } catch (_: Throwable) {}
+              }
+              if (hw != null) {
+                try { hw.recycle() } catch (_: Throwable) {}
+              }
             }
           }
 

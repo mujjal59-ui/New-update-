@@ -16,8 +16,12 @@ object Keep {
   private fun same(s: String, c: Context) =
     s.equals(comp(c).flattenToString(), true) || s.equals(comp(c).flattenToShortString(), true)
 
-  /** Strict live check: NEVER trust stale instance references alone. */
+  /** Live check: active service singleton OR OS-verified Accessibility snapshot. */
   fun accessibilityOn(c: Context): Boolean {
+    if (RiyaAccessibilityService.instance != null) {
+      RiyaRuntimeBridge.setServiceConnected(true)
+      return true
+    }
     return AccessibilityStatusMonitor.refreshNow(c, speakIfTurnedOff = false)
       .isAccessibilityTrulyActive
   }
@@ -25,6 +29,8 @@ object Keep {
   fun canSelfEnable(c: Context): Boolean =
     c.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) ==
       PackageManager.PERMISSION_GRANTED
+
+  @Volatile private var lastRebindMs = 0L
 
   /** WRITE_SECURE_SETTINGS দেওয়া থাকলে Accessibility নিজেই চালু (বা আবার চালু) করে নেয় */
   fun ensureAccessibility(c: Context): Boolean {
@@ -42,6 +48,37 @@ object Keep {
           (parts + comp(c).flattenToString()).joinToString(":"),
         )
       }
+      if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) {
+        Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+      }
+      true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  /** Settings-এ অন থাকা সত্ত্বেও সিস্টেম বাইন্ডিং আটকে গেলে স্বয়ংক্রিয় রিবাইন্ড করে */
+  fun forceRebindAccessibility(c: Context): Boolean {
+    if (!canSelfEnable(c)) return false
+    val now = System.currentTimeMillis()
+    if (now - lastRebindMs < 15_000L) return false
+    lastRebindMs = now
+    return try {
+      val cr = c.contentResolver
+      val parts =
+        (Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
+          .split(':')
+          .filter { it.isNotBlank() && !same(it, c) }
+      Settings.Secure.putString(
+        cr,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        parts.joinToString(":"),
+      )
+      Settings.Secure.putString(
+        cr,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        (parts + comp(c).flattenToString()).joinToString(":"),
+      )
       Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
       true
     } catch (_: Exception) {
@@ -64,7 +101,7 @@ object Keep {
     )
   }
 
-  /** সরাসরি Riya AI-এর Accessibility পেজ খোলার চেষ্টা, না হলে সাধারণ Accessibility সেটিংস */
+  /** সরাসরি LXR--AI-এর Accessibility পেজ খোলার চেষ্টা, না হলে সাধারণ Accessibility সেটিংস */
   fun openAccessibility(c: Context) {
     val key = comp(c).flattenToString()
     val i =
@@ -75,6 +112,12 @@ object Keep {
           Bundle().apply { putString(":settings:fragment_args_key", key) },
         )
     if (!start(c, i)) openAppInfo(c)
+  }
+
+  fun openNotificationAccess(c: Context) {
+    if (!start(c, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))) {
+      openAppInfo(c)
+    }
   }
 
   fun openBattery(c: Context) {

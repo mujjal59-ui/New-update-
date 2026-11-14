@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,12 +11,27 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import com.example.MainActivity
 import com.example.data.RiyaState
+import com.example.data.Store
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class RiyaService : Service() {
   private var live: GeminiLive? = null
   private var wl: PowerManager.WakeLock? = null
+  private val serviceScope =
+    CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Main.immediate +
+        CoroutineExceptionHandler { _, _ -> }
+    )
 
   override fun onBind(i: Intent?): IBinder? = null
 
@@ -27,7 +43,7 @@ class RiyaService : Service() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       getSystemService(NotificationManager::class.java)
         .createNotificationChannel(
-          NotificationChannel("riya_live", "Riya AI Live", NotificationManager.IMPORTANCE_LOW)
+          NotificationChannel("lxr_live", "LXR--AI Live", NotificationManager.IMPORTANCE_LOW)
         )
     }
     val stop =
@@ -46,9 +62,9 @@ class RiyaService : Service() {
       )
     val n =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Notification.Builder(this, "riya_live")
-          .setContentTitle("Riya AI শুনছেন")
-          .setContentText("Always listening mode ON")
+        Notification.Builder(this, "lxr_live")
+          .setContentTitle("LXR--AI শুনছেন")
+          .setContentText("Always listening & Accessibility Guard ON")
           .setSmallIcon(android.R.drawable.ic_btn_speak_now)
           .setContentIntent(open)
           .addAction(0, "Stop", stop)
@@ -57,8 +73,8 @@ class RiyaService : Service() {
       } else {
         @Suppress("DEPRECATION")
         Notification.Builder(this)
-          .setContentTitle("Riya AI শুনছেন")
-          .setContentText("Always listening mode ON")
+          .setContentTitle("LXR--AI শুনছেন")
+          .setContentText("Always listening & Accessibility Guard ON")
           .setSmallIcon(android.R.drawable.ic_btn_speak_now)
           .setContentIntent(open)
           .setOngoing(true)
@@ -75,11 +91,22 @@ class RiyaService : Service() {
       Keep.ensureAccessibility(this)
     } catch (_: Exception) {}
 
+    // Keep-alive watchdog so Android 16 / Infinix XOS does not silently drop Accessibility
+    serviceScope.launch {
+      while (true) {
+        delay(15_000L)
+        try {
+          Keep.ensureAccessibility(this@RiyaService)
+          AccessibilityStatusMonitor.refreshNow(this@RiyaService, speakIfTurnedOff = true)
+        } catch (_: Exception) {}
+      }
+    }
+
     if (wl == null) {
       try {
         wl =
           (getSystemService(POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "riya_ai:live")
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lxr_ai:live")
             .apply {
               setReferenceCounted(false)
               acquire()
@@ -98,12 +125,35 @@ class RiyaService : Service() {
     return START_STICKY
   }
 
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    if (Store.always(this) && Store.apiKey(this).isNotBlank()) {
+      try {
+        val restartIntent = Intent(applicationContext, RiyaService::class.java)
+        val pi =
+          PendingIntent.getService(
+            applicationContext,
+            202,
+            restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
+          )
+        val alarm = getSystemService(ALARM_SERVICE) as? AlarmManager
+        alarm?.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 1200L, pi)
+      } catch (_: Exception) {}
+    }
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onDestroy() {
     try {
+      serviceScope.cancel()
+    } catch (_: Throwable) {}
+    try {
       wl?.release()
-    } catch (_: Exception) {}
+    } catch (_: Throwable) {}
     wl = null
-    live?.stop()
+    try {
+      live?.stop()
+    } catch (_: Throwable) {}
     live = null
     RiyaState.live = null
     RiyaState.running.value = false

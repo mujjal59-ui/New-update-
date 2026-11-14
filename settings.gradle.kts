@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Riya AI"
+rootProject.name = "LXR--AI"
 
 include(":app")

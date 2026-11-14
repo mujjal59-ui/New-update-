@@ -19,17 +19,25 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,25 +56,34 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DoNotDisturbOn
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -76,6 +93,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -97,6 +116,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.data.RiyaState
 import com.example.data.Store
+import com.example.data.VoiceGender
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
 import com.example.service.RiyaVoiceManager
@@ -139,7 +159,7 @@ fun SubPageTopBar(
       onRunVoiceTest = {
         RiyaVoiceManager.speakUrgent(
           ctx,
-          "বস, আমি Riya AI। সব সিস্টেম এবং ভয়েস স্পষ্টভাবে কাজ করছে।",
+          "বস, আমি LXR--AI। সব সিস্টেম এবং ভয়েস স্পষ্টভাবে কাজ করছে।",
         )
       },
     )
@@ -319,7 +339,7 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       ),
       PermItem(
         "Battery optimization OFF",
-        "ব্যাকগ্রাউন্ডে Riya AI ও Accessibility সচল রাখতে",
+        "ব্যাকগ্রাউন্ডে LXR--AI ও Accessibility সচল রাখতে",
         Icons.Filled.BatteryChargingFull,
         listOf(CYBER_GREEN, CYBER_BLUE),
         batOk,
@@ -327,12 +347,12 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       ),
       PermItem(
         "Autostart / Background (Infinix XOS)",
-        "Infinix Android 16 যেন Riya AI বা Accessibility বন্ধ না করে",
+        "Infinix Android 16 যেন LXR--AI বা Accessibility বন্ধ না করে",
         Icons.Filled.RocketLaunch,
         listOf(CYBER_RED, CYBER_AMBER),
         oemOk,
         oemGo,
-        hint = "Infinix Phone Master-এ Riya AI এর Auto-start ও Background চালু রাখুন।",
+        hint = "Infinix Phone Master-এ LXR--AI এর Auto-start ও Background চালু রাখুন।",
       ),
       PermItem(
         "Do Not Disturb access",
@@ -383,6 +403,41 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     ) {
       Text(if (wizard) "চালু করা হচ্ছে… প্রতিটি পেজে Allow দিন" else "⚡ সব একসাথে চালু করুন")
     }
+    Column(
+      Modifier
+        .fillMaxWidth()
+        .background(CYBER_CARD, RoundedCornerShape(14.dp))
+        .border(1.dp, CYBER_CYAN.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+        .padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      val selfHealOn = remember(stamp) { Keep.canSelfEnable(ctx) }
+      Text(
+        "🛡️ Accessibility অটো-বন্ধ প্রতিরোধ গার্ড",
+        color = CYBER_CYAN,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+      )
+      Text(
+        if (selfHealOn)
+          "অটো-রিপেয়ার সক্রিয় ✓ — OS বন্ধ করলেও LXR--AI নিজেই সাথে সাথে চালু করে নেবে।"
+        else
+          "ফোন যেন Accessibility বন্ধ না করে সেজন্য Battery Unrestricted + Restricted Settings চালু রাখুন।",
+        color = Color(0xFFC5CEE6),
+        fontSize = 11.5.sp,
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = batGo, modifier = Modifier.weight(1f)) {
+          Text("Battery", color = Color.White, fontSize = 11.sp)
+        }
+        OutlinedButton(onClick = { Keep.openAppInfo(ctx) }, modifier = Modifier.weight(1f)) {
+          Text("Restricted", color = Color.White, fontSize = 11.sp)
+        }
+        OutlinedButton(onClick = oemGo, modifier = Modifier.weight(1f)) {
+          Text("Autostart", color = Color.White, fontSize = 11.sp)
+        }
+      }
+    }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       items(list) { p ->
         Column(
@@ -423,13 +478,21 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val ctx = LocalContext.current
   var key by remember { mutableStateOf(Store.apiKey(ctx)) }
   var model by remember { mutableStateOf(Store.model(ctx)) }
   var voice by remember { mutableStateOf(Store.voice(ctx)) }
+  var ttsCloud by remember { mutableStateOf(Store.ttsCloudEnabled(ctx)) }
+  var ttsStyle by remember { mutableStateOf(Store.ttsStyleInstruction(ctx)) }
+  var whisperBoost by remember { mutableStateOf(Store.whisperBoost(ctx)) }
+  var lowNetFast by remember { mutableStateOf(Store.lowNetFastMode(ctx)) }
+  var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
   var show by remember { mutableStateOf(false) }
+
+  val ttsStatus by RiyaVoiceManager.ttsStatusLabel.collectAsState()
 
   val fieldColors =
     OutlinedTextFieldDefaults.colors(
@@ -441,60 +504,235 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       unfocusedLabelColor = Color(0xFFAAB4D0),
     )
 
+  fun applyVoiceSettings() {
+    Store.setApiKey(ctx, key)
+    Store.setModel(ctx, model)
+    Store.setVoice(ctx, voice)
+    Store.setTtsCloudEnabled(ctx, ttsCloud)
+    Store.setTtsStyleInstruction(ctx, ttsStyle)
+    Store.setWhisperBoost(ctx, whisperBoost)
+    Store.setLowNetFastMode(ctx, lowNetFast)
+    RiyaVoiceManager.refreshVoicePreferences(ctx)
+  }
+
   Column(
-    Modifier.fillMaxSize().background(FULL_BG_GRADIENT).statusBarsPadding().padding(16.dp),
+    Modifier
+      .fillMaxSize()
+      .background(FULL_BG_GRADIENT)
+      .statusBarsPadding()
+      .verticalScroll(rememberScrollState())
+      .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     SubPageTopBar(
-      title = "Gemini API Key",
+      title = "Gemini API Key ও Voice",
       icon = Icons.Filled.Key,
       iconColors = listOf(CYBER_AMBER, CYBER_RED),
       onBack = back,
       onNavigate = onNavigate,
     )
+
     OutlinedTextField(
       value = key,
       onValueChange = { key = it },
-      modifier = Modifier.fillMaxWidth(),
-      label = { Text("Gemini Live API Key") },
+      modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_input"),
+      label = { Text("Gemini Live & TTS API Key") },
       singleLine = true,
       colors = fieldColors,
       visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
     )
-    TextButton({ show = !show }) { Text(if (show) "Hide" else "Show", color = CYBER_CYAN) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+      TextButton({ show = !show }) { Text(if (show) "Hide Key" else "Show Key", color = CYBER_CYAN) }
+      Text(
+        "Free key: aistudio.google.com",
+        color = Color(0xFFAAB4D0),
+        fontSize = 11.sp,
+      )
+    }
+
     OutlinedTextField(
       value = model,
       onValueChange = { model = it },
       modifier = Modifier.fillMaxWidth(),
-      label = { Text("Live Model") },
+      label = { Text("Live Voice Model") },
       singleLine = true,
       colors = fieldColors,
     )
-    OutlinedTextField(
-      value = voice,
-      onValueChange = { voice = it },
-      modifier = Modifier.fillMaxWidth(),
-      label = { Text("Voice (Leda)") },
-      singleLine = true,
-      colors = fieldColors,
-    )
-    Text(
-      "API Key aistudio.google.com থেকে সংগ্রহ করুন (টেক্সট চ্যাট ও অটো রিপ্লাই কী ছাড়াই কাজ করে)।",
-      color = Color.LightGray,
-      fontSize = 12.sp,
-    )
+
+    // Google Free Voice Studio (Gemini 3.1 Flash TTS Preview • bn-BD)
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_CYAN.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(Icons.Filled.RecordVoiceOver, "Google Free TTS", listOf(CYBER_CYAN, CYBER_BLUE), sizeDp = 36)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text(Store.TTS_MODEL_LABEL, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+          Text(
+            "${Store.TTS_LOCALE_LABEL} (${Store.TTS_LOCALE_TAG}) • ফ্রি ভয়েস ইঞ্জিন",
+            color = CYBER_CYAN,
+            fontSize = 11.5.sp,
+          )
+        }
+        Switch(
+          checked = ttsCloud,
+          onCheckedChange = {
+            ttsCloud = it
+            Store.setTtsCloudEnabled(ctx, it)
+            RiyaVoiceManager.refreshVoicePreferences(ctx)
+          },
+          colors = SwitchDefaults.colors(checkedTrackColor = CYBER_CYAN, checkedThumbColor = Color.White),
+        )
+      }
+
+      Text("সক্রিয় ভয়েস: $ttsStatus", color = Color(0xFFD5DEF5), fontSize = 11.5.sp)
+
+      // Gender filter: All / Female / Male
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+          selected = genderFilter == null,
+          onClick = { genderFilter = null },
+          label = { Text("সব (৭টি)") },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_BLUE, selectedLabelColor = Color.White, labelColor = Color(0xFFB8C4E0)),
+        )
+        FilterChip(
+          selected = genderFilter == VoiceGender.FEMALE,
+          onClick = { genderFilter = VoiceGender.FEMALE },
+          label = { Text("মেয়ে ভয়েস") },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_RED, selectedLabelColor = Color.White, labelColor = Color(0xFFB8C4E0)),
+        )
+        FilterChip(
+          selected = genderFilter == VoiceGender.MALE,
+          onClick = { genderFilter = VoiceGender.MALE },
+          label = { Text("ছেলের ভয়েস") },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_CYAN, selectedLabelColor = Color.Black, labelColor = Color(0xFFB8C4E0)),
+        )
+      }
+
+      val filteredVoices =
+        remember(genderFilter) {
+          if (genderFilter == null) Store.VOICE_OPTIONS
+          else Store.VOICE_OPTIONS.filter { it.gender == genderFilter }
+        }
+
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        filteredVoices.forEach { option ->
+          val selected = voice.equals(option.id, ignoreCase = true)
+          val accent = if (option.gender == VoiceGender.FEMALE) CYBER_RED else CYBER_CYAN
+          Column(
+            modifier =
+              Modifier
+                .testTag("voice_option_${option.id.lowercase()}")
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (selected) accent.copy(alpha = 0.24f) else Color(0xFF0E152E))
+                .border(
+                  1.2.dp,
+                  if (selected) accent else Color(0xFF2D3759),
+                  RoundedCornerShape(14.dp),
+                )
+                .clickable {
+                  voice = option.id
+                  Store.setVoice(ctx, option.id)
+                  RiyaVoiceManager.refreshVoicePreferences(ctx)
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text(option.displayName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+              Text(
+                option.gender.labelBn,
+                color = accent,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
+            Text(option.toneBn, color = Color(0xFFAAB4D0), fontSize = 10.5.sp)
+          }
+        }
+      }
+
+      OutlinedTextField(
+        value = ttsStyle,
+        onValueChange = { ttsStyle = it },
+        modifier = Modifier.fillMaxWidth().testTag("tts_style_input"),
+        label = { Text("Style instructions") },
+        colors = fieldColors,
+      )
+
+      OutlinedButton(
+        onClick = {
+          applyVoiceSettings()
+          val opt = Store.voiceOption(ctx)
+          RiyaVoiceManager.speakUrgent(
+            ctx,
+            "হ্যালো বস, আমি এল এক্স আর এ আই। এখন ${opt.displayName} ভয়েসে কথা বলছি।",
+          )
+        },
+        modifier = Modifier.fillMaxWidth().testTag("test_voice_button"),
+      ) {
+        Icon(Icons.Filled.VolumeUp, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("🔊 টেস্ট ভয়েস শুনুন ($voice)", color = CYBER_CYAN, fontWeight = FontWeight.Bold)
+      }
+    }
+
+    // Soft-Voice Mic + LxR Bluetooth + Low Network Speed controls
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_GREEN.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(Icons.Filled.GraphicEq, "Mic Boost", listOf(CYBER_GREEN, CYBER_CYAN), sizeDp = 34)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text("LxR Bluetooth ও ফিসফিস মাইক বুস্ট", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+          Text("আস্তে কথা বললেও LxR ব্লুটুথ ও ফোনের মাইক স্পষ্ট শুনবে", color = Color(0xFFAAB4D0), fontSize = 11.sp)
+        }
+        Switch(
+          checked = whisperBoost,
+          onCheckedChange = { whisperBoost = it },
+          colors = SwitchDefaults.colors(checkedTrackColor = CYBER_GREEN, checkedThumbColor = Color.White),
+        )
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(Icons.Filled.Speed, "Low Net", listOf(CYBER_BLUE, CYBER_PURPLE), sizeDp = 34)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text("অল্প নেট স্পিড ফাস্ট রেসপন্স মোড", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+          Text("কম ইন্টারনেট স্পিডেও দ্রুত উত্তর ও হালকা ডেটা ট্রান্সফার", color = Color(0xFFAAB4D0), fontSize = 11.sp)
+        }
+        Switch(
+          checked = lowNetFast,
+          onCheckedChange = { lowNetFast = it },
+          colors = SwitchDefaults.colors(checkedTrackColor = CYBER_BLUE, checkedThumbColor = Color.White),
+        )
+      }
+    }
+
     Button(
       onClick = {
-        Store.setApiKey(ctx, key)
-        Store.setModel(ctx, model)
-        Store.setVoice(ctx, voice)
-        Toast.makeText(ctx, "হয়েছে, বস! সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
+        applyVoiceSettings()
+        Toast.makeText(ctx, "হয়েছে, বস! LXR--AI ভয়েস ও কী সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
         back()
       },
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().height(50.dp).testTag("save_key_voice_button"),
       colors = ButtonDefaults.buttonColors(containerColor = CYBER_RED),
     ) {
-      Text("Save")
+      Text("Save Settings", fontWeight = FontWeight.Bold)
     }
   }
 }
@@ -708,8 +946,16 @@ private fun StateTile(
 ) {
   val accent = if (on) CYBER_CYAN else Color(0xFF7C86A2)
   val shape = RoundedCornerShape(20.dp)
+  val interaction = remember { MutableInteractionSource() }
+  val pressed by interaction.collectIsPressedAsState()
+  val tileScale by animateFloatAsState(
+    targetValue = if (pressed) 0.96f else 1f,
+    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+    label = "tile_scale",
+  )
   Column(
     modifier
+      .scale(tileScale)
       .shadow(if (on) 14.dp else 2.dp, shape, spotColor = accent)
       .background(Brush.verticalGradient(listOf(Color(0xFF17213F), Color(0xFF0B1028))), shape)
       .border(
@@ -718,7 +964,7 @@ private fun StateTile(
         else Brush.linearGradient(listOf(Color(0xFF3A4260), Color(0xFF3A4260))),
         shape,
       )
-      .clickable(onClick = onClick)
+      .clickable(interactionSource = interaction, indication = null, onClick = onClick)
       .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -762,6 +1008,27 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var torchOn by remember { mutableStateOf(false) }
   var note by remember { mutableStateOf("") }
   val health by AccessibilityStatusMonitor.healthState.collectAsState()
+  val audioDevice by RiyaState.connectedAudioDevice.collectAsState()
+  val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
+  val netLabel by RiyaState.networkSpeedLabel.collectAsState()
+
+  DisposableEffect(ctx) {
+    val cam = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    val cb =
+      object : CameraManager.TorchCallback() {
+        override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+          torchOn = enabled
+        }
+      }
+    try {
+      cam.registerTorchCallback(cb, null)
+    } catch (_: Exception) {}
+    onDispose {
+      try {
+        cam.unregisterTorchCallback(cb)
+      } catch (_: Exception) {}
+    }
+  }
 
   LaunchedEffect(Unit) {
     while (true) {
@@ -799,7 +1066,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       }
       StateTile(Modifier.weight(1f), "Bluetooth", "bt", btOn, if (btOn) "ON" else "OFF") {
         openIntent(ctx, Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-        note = "Bluetooth সেটিংসে চালু/বন্ধ করুন"
+        note = "Bluetooth সেটিংসে LxR ও হেডসেট সংযোগ করুন"
       }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -814,6 +1081,30 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     }
     StateTile(Modifier.fillMaxWidth(), "Battery", "battery", true, if (pct >= 0) "$pct%" else "N/A") {}
 
+    // Live LxR Bluetooth & Low-Network Status Card
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+          .clickable { onNavigate("key") }
+          .padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      PremiumIconBadge(
+        Icons.Filled.Bluetooth,
+        "Audio & Network",
+        if (btMicActive) listOf(CYBER_GREEN, CYBER_CYAN) else listOf(CYBER_BLUE, CYBER_CYAN),
+        sizeDp = 40,
+      )
+      Spacer(Modifier.width(12.dp))
+      Column(Modifier.weight(1f)) {
+        Text("অডিও: $audioDevice", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text("নেটওয়ার্ক: $netLabel • ভয়েস ও বুস্ট পরিবর্তন করতে ট্যাপ করুন", color = CYBER_CYAN, fontSize = 11.5.sp)
+      }
+    }
+
     // Live Accessibility Guard Card inside Settings so Boss always sees real status
     Row(
       modifier =
@@ -826,7 +1117,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
             else CYBER_RED.copy(alpha = 0.75f),
             RoundedCornerShape(18.dp),
           )
-          .clickable { Keep.openAccessibility(ctx) }
+          .clickable { if (!Keep.ensureAccessibility(ctx)) Keep.openAccessibility(ctx) }
           .padding(16.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -848,7 +1139,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         )
         Text(
           if (health.isAccessibilityTrulyActive) "পূর্ণ স্ক্রিন রিডিং ও দ্রুত টাস্ক চালু"
-          else "ট্যাপ করে এখনই Riya AI Accessibility চালু করুন",
+          else "ট্যাপ করে এখনই LXR--AI Accessibility চালু করুন",
           color = if (health.isAccessibilityTrulyActive) CYBER_GREEN else CYBER_RED,
           fontSize = 12.sp,
         )

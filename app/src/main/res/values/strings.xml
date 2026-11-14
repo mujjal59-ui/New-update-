@@ -1,8 +1,8 @@
 <resources>
-    <string name="app_name">Riya AI</string>
-    <string name="accessibility_service_label">Riya AI স্ক্রিন ও টাস্ক অ্যাসিস্ট্যান্ট</string>
-    <string name="accessibility_service_description">Riya AI সম্পূর্ণ স্ক্রিন রিড করে দ্রুত টাস্ক সম্পন্ন করতে, ইমো (imo)-তে ইমোজি বাটনের বদলে সঠিক সেন্ড বাটনে ক্লিক করতে এবং Infinix Android 16 অ্যাপগুলোতে সহজে সার্চ করতে সাহায্য করে।</string>
-    <string name="notification_listener_label">Riya AI মেসেজ অটো-রিপ্লাই</string>
-    <string name="channel_alerts_name">Riya AI জরুরি ও অ্যাক্সেসিবিলিটি সতর্কতা</string>
-    <string name="channel_messages_name">Riya AI মেসেজ ও রিপ্লাই অনুমতি</string>
+    <string name="app_name">LXR--AI</string>
+    <string name="accessibility_service_label">LXR--AI স্ক্রিন ও টাস্ক অ্যাসিস্ট্যান্ট</string>
+    <string name="accessibility_service_description">LXR--AI সম্পূর্ণ স্ক্রিন রিড করে দ্রুত টাস্ক সম্পন্ন করতে, ইমো (imo)-তে ইমোজি বাটনের বদলে সঠিক সেন্ড বাটনে ক্লিক করতে এবং Infinix Android 16 অ্যাপগুলোতে সহজে সার্চ করতে সাহায্য করে।</string>
+    <string name="notification_listener_label">LXR--AI মেসেজ অটো-রিপ্লাই</string>
+    <string name="channel_alerts_name">LXR--AI জরুরি ও অ্যাক্সেসিবিলিটি সতর্কতা</string>
+    <string name="channel_messages_name">LXR--AI মেসেজ ও রিপ্লাই অনুমতি</string>
 </resources>

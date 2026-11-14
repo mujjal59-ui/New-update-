@@ -24,6 +24,8 @@ object AccessibilityStatusMonitor {
   val healthState: StateFlow<SystemHealthSnapshot> = _healthState.asStateFlow()
 
   private var wasPreviouslyActive = false
+  private var lastDisconnectedAtMs = 0L
+  private var lastAlertSpokenAtMs = 0L
   private var stateListener: AccessibilityManager.AccessibilityStateChangeListener? = null
 
   fun startListening(context: Context) {
@@ -32,6 +34,9 @@ object AccessibilityStatusMonitor {
     if (am != null && stateListener == null) {
       val listener =
         AccessibilityManager.AccessibilityStateChangeListener {
+          try {
+            Keep.ensureAccessibility(appCtx)
+          } catch (_: Exception) {}
           refreshNow(appCtx, speakIfTurnedOff = true)
         }
       am.addAccessibilityStateChangeListener(listener)
@@ -41,39 +46,139 @@ object AccessibilityStatusMonitor {
   }
 
   /**
-   * Performs strict three-layer OS verification so Riya NEVER falsely displays "Enabled"
-   * when Accessibility has actually been turned off by the system or user.
+   * Accurate live verification:
+   * - If RiyaAccessibilityService.instance != null, OS is actively bound right now -> ALWAYS active.
+   * - Otherwise checks AccessibilityManager + Settings.Secure (long and short component names).
+   * - Debounces transient OS rebinds before speaking a disconnect alarm.
    */
   fun refreshNow(context: Context, speakIfTurnedOff: Boolean = true): SystemHealthSnapshot {
     val appCtx = context.applicationContext
     val serviceComponent = ComponentName(appCtx, RiyaAccessibilityService::class.java)
-    val expectedShort = "${appCtx.packageName}/${RiyaAccessibilityService::class.java.name}"
+    val expectedLong = "${appCtx.packageName}/${RiyaAccessibilityService::class.java.name}"
     val expectedFlatten = serviceComponent.flattenToString()
+    val expectedShort = serviceComponent.flattenToShortString()
 
-    // Layer 1: AccessibilityManager enabled services list
-    var enabledByAm = false
-    try {
-      val am = appCtx.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
-      if (am != null && am.isEnabled) {
-        val enabledList =
-          am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        enabledByAm =
-          enabledList.any { info ->
-            val id = info.id.orEmpty()
-            val svcInfo = info.resolveInfo?.serviceInfo
-            id.equals(expectedShort, ignoreCase = true) ||
-              id.equals(expectedFlatten, ignoreCase = true) ||
-              (svcInfo?.packageName == appCtx.packageName &&
-                svcInfo?.name == RiyaAccessibilityService::class.java.name)
-          }
-      }
-    } catch (_: Exception) {
-      enabledByAm = false
+    // Layer 1: Live bound service instance (authoritative when alive)
+    val liveSingletonAlive = RiyaAccessibilityService.instance != null
+    if (liveSingletonAlive && !RiyaRuntimeBridge.isAccessibilityServiceConnected.value) {
+      RiyaRuntimeBridge.setServiceConnected(true)
     }
 
-    // Layer 2: Settings.Secure check
-    var enabledInSecureSettings = false
-    try {
+    // Layer 2: AccessibilityManager enabled services list
+    var enabledByAm = checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort)
+
+    // Layer 3: Settings.Secure check
+    var enabledInSecureSettings =
+      checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
+
+    // Auto-restore immediately if WRITE_SECURE_SETTINGS is available and OS disabled it
+    if (!liveSingletonAlive && !(enabledByAm || enabledInSecureSettings) && Keep.canSelfEnable(appCtx)) {
+      if (Keep.ensureAccessibility(appCtx)) {
+        enabledByAm = checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort)
+        enabledInSecureSettings =
+          checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
+      }
+    }
+
+    var settingsActive = liveSingletonAlive || enabledByAm || enabledInSecureSettings
+    var isBound = liveSingletonAlive || RiyaRuntimeBridge.isAccessibilityServiceConnected.value
+
+    // If Settings shows ON but Android 16 / XOS left service unbound (zombie state), auto-rebind if allowed
+    if (settingsActive && !isBound && Keep.canSelfEnable(appCtx)) {
+      if (Keep.forceRebindAccessibility(appCtx)) {
+        enabledByAm = checkEnabledInAm(appCtx, expectedLong, expectedFlatten, expectedShort)
+        enabledInSecureSettings =
+          checkEnabledInSecureSettings(appCtx, expectedLong, expectedFlatten, expectedShort)
+        settingsActive = enabledByAm || enabledInSecureSettings
+        isBound =
+          RiyaAccessibilityService.instance != null ||
+            RiyaRuntimeBridge.isAccessibilityServiceConnected.value
+      }
+    }
+
+    if (!settingsActive && isBound && RiyaAccessibilityService.instance == null) {
+      RiyaRuntimeBridge.setServiceConnected(false)
+      isBound = false
+    }
+
+    // Truly active whenever service is bound OR listed running by AM OR enabled in Settings + bound
+    val trulyActive = liveSingletonAlive || (settingsActive && isBound) || enabledByAm
+    val now = System.currentTimeMillis()
+    val turnedOffNow = wasPreviouslyActive && !trulyActive && !settingsActive
+
+    val notifActive =
+      RiyaRuntimeBridge.isNotificationListenerConnected.value ||
+        try {
+          NotificationManagerCompat.getEnabledListenerPackages(appCtx).contains(appCtx.packageName)
+        } catch (_: Exception) {
+          false
+        }
+
+    if (trulyActive) {
+      wasPreviouslyActive = true
+      lastDisconnectedAtMs = 0L
+      RiyaNotificationHelper.cancelAccessibilityDisabledAlert(appCtx)
+    } else if (turnedOffNow) {
+      if (lastDisconnectedAtMs == 0L) lastDisconnectedAtMs = now
+      // Debounce 2.5s so transient OS task switches/rebinds never scream a false voice alert
+      if (now - lastDisconnectedAtMs >= 2500L) {
+        wasPreviouslyActive = false
+        onAccessibilityTurnedOff(appCtx, speakIfTurnedOff)
+      }
+    }
+
+    val snapshot =
+      SystemHealthSnapshot(
+        isAccessibilityEnabledInSettings = settingsActive,
+        isAccessibilityServiceBound = isBound,
+        isAccessibilityTrulyActive = trulyActive,
+        isNotificationListenerActive = notifActive,
+        accessibilityJustTurnedOff =
+          (!trulyActive && !settingsActive && _healthState.value.accessibilityJustTurnedOff) ||
+            (turnedOffNow && now - lastDisconnectedAtMs >= 2500L),
+        lastCheckedAt = now,
+      )
+    _healthState.value = snapshot
+    return snapshot
+  }
+
+  private fun checkEnabledInAm(
+    appCtx: Context,
+    expectedLong: String,
+    expectedFlatten: String,
+    expectedShort: String,
+  ): Boolean {
+    return try {
+      val am = appCtx.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+      if (am != null) {
+        val enabledList =
+          am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        enabledList.any { info ->
+          val id = info.id.orEmpty()
+          val svcInfo = info.resolveInfo?.serviceInfo
+          id.equals(expectedLong, ignoreCase = true) ||
+            id.equals(expectedFlatten, ignoreCase = true) ||
+            id.equals(expectedShort, ignoreCase = true) ||
+            (id.contains(appCtx.packageName, ignoreCase = true) &&
+              id.contains("RiyaAccessibilityService", ignoreCase = true)) ||
+            (svcInfo?.packageName == appCtx.packageName &&
+              svcInfo?.name == RiyaAccessibilityService::class.java.name)
+        }
+      } else {
+        false
+      }
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  private fun checkEnabledInSecureSettings(
+    appCtx: Context,
+    expectedLong: String,
+    expectedFlatten: String,
+    expectedShort: String,
+  ): Boolean {
+    return try {
       val accessibilityEnabled =
         Settings.Secure.getInt(appCtx.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
       if (accessibilityEnabled == 1) {
@@ -82,65 +187,32 @@ object AccessibilityStatusMonitor {
             appCtx.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
           ).orEmpty()
-        enabledInSecureSettings =
-          enabledServices
-            .split(':')
-            .any { entry ->
+        enabledServices
+          .split(':')
+          .any { entry ->
+            entry.equals(expectedLong, ignoreCase = true) ||
+              entry.equals(expectedFlatten, ignoreCase = true) ||
               entry.equals(expectedShort, ignoreCase = true) ||
-                entry.equals(expectedFlatten, ignoreCase = true) ||
-                entry.contains(RiyaAccessibilityService::class.java.simpleName)
-            }
-      }
-    } catch (_: Exception) {
-      enabledInSecureSettings = false
-    }
-
-    // Layer 3: Live bound service instance heartbeat
-    val isBound = RiyaRuntimeBridge.isAccessibilityServiceConnected.value
-    val settingsActive = enabledByAm || enabledInSecureSettings
-
-    // If OS Settings says OFF, treat as strictly OFF immediately even if unbind callback lagged
-    if (!settingsActive && isBound) {
-      RiyaRuntimeBridge.setServiceConnected(false)
-    }
-
-    val trulyActive = settingsActive && RiyaRuntimeBridge.isAccessibilityServiceConnected.value
-    val turnedOffNow = wasPreviouslyActive && !trulyActive
-
-    val notifActive =
-      try {
-        NotificationManagerCompat.getEnabledListenerPackages(appCtx).contains(appCtx.packageName)
-      } catch (_: Exception) {
+              (entry.contains(appCtx.packageName, ignoreCase = true) &&
+                entry.contains(RiyaAccessibilityService::class.java.simpleName, ignoreCase = true))
+          }
+      } else {
         false
       }
-
-    if (trulyActive) {
-      wasPreviouslyActive = true
-      RiyaNotificationHelper.cancelAccessibilityDisabledAlert(appCtx)
-    } else if (turnedOffNow) {
-      wasPreviouslyActive = false
-      onAccessibilityTurnedOff(appCtx, speakIfTurnedOff)
+    } catch (_: Exception) {
+      false
     }
-
-    val snapshot =
-      SystemHealthSnapshot(
-        isAccessibilityEnabledInSettings = settingsActive,
-        isAccessibilityServiceBound = RiyaRuntimeBridge.isAccessibilityServiceConnected.value,
-        isAccessibilityTrulyActive = trulyActive,
-        isNotificationListenerActive = notifActive,
-        accessibilityJustTurnedOff = turnedOffNow || (!trulyActive && _healthState.value.accessibilityJustTurnedOff),
-        lastCheckedAt = System.currentTimeMillis(),
-      )
-    _healthState.value = snapshot
-    return snapshot
   }
 
   fun onServiceDisconnectedFromOs(context: Context) {
-    RiyaRuntimeBridge.setServiceConnected(false)
-    refreshNow(context, speakIfTurnedOff = true)
-    if (!wasPreviouslyActive) {
-      onAccessibilityTurnedOff(context, speakAlert = true)
+    val appCtx = context.applicationContext
+    if (Keep.canSelfEnable(appCtx) && Keep.ensureAccessibility(appCtx)) {
+      refreshNow(appCtx, speakIfTurnedOff = false)
+      return
     }
+    RiyaRuntimeBridge.setServiceConnected(false)
+    // Do NOT scream immediately if Settings still shows ON (Android 16 / XOS may just be rebinding)
+    refreshNow(appCtx, speakIfTurnedOff = false)
   }
 
   fun acknowledgeAccessibilityAlert() {
@@ -148,14 +220,16 @@ object AccessibilityStatusMonitor {
   }
 
   private fun onAccessibilityTurnedOff(context: Context, speakAlert: Boolean) {
+    val now = System.currentTimeMillis()
     RiyaNotificationHelper.notifyAccessibilityDisabled(context)
     RiyaRuntimeBridge.postAutomationBanner(
-      "সতর্কতা: বস, অ্যাক্সেসিবিলিটি বন্ধ হয়ে গেছে! দয়া করে চালু করুন।"
+      "সতর্কতা: বস, LXR--AI অ্যাক্সেসিবিলিটি বন্ধ হয়ে গেছে! দয়া করে চালু করুন।"
     )
-    if (speakAlert) {
+    if (speakAlert && now - lastAlertSpokenAtMs > 25_000L) {
+      lastAlertSpokenAtMs = now
       RiyaVoiceManager.speakUrgent(
         context,
-        "বস, জরুরি বার্তা। আমার অ্যাক্সেসিবিলিটি সার্ভিস বন্ধ হয়ে গেছে। দয়া করে সেটিংস থেকে Riya AI অ্যাক্সেসিবিলিটি চালু করে দিন।",
+        "বস, LXR--AI-এর অ্যাক্সেসিবিলিটি সার্ভিস বন্ধ হয়ে গেছে। দয়া করে সেটিংস থেকে চালু করে দিন।",
       )
     }
   }

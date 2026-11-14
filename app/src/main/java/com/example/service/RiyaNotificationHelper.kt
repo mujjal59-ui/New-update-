@@ -71,12 +71,12 @@ object RiyaNotificationHelper {
       val notification =
         NotificationCompat.Builder(context, CHANNEL_ALERTS)
           .setSmallIcon(android.R.drawable.stat_sys_warning)
-          .setContentTitle("Riya AI: অ্যাক্সেসিবিলিটি বন্ধ হয়ে গেছে!")
+          .setContentTitle("LXR--AI: অ্যাক্সেসিবিলিটি বন্ধ হয়ে গেছে!")
           .setContentText("বস, স্ক্রিন রিড ও অটো কাজ চালাতে এখনই অ্যাক্সেসিবিলিটি চালু করুন।")
           .setStyle(
             NotificationCompat.BigTextStyle()
               .bigText(
-                "বস, আপনার ফোনে Riya AI-এর Accessibility Service বন্ধ হয়ে গেছে। দয়া করে সেটিংস থেকে এখনই Riya AI চালু করে দিন।"
+                "বস, আপনার ফোনে LXR--AI-এর Accessibility Service বন্ধ হয়ে গেছে। দয়া করে সেটিংস থেকে এখনই LXR--AI চালু করে দিন (এবং Battery Unrestricted ও Restricted Settings অনুমতি রাখুন)।"
               )
           )
           .setPriority(NotificationCompat.PRIORITY_HIGH)

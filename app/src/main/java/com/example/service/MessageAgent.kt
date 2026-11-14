@@ -86,6 +86,12 @@ object MessageAgent {
     return if (r.height() > 0) r.height() else 2400
   }
 
+  private fun screenW(acc: RiyaAccessibilityService): Int {
+    val r = Rect()
+    acc.rootInActiveWindow?.getBoundsInScreen(r)
+    return if (r.width() > 0) r.width() else 1080
+  }
+
   private fun bounds(n: AccessibilityNodeInfo): Rect {
     val r = Rect()
     n.getBoundsInScreen(r)
@@ -142,8 +148,6 @@ object MessageAgent {
       return true
     }
 
-    acc.global("home")
-    Thread.sleep(260)
     val intent =
       allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
         ?: launchByLabel(ctx, app)
@@ -161,67 +165,226 @@ object MessageAgent {
     return false
   }
 
-  fun openChat(acc: RiyaAccessibilityService, contact: String): Boolean {
-    val target = norm(contact)
-    if (target.isEmpty()) return false
-    for (attempt in 0 until 4) {
+  private fun isChatScreenOpen(acc: RiyaAccessibilityService): Boolean {
+    val h = screenH(acc)
+    return bottomEditable(acc, h) != null
+  }
+
+  private fun tokensMatch(haystackRaw: String, queryRaw: String): Boolean {
+    val h = norm(haystackRaw)
+    val q = norm(queryRaw)
+    if (h.isEmpty() || q.isEmpty()) return false
+    if (h == q) return true
+    if (q.length >= 2 && (h.contains(q) || (h.length >= 3 && q.contains(h)))) return true
+    val tokens =
+      queryRaw
+        .lowercase()
+        .split(Regex("[\\s.,:\\-_]+"))
+        .map { norm(it) }
+        .filter { it.length >= 2 && it !in setOf("ভাই", "ভাইয়া", "আপু", "স্যার", "বস", "bhai", "vai", "md") }
+    if (tokens.isNotEmpty() && tokens.all { tok -> h.contains(tok) }) return true
+    return false
+  }
+
+  private fun matchScore(haystackRaw: String, queryRaw: String): Int {
+    val h = norm(haystackRaw)
+    val q = norm(queryRaw)
+    return when {
+      h == q -> 4
+      h.startsWith(q) -> 3
+      h.contains(q) -> 2
+      tokensMatch(haystackRaw, queryRaw) -> 1
+      else -> 0
+    }
+  }
+
+  /**
+   * Ensures we are either ALREADY inside [contact]'s chat, or navigated back cleanly to the app's main chat list.
+   */
+  private fun prepareChatSurface(
+    ctx: Context,
+    acc: RiyaAccessibilityService,
+    app: AppSpec,
+    contact: String,
+  ): Boolean {
+    val allowedPkgs = listOf(app.pkg) + app.fallbackPkgs
+    acc.readEntireScreenTree()
+    // Case 1: Target contact's chat was already open (minimized in background) -> use directly!
+    if (headerHas(acc, contact) && isChatScreenOpen(acc)) {
+      return true
+    }
+
+    // Case 2: Another person's chat or a search/sub-screen is open -> step back cleanly to chat list
+    repeat(3) {
+      val curEditableTop = all(acc).firstOrNull { isInput(it) && bounds(it).top < screenH(acc) * 0.25f }
+      if (!isChatScreenOpen(acc) && curEditableTop == null) {
+        return true
+      }
+      acc.global("back")
+      Thread.sleep(380)
       acc.readEntireScreenTree()
-      if (clickRowFor(acc, target)) return true
-      if (attempt == 0) searchInApp(acc, contact)
+      if (rootPkg(acc) !in allowedPkgs) {
+        val relaunch =
+          allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
+            ?: launchByLabel(ctx, app)
+        if (relaunch != null) {
+          ctx.startActivity(relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          Thread.sleep(500)
+          acc.readEntireScreenTree()
+        }
+        return rootPkg(acc) in allowedPkgs
+      }
+      if (headerHas(acc, contact) && isChatScreenOpen(acc)) {
+        return true
+      }
+    }
+    return true
+  }
+
+  fun openChat(acc: RiyaAccessibilityService, contact: String): Boolean {
+    val h = screenH(acc)
+    acc.readEntireScreenTree()
+    // 0. If already inside target chat, done immediately
+    if (headerHas(acc, contact) && bottomEditable(acc, h) != null) return true
+
+    // 1. First look directly on the visible top chat list (WhatsApp / imo / Messenger main list)
+    if (clickRowFor(acc, contact)) return true
+
+    // 2. Not visible on initial top screen -> search autonomously WITHOUT asking Boss
+    searchInApp(acc, contact)
+    Thread.sleep(700)
+    acc.readEntireScreenTree()
+    if (clickRowFor(acc, contact)) return true
+
+    // 3. Fallback: scroll down up to 3 times if list has more items
+    repeat(3) {
       acc.scroll("down")
-      Thread.sleep(260)
+      Thread.sleep(320)
+      acc.readEntireScreenTree()
+      if (clickRowFor(acc, contact)) return true
     }
     return false
   }
 
-  private fun clickRowFor(acc: RiyaAccessibilityService, target: String): Boolean {
+  private fun clickRowFor(acc: RiyaAccessibilityService, query: String): Boolean {
     val h = screenH(acc)
+    val w = screenW(acc)
+    val ignoredLabels =
+      setOf(
+        "chats",
+        "contacts",
+        "channels",
+        "otherpeople",
+        "messages",
+        "more",
+        "updates",
+        "communities",
+        "calls",
+        "story",
+        "stories",
+        "askmetaai",
+        "askmetaaiorsearch",
+        "metaai",
+        "dropathought",
+        "creates",
+        "চ্যাট",
+        "কন্টাক্ট",
+        "search",
+      )
+
     val candidates =
       all(acc)
-        .filter { n ->
-          val t = norm(n.text?.toString() ?: n.contentDescription?.toString() ?: "")
-          t.isNotEmpty() &&
-            (t == target || (target.length >= 3 && t.contains(target))) &&
-            bounds(n).top > h * 0.12
+        .mapNotNull { n ->
+          if (n.isEditable) return@mapNotNull null
+          val rawText = n.text?.toString()?.trim().orEmpty()
+          val rawDesc = n.contentDescription?.toString()?.trim().orEmpty()
+          val labelStr = rawText.ifBlank { rawDesc }
+          val t = norm(labelStr)
+          if (t.isEmpty() || t in ignoredLabels || t.contains("metaai")) return@mapNotNull null
+          val r = bounds(n)
+          // Chat list rows lie below top app/search bar (y >= 0.16*h) and above bottom navigation (y <= 0.90*h)
+          val inListArea = r.top >= (h * 0.16f).toInt() && r.bottom <= (h * 0.90f).toInt()
+          val notLeftAvatar = r.left >= (w * 0.12f).toInt() || rawText.isNotEmpty()
+          val score = matchScore(labelStr, query)
+          if (score > 0 && inListArea && notLeftAvatar) Triple(n, score, r.top) else null
         }
-        .sortedByDescending { n -> if (norm(n.text?.toString() ?: "") == target) 1 else 0 }
-    for (n in candidates) {
-      val row = clickableAncestor(n) ?: continue
-      if (row.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        .sortedWith(compareByDescending<Triple<AccessibilityNodeInfo, Int, Int>> { it.second }.thenBy { it.third })
+
+    for ((n, _, _) in candidates) {
+      val nr = bounds(n)
+      val row = clickableAncestor(n)
+      if (row != null && !row.isEditable && row.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+        Thread.sleep(380)
+        return true
+      }
+      if (nr.width() > 0 && nr.height() > 0 && acc.tapAt(nr.exactCenterX(), nr.exactCenterY())) {
+        Thread.sleep(380)
+        return true
+      }
     }
     return false
   }
 
   private fun searchInApp(acc: RiyaAccessibilityService, query: String) {
+    val h = screenH(acc)
+    val allNodes = all(acc)
     val searchNodes =
-      all(acc).filter { n ->
+      allNodes.filter { n ->
         val l = (label(n) + " " + (n.viewIdResourceName ?: "")).lowercase()
-        InfinixDevicePlaybook.searchButtonKeywords.any { l.contains(it) } &&
+        val r = bounds(n)
+        // WhatsApp/Messenger have top search bar; imo has search magnifying glass at bottom-right!
+        val notFabPlusOrCamera =
+          !l.contains("camera") &&
+            !l.contains("new chat") &&
+            !l.contains("add") &&
+            !l.contains("invite") &&
+            !l.contains("story")
+        val hasSearchKeyword =
+          InfinixDevicePlaybook.searchButtonKeywords.any { l.contains(it) } ||
+            l.contains("ask meta ai")
+        notFabPlusOrCamera &&
+          hasSearchKeyword &&
+          r.width() > 0 &&
+          r.height() > 0 &&
           (n.isEditable || clickableAncestor(n) != null)
       }
-    val s = searchNodes.firstOrNull { it.isEditable } ?: searchNodes.firstOrNull() ?: return
+    // Prefer editable search field near top first, otherwise top/bottom search button
+    val s =
+      searchNodes.firstOrNull { it.isEditable && bounds(it).top < (h * 0.35f).toInt() }
+        ?: searchNodes.firstOrNull { bounds(it).top < (h * 0.35f).toInt() }
+        ?: searchNodes.firstOrNull { it.isEditable }
+        ?: searchNodes.firstOrNull()
+        ?: return
+
     if (s.isEditable) {
       setText(s, query)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         s.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
       }
-      Thread.sleep(450)
+      Thread.sleep(500)
       return
     }
-    clickableAncestor(s)?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-    Thread.sleep(350)
-    val box = all(acc).firstOrNull { isInput(it) } ?: return
+    val sRect = bounds(s)
+    val clicked = clickableAncestor(s)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true ||
+      (sRect.width() > 0 && acc.tapAt(sRect.exactCenterX(), sRect.exactCenterY()))
+    if (!clicked) return
+    Thread.sleep(450)
+    acc.readEntireScreenTree()
+    val box = all(acc).firstOrNull { isInput(it) && bounds(it).top < (h * 0.35f).toInt() }
+      ?: all(acc).firstOrNull { isInput(it) }
+      ?: return
     setText(box, query)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       box.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
     }
-    Thread.sleep(450)
+    Thread.sleep(500)
   }
 
   fun headerHas(acc: RiyaAccessibilityService, contact: String): Boolean {
-    val target = norm(contact)
     val h = screenH(acc)
-    return all(acc).any { n -> bounds(n).top < h * 0.22 && norm(label(n)).contains(target) }
+    return all(acc).any { n ->
+      !n.isEditable && bounds(n).top < h * 0.24f && tokensMatch(label(n), contact)
+    }
   }
 
   private fun isInput(n: AccessibilityNodeInfo): Boolean =
@@ -258,7 +421,7 @@ object MessageAgent {
     val now = bottomEditable(acc, h)?.text?.toString()?.trim() ?: ""
     if (!now.contains(msg.take(12))) {
       val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-      cm.setPrimaryClip(ClipData.newPlainText("riya_ai", msg))
+      cm.setPrimaryClip(ClipData.newPlainText("lxr_ai", msg))
       bottomEditable(acc, h)?.let {
         it.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         it.performAction(AccessibilityNodeInfo.ACTION_PASTE)
@@ -413,6 +576,7 @@ object MessageAgent {
     if (!app.isAi && contact.isBlank()) return "কাকে মেসেজ পাঠাবো বলোনি বস"
     if (!openApp(ctx, acc, app)) return "${app.label} খুলতে পারিনি বস"
     if (!app.isAi) {
+      prepareChatSurface(ctx, acc, app, contact)
       if (!openChat(acc, contact)) return "${app.label}-এ '$contact' নামের চ্যাট পাইনি বস"
       val until = System.currentTimeMillis() + 3000
       while (System.currentTimeMillis() < until && bottomEditable(acc, screenH(acc)) == null) {

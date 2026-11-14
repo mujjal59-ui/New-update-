@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Rect
 import androidx.test.core.app.ApplicationProvider
 import com.example.ai.RiyaPersona
+import com.example.data.Store
+import com.example.data.VoiceGender
 import com.example.service.ImoSendPrecisionEngine
 import com.example.service.InfinixDevicePlaybook
 import com.example.service.Keep
@@ -129,19 +131,36 @@ class RiyaCoreUnitTest {
   }
 
   @Test
-  fun brandingAndVoiceSanitizer_useRiyaAiNeverPriya() {
+  fun brandingAndVoiceSanitizer_useLxrAiNeverRiyaOrPriya() {
     assertFalse(RiyaPersona.TEXT.contains("Priya", ignoreCase = true))
-    assertTrue(RiyaPersona.TEXT.contains("Riya AI"))
+    assertFalse(RiyaPersona.TEXT.contains("Riya", ignoreCase = true))
+    assertTrue(RiyaPersona.TEXT.contains("LXR--AI"))
 
-    val raw = "**Priya** এখন WhatsApp, imo ও Messenger এ Infinix Hot 60 Pro+ Android 16 তে কাজ করছে!"
+    val raw = "**Priya** ও Riya AI এখন WhatsApp, imo ও Messenger এ Infinix Hot 60 Pro+ Android 16 তে কাজ করছে!"
     val clean = RiyaVoiceManager.sanitizeForClearBengaliSpeech(raw)
 
     assertFalse(clean.contains("Priya", ignoreCase = true))
+    assertFalse(clean.contains("Riya", ignoreCase = true))
+    assertFalse(clean.contains("রিয়া"))
     assertFalse(clean.contains("*"))
-    assertTrue(clean.contains("রিয়া এ আই"))
+    assertTrue(clean.contains("এল এক্স আর এ আই"))
     assertTrue(clean.contains("হোয়াটসঅ্যাপ"))
     assertTrue(clean.contains("ইমো"))
     assertTrue(clean.contains("মেসেঞ্জার"))
+  }
+
+  @Test
+  fun geminiTtsVoiceStudio_containsAllRequestedVoicesAndBnBdConfig() {
+    assertEquals("gemini-3.1-flash-tts-preview", Store.TTS_MODEL_ID)
+    assertEquals("bn-BD", Store.TTS_LOCALE_TAG)
+    assertEquals("Read aloud in a warm, welcoming tone.", Store.DEFAULT_TTS_STYLE)
+
+    val expectedNames = listOf("Aoede", "Iapetus", "Leda", "Orus", "Achernar", "Charon", "Sulafat")
+    val actualNames = Store.VOICE_OPTIONS.map { it.id }
+    assertTrue(actualNames.containsAll(expectedNames))
+    assertEquals(7, Store.VOICE_OPTIONS.size)
+    assertTrue(Store.VOICE_OPTIONS.any { it.gender == VoiceGender.MALE })
+    assertTrue(Store.VOICE_OPTIONS.any { it.gender == VoiceGender.FEMALE })
   }
 
   @Test
@@ -149,5 +168,33 @@ class RiyaCoreUnitTest {
     val ctx = ApplicationProvider.getApplicationContext<Context>()
     assertFalse(Keep.accessibilityOn(ctx))
     assertTrue(InfinixDevicePlaybook.rules.any { it.id == "xos_settings_bottom_search" })
+  }
+
+  @Test
+  fun creatorIdentity_containsExpectedFounderBioAndRepositoryDirectMatch() = kotlinx.coroutines.runBlocking {
+    assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
+    assertTrue(RiyaPersona.TEXT.contains("পার্সোনাল অ্যাসিস্ট্যান্ট"))
+    val repo = com.example.ai.RiyaAiRepository()
+    var reply = ""
+    repo.streamAssistantReply("তোমাকে কে বানিয়েছে?", "", true).collect { reply = it }
+    assertTrue(reply.contains("মোঃ উজ্জল হোসেন"))
+    assertTrue(reply.contains("কঠোর পরিশ্রম করেন"))
+  }
+
+  @Test
+  fun runtimeBridge_tracksNotificationListenerAndServiceState() {
+    com.example.service.RiyaRuntimeBridge.setNotificationListenerConnected(true)
+    assertTrue(com.example.service.RiyaRuntimeBridge.isNotificationListenerConnected.value)
+    com.example.service.RiyaRuntimeBridge.setNotificationListenerConnected(false)
+    assertFalse(com.example.service.RiyaRuntimeBridge.isNotificationListenerConnected.value)
+  }
+
+  @Test
+  fun personaRules_coverAutonomousSearchOpenChatReuseAndIncomingReplies() {
+    assertTrue(RiyaPersona.TEXT.contains("reply_to_incoming_message"))
+    assertTrue(RiyaPersona.TEXT.contains("WITHOUT asking Boss for permission"))
+    assertTrue(RiyaPersona.TEXT.contains("ALREADY open from earlier"))
+    assertTrue(RiyaPersona.TEXT.contains("FIRST scan the top visible chat rows"))
+    assertTrue(RiyaPersona.TEXT.contains("Never guess or falsely claim Accessibility is OFF"))
   }
 }

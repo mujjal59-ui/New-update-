@@ -14,6 +14,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -87,6 +94,7 @@ import com.example.ui.CYBER_GREEN
 import com.example.ui.CYBER_RED
 import com.example.ui.KeyPage
 import com.example.ui.LiveCamera
+import com.example.ui.LxrLiveAvatarOverlay
 import com.example.ui.MemPage
 import com.example.ui.PermPage
 import com.example.ui.PlaybookPage
@@ -235,36 +243,59 @@ fun RiyaApp() {
 
   BackHandler(page != "home") { page = "home" }
 
-  when (page) {
-    "perm" -> PermPage(back = { page = "home" }, onNavigate = { page = it })
-    "key" -> KeyPage(back = { page = "home" }, onNavigate = { page = it })
-    "mem" -> MemPage(back = { page = "home" }, onNavigate = { page = it })
-    "settings" -> SettingsPage(back = { page = "home" }, onNavigate = { page = it })
-    "tasks" -> TasksPage(back = { page = "home" }, onNavigate = { page = it })
-    "autoreply" -> AutoReplyPage(back = { page = "home" }, onNavigate = { page = it })
-    "playbook" -> PlaybookPage(back = { page = "home" }, onNavigate = { page = it })
-    else ->
-      RiyaHomeScreen(
-        status = status,
-        camOn = camOn,
-        accessibilityOn = health.isAccessibilityTrulyActive,
-        onMenu = { menu = true },
-        onMic = { toggleMic() },
-        onCam = {
-          if (!running) {
-            Toast.makeText(ctx, "আগে মাইক অন করে রিয়াকে চালু করুন", Toast.LENGTH_SHORT).show()
-          } else if (camOn) {
-            camOn = false
-          } else if (hasPerm(ctx, Manifest.permission.CAMERA)) {
-            camOn = true
-          } else {
-            camPerm.launch(Manifest.permission.CAMERA)
-          }
-        },
-        onChat = { chat = true },
-        onSettings = { page = "settings" },
-        onFixAccessibility = { Keep.openAccessibility(ctx) },
-      )
+  AnimatedContent(
+    targetState = page,
+    transitionSpec = {
+      if (targetState == "home") {
+        (slideInHorizontally(tween(220)) { -it / 5 } + fadeIn(tween(200))) togetherWith
+          (slideOutHorizontally(tween(200)) { it / 5 } + fadeOut(tween(180)))
+      } else {
+        (slideInHorizontally(tween(220)) { it / 5 } + fadeIn(tween(200))) togetherWith
+          (slideOutHorizontally(tween(200)) { -it / 5 } + fadeOut(tween(180)))
+      }
+    },
+    label = "lxr_page_nav",
+  ) { currentPage ->
+    when (currentPage) {
+      "perm" -> PermPage(back = { page = "home" }, onNavigate = { page = it })
+      "key" -> KeyPage(back = { page = "home" }, onNavigate = { page = it })
+      "mem" -> MemPage(back = { page = "home" }, onNavigate = { page = it })
+      "settings" -> SettingsPage(back = { page = "home" }, onNavigate = { page = it })
+      "tasks" -> TasksPage(back = { page = "home" }, onNavigate = { page = it })
+      "autoreply" -> AutoReplyPage(back = { page = "home" }, onNavigate = { page = it })
+      "playbook" -> PlaybookPage(back = { page = "home" }, onNavigate = { page = it })
+      else ->
+        RiyaHomeScreen(
+          status = status,
+          running = running,
+          camOn = camOn,
+          accessibilityOn = health.isAccessibilityTrulyActive,
+          accessibilityWaitingRebind =
+            health.isAccessibilityEnabledInSettings && !health.isAccessibilityTrulyActive,
+          notifListenerOn = health.isNotificationListenerActive,
+          onMenu = { menu = true },
+          onMic = { toggleMic() },
+          onCam = {
+            if (!running) {
+              Toast.makeText(ctx, "আগে মাইক অন করে LXR--AI চালু করুন", Toast.LENGTH_SHORT).show()
+            } else if (camOn) {
+              camOn = false
+            } else if (hasPerm(ctx, Manifest.permission.CAMERA)) {
+              camOn = true
+            } else {
+              camPerm.launch(Manifest.permission.CAMERA)
+            }
+          },
+          onChat = { chat = true },
+          onSettings = { page = "settings" },
+          onFixAccessibility = {
+            if (!Keep.ensureAccessibility(ctx)) {
+              Keep.openAccessibility(ctx)
+            }
+          },
+          onFixNotifAccess = { Keep.openNotificationAccess(ctx) },
+        )
+    }
   }
 
   if (menu) {
@@ -311,20 +342,27 @@ private fun Hot(x: Dp, y: Dp, w: Dp, h: Dp, tag: String, onClick: () -> Unit) {
 @Composable
 fun RiyaHomeScreen(
   status: String,
+  running: Boolean,
   camOn: Boolean,
   accessibilityOn: Boolean,
+  accessibilityWaitingRebind: Boolean = false,
+  notifListenerOn: Boolean = true,
   onMenu: () -> Unit,
   onMic: () -> Unit,
   onCam: () -> Unit,
   onChat: () -> Unit,
   onSettings: () -> Unit,
   onFixAccessibility: () -> Unit,
+  onFixNotifAccess: () -> Unit = {},
 ) {
   val ctx = LocalContext.current
   val pendingMessages by RiyaRuntimeBridge.pendingMessages.collectAsState()
   val pendingIncoming =
     pendingMessages.firstOrNull { it.status == IncomingReplyStatus.PENDING_PERMISSION }
   val motivationBanner by RiyaState.motivationalBanner.collectAsState()
+  val audioDevice by RiyaState.connectedAudioDevice.collectAsState()
+  val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
+  val netLabel by RiyaState.networkSpeedLabel.collectAsState()
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
     val iw = 941f
@@ -353,16 +391,27 @@ fun RiyaHomeScreen(
 
     Image(
       painter = painterResource(R.drawable.home_bg),
-      contentDescription = "Riya AI home",
+      contentDescription = "LXR--AI home",
       modifier = Modifier.fillMaxSize(),
       contentScale = ContentScale.Crop,
     )
 
-    // Top Status Pill & Live Accessibility Warning Pill (never fakes ON)
+    // Continuous background cyber animations, eye blinking, gentle smile & LXR--AI branding
+    LxrLiveAvatarOverlay(
+      ox = ox,
+      oy = oy,
+      dw = dw,
+      dh = dh,
+      isRunning = running,
+      px = ::px,
+      py = ::py,
+    )
+
+    // Top Status Pill & Live Warnings cleanly below holographic LXR--AI header
     Column(
-      modifier = Modifier.align(Alignment.TopCenter).offset(y = py(fy(0.135f))),
+      modifier = Modifier.align(Alignment.TopCenter).offset(y = py(0.246f)),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(6.dp),
+      verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Text(
         text = status,
@@ -377,7 +426,28 @@ fun RiyaHomeScreen(
             .padding(horizontal = 14.dp, vertical = 4.dp),
       )
 
+      if (running || btMicActive) {
+        Text(
+          text = "$audioDevice • Net: $netLabel",
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.Medium,
+          color = if (btMicActive) CYBER_GREEN else CYBER_CYAN,
+          modifier =
+            Modifier
+              .background(Color(0xBB050B1E), RoundedCornerShape(16.dp))
+              .border(
+                1.dp,
+                (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f),
+                RoundedCornerShape(16.dp),
+              )
+              .padding(horizontal = 10.dp, vertical = 2.dp),
+        )
+      }
+
       if (!accessibilityOn) {
+        val label =
+          if (accessibilityWaitingRebind) "Accessibility চালু আছে — রিকানেক্ট করতে ট্যাপ করুন"
+          else "Accessibility বন্ধ! চালু করতে ট্যাপ করুন"
         Row(
           modifier =
             Modifier
@@ -397,10 +467,40 @@ fun RiyaHomeScreen(
           )
           Spacer(Modifier.width(6.dp))
           Text(
-            text = "Accessibility বন্ধ! চালু করতে ট্যাপ করুন",
+            text = label,
             color = Color.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
+          )
+        }
+      }
+
+      if (!notifListenerOn &&
+        (Store.autoReplyWhatsApp(ctx) || Store.autoReplyImo(ctx) || Store.autoReplyMessenger(ctx))
+      ) {
+        Row(
+          modifier =
+            Modifier
+              .testTag("notification_access_warning_pill")
+              .clip(RoundedCornerShape(18.dp))
+              .background(Color(0xE62E1904))
+              .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(18.dp))
+              .clickable(onClick = onFixNotifAccess)
+              .padding(horizontal = 12.dp, vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Warning,
+            contentDescription = "Notification Access Off",
+            tint = Color(0xFFFFB300),
+            modifier = Modifier.size(14.dp),
+          )
+          Spacer(Modifier.width(6.dp))
+          Text(
+            text = "মেসেজ শুনতে Notification Access চালু করুন",
+            color = Color.White,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
           )
         }
       }
@@ -493,15 +593,28 @@ fun RiyaHomeScreen(
     }
 
     if (camOn) {
-      LiveCamera(
+      Box(
         Modifier
-          .align(Alignment.TopEnd)
-          .offset(y = py(fy(0.20f)))
-          .padding(end = 14.dp)
-          .size(width = 120.dp, height = 160.dp)
+          .align(Alignment.TopStart)
+          .offset(x = px(0.032f), y = py(0.285f))
+          .size(width = pw(0.325f), height = ph(0.245f))
           .clip(RoundedCornerShape(16.dp))
           .border(2.dp, CYBER_CYAN, RoundedCornerShape(16.dp))
-      )
+      ) {
+        LiveCamera(Modifier.fillMaxSize())
+        Text(
+          text = "LIVE VISION",
+          color = Color.Black,
+          fontSize = 9.sp,
+          fontWeight = FontWeight.ExtraBold,
+          modifier =
+            Modifier
+              .align(Alignment.TopStart)
+              .padding(6.dp)
+              .background(CYBER_CYAN, RoundedCornerShape(8.dp))
+              .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+      }
     }
 
     // Exact UI artwork hotspots matching Screenshot_20261114-011443_d15b6446.jpg

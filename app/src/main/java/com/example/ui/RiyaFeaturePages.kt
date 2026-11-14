@@ -348,7 +348,7 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
               appLabel = "imo",
               senderName = "সুমাইয়া (টেস্ট)",
               messageText = "বস, কোথায় আছেন?",
-              suggestedReply = "হ্যালো, বস একটু ব্যস্ত আছেন। আমি Riya AI, কিছুক্ষণ পর বস রিপ্লাই দেবেন।",
+              suggestedReply = "হ্যালো, বস একটু ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস রিপ্লাই দেবেন।",
               hasRemoteInput = true,
               status = IncomingReplyStatus.PENDING_PERMISSION,
             )
@@ -494,7 +494,7 @@ fun PlaybookPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         onClick = {
           RiyaVoiceManager.speakUrgent(
             ctx,
-            "বস, আমি Riya AI। ইমোতে ইমোজি বাটন বাদ দিয়ে সঠিক সেন্ড বাটনে মেসেজ পাঠাতে এবং ইনফিনিক্স অ্যান্ড্রয়েড ষোলো-তে দ্রুত সার্চ করতে আমি সম্পূর্ণ প্রস্তুত।",
+            "বস, আমি এল এক্স আর এ আই। ইমোতে ইমোজি বাটন বাদ দিয়ে সঠিক সেন্ড বাটনে মেসেজ পাঠাতে এবং ইনফিনিক্স অ্যান্ড্রয়েড ষোলো-তে দ্রুত সার্চ করতে আমি সম্পূর্ণ প্রস্তুত।",
           )
         },
         modifier = Modifier.fillMaxWidth(),

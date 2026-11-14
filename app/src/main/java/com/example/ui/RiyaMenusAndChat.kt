@@ -271,13 +271,13 @@ fun RiyaThreeLineMenuDialog(
       ) {
         PremiumIconBadge(
           icon = Icons.Filled.AutoAwesome,
-          contentDescription = "Riya AI Menu",
+          contentDescription = "LXR--AI Menu",
           colors = listOf(CYBER_RED, CYBER_PURPLE, CYBER_BLUE),
           sizeDp = 40,
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-          Text("Riya AI Menu", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+          Text("LXR--AI Menu", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
           Text(
             if (health.isAccessibilityTrulyActive) "অ্যাক্সেসিবিলিটি: সচল ✓"
             else "অ্যাক্সেসিবিলিটি: বন্ধ ⚠",
@@ -294,7 +294,7 @@ fun RiyaThreeLineMenuDialog(
           onRunVoiceTest = {
             RiyaVoiceManager.speakUrgent(
               ctx,
-              "নমস্কার বস, আমি Riya AI। আমার কণ্ঠ এখন একদম স্পষ্ট ও সুন্দর শোনা যাচ্ছে।",
+              "নমস্কার বস, আমি এল এক্স আর এ আই। আমার কণ্ঠ এখন একদম স্পষ্ট ও সুন্দর শোনা যাচ্ছে।",
             )
           },
         )
@@ -354,7 +354,7 @@ fun RiyaThreeLineMenuDialog(
           icon = Icons.Filled.Key,
           colors = listOf(CYBER_AMBER, CYBER_RED),
           title = "Gemini API Key ও Voice",
-          subtitle = "Live Audio কী ও কণ্ঠ সেটআপ",
+          subtitle = "Gemini 3.1 Flash TTS (ছেলে/মেয়ে ভয়েস) ও Bluetooth",
           tag = "menu_key",
         ) {
           onDismiss()
@@ -544,14 +544,15 @@ fun RiyaChatDialog(close: () -> Unit) {
             userPrompt = q,
             screenSummary = snap?.summaryLines?.take(12)?.joinToString(", ").orEmpty(),
             accessibilityActive = accOk,
+            preferFastLowNet = Store.lowNetFastMode(ctx),
           )
           .collect { partial ->
             streamText = partial
             finalReply = partial
           }
         if (finalReply.isNotBlank()) {
-          RiyaState.addLog("Riya AI: $finalReply")
-          Store.remember(ctx, "Riya AI: $finalReply")
+          RiyaState.addLog("LXR--AI: $finalReply")
+          Store.remember(ctx, "LXR--AI: $finalReply")
           if (settings.voiceOutputEnabled) {
             RiyaVoiceManager.initialize(ctx)
             RiyaVoiceManager.speak(finalReply)
@@ -559,8 +560,8 @@ fun RiyaChatDialog(close: () -> Unit) {
         }
       } catch (e: Exception) {
         val fallback =
-          "বস, এই মুহূর্তে সরাসরি উত্তর আনা যায়নি (${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"})। আপনি চাইলে Menu > Gemini API Key দিয়ে ভয়েস লাইভ চালু করতে পারেন।"
-        RiyaState.addLog("Riya AI: $fallback")
+          "বস, এই মুহূর্তে সরাসরি উত্তর আনা যায়নি (${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"})। আপনি চাইলে Menu > Gemini API Key ও Voice দিয়ে ভয়েস লাইভ চালু করতে পারেন।"
+        RiyaState.addLog("LXR--AI: $fallback")
       } finally {
         streamText = ""
         generating = false
@@ -575,13 +576,13 @@ fun RiyaChatDialog(close: () -> Unit) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         PremiumIconBadge(
           Icons.Filled.CheckCircle,
-          "Riya AI Chat",
+          "LXR--AI Chat",
           listOf(CYBER_CYAN, CYBER_BLUE),
           sizeDp = 34,
         )
         Spacer(Modifier.width(10.dp))
         Column {
-          Text("Riya AI Chat", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+          Text("LXR--AI Chat", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
           Text(
             if (liveRunning) "Live Audio সংযুক্ত" else "Smart Text Mode প্রস্তুত",
             color = CYBER_CYAN,
@@ -599,7 +600,7 @@ fun RiyaChatDialog(close: () -> Unit) {
           if (streamText.isNotBlank()) {
             item {
               Text(
-                "Riya AI: $streamText",
+                "LXR--AI: $streamText",
                 Modifier.padding(vertical = 3.dp),
                 fontSize = 14.sp,
                 color = CYBER_CYAN,
@@ -618,7 +619,7 @@ fun RiyaChatDialog(close: () -> Unit) {
           value = input,
           onValueChange = { input = it },
           modifier = Modifier.fillMaxWidth().testTag("chat_input_field"),
-          placeholder = { Text("রিয়াকে কিছু লিখুন বস…", color = Color.Gray) },
+          placeholder = { Text("LXR--AI কে কিছু লিখুন বস…", color = Color.Gray) },
           colors =
             OutlinedTextFieldDefaults.colors(
               focusedTextColor = Color.White,

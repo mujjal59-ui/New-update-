@@ -15,10 +15,10 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
   @Test
-  fun `app name is Riya AI and disabled accessibility never reports active`() {
+  fun `app name is LXR--AI and disabled accessibility never reports active`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("Riya AI", appName)
+    assertEquals("LXR--AI", appName)
 
     val health = AccessibilityStatusMonitor.refreshNow(context, speakIfTurnedOff = false)
     assertFalse(health.isAccessibilityTrulyActive)
