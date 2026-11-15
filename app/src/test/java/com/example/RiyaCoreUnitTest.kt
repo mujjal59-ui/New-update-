@@ -549,4 +549,55 @@ class RiyaCoreUnitTest {
     assertFalse(com.example.service.LockVaultManager.shouldAutoRelockAfterTask(startedWithLockedScreen = false, autoUnlockEnabled = true))
     assertFalse(com.example.service.LockVaultManager.shouldAutoRelockAfterTask(startedWithLockedScreen = true, autoUnlockEnabled = false))
   }
+
+  @Test
+  fun personaAndRepository_knowScreenLockUnlockDoubleTapWakeAndFullAToZCapabilities() =
+    kotlinx.coroutines.runBlocking {
+      assertTrue(RiyaPersona.TEXT.contains("unlock_phone"))
+      assertTrue(RiyaPersona.TEXT.contains("lock_phone"))
+      assertTrue(RiyaPersona.TEXT.contains("unlock_locked_app"))
+      assertTrue(RiyaPersona.TEXT.contains("show_wake_orb"))
+      assertTrue(RiyaPersona.TEXT.contains("get_capabilities_a_to_z"))
+      assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("*"))
+      assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Priya", ignoreCase = true))
+      assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Riya", ignoreCase = true))
+      assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("ডাবল ট্যাপ"))
+      assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("১."))
+      assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("১২."))
+
+      val repo = com.example.ai.RiyaAiRepository()
+      var reply = ""
+      repo.streamAssistantReply("তুমি কি কি কাজ করতে পারো এ টু জেড বলো", "", true).collect { reply = it }
+      assertEquals(RiyaPersona.CAPABILITIES_A_TO_Z_BN, reply)
+    }
+
+  @Test
+  fun lxrFloatingOverlay_supportsLxrOrbWakeVariantsAndAiGreetingTrigger() {
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("LxR অরব"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("এল এক্স আর অরব আসো"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("অ্যালেক্সার"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("LxR অরব"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("এল এক্স আর অরব আসো"))
+    assertFalse(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("LxR অরব হোয়াটসঅ্যাপ ওপেন করো"))
+    assertTrue(
+      com.example.service.LxrFloatingOverlayManager.isAiWakeGreeting(
+        "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!"
+      )
+    )
+    assertFalse(
+      com.example.service.LxrFloatingOverlayManager.isAiWakeGreeting("আজকের আবহাওয়া খুব সুন্দর বস।")
+    )
+  }
+
+  @Test
+  fun lockVaultManager_detectsAppLockHintsAndSafelyWakesWithoutAccessibility() {
+    assertTrue(com.example.service.LockVaultManager.matchesAppLockHint("Verify privacy password"))
+    assertTrue(com.example.service.LockVaultManager.matchesAppLockHint("অ্যাপটি লক করা — পিন দিন"))
+    assertFalse(com.example.service.LockVaultManager.matchesAppLockHint("WhatsApp Home Chats"))
+
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    com.example.service.LockVaultManager.wakeScreenIfNeeded(ctx, null)
+    val res = com.example.service.LockVaultManager.unlockAppLockWithResult(ctx, null)
+    assertEquals(com.example.service.UnlockStatus.ACCESSIBILITY_OFF, res.status)
+  }
 }

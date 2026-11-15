@@ -47,6 +47,10 @@ object LockVaultManager {
       "com.itel.applock",
       "com.tecno.applock",
       "com.infinix.applock",
+      "com.huawei.systemmanager",
+      "com.vivo.appfilter",
+      "com.domobile.applockwatcher",
+      "com.sp.protector.free",
     )
 
   private val appLockTitleHints =
@@ -54,16 +58,27 @@ object LockVaultManager {
       "app lock",
       "applock",
       "অ্যাপ লক",
+      "অ্যাপটি লক করা",
       "draw pattern",
       "draw unlock pattern",
       "enter password",
       "enter pin",
+      "enter privacy password",
       "verify password",
+      "verify privacy",
+      "confirm pattern",
+      "use password",
       "পাসওয়ার্ড দিন",
       "প্যাটার্ন আঁকুন",
+      "প্যাটার্ন দিন",
       "পিন দিন",
       "privacy password",
     )
+
+  fun matchesAppLockHint(rawScreenText: String): Boolean {
+    val lower = rawScreenText.lowercase()
+    return appLockTitleHints.any { lower.contains(it) }
+  }
 
   fun detectDeviceBrand(): DeviceBrandProfile {
     val mfg = Build.MANUFACTURER.lowercase()
@@ -136,23 +151,47 @@ object LockVaultManager {
   }
 
   @Suppress("DEPRECATION")
-  fun wakeScreenIfNeeded(ctx: Context) {
+  fun wakeScreenIfNeeded(ctx: Context, acc: RiyaAccessibilityService? = RiyaAccessibilityService.instance) {
     try {
       val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
       if (pm.isInteractive) return
-      val wl =
-        pm.newWakeLock(
-          PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-            PowerManager.ACQUIRE_CAUSES_WAKEUP or
-            PowerManager.ON_AFTER_RELEASE,
-          "lxr_ai:wake_for_task",
-        )
-      wl.setReferenceCounted(false)
-      wl.acquire(4000L)
-      Thread.sleep(360)
-      try {
-        if (wl.isHeld) wl.release()
-      } catch (_: Throwable) {}
+
+      // 1. Physical Double-Tap gesture on closed/AOD screen to trigger OEM Double-Tap-to-Wake screen light
+      if (acc != null) {
+        try {
+          val dm = acc.resources.displayMetrics
+          val cx = dm.widthPixels * 0.5f
+          val cy = dm.heightPixels * 0.44f
+          acc.doubleTap(cx, cy, gapMs = 90L)
+          Thread.sleep(360L)
+        } catch (_: Throwable) {}
+      }
+
+      // 2. Acquire WakeLock with ACQUIRE_CAUSES_WAKEUP so screen illuminates cleanly on all Android devices
+      if (!pm.isInteractive) {
+        val wl =
+          pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+              PowerManager.ACQUIRE_CAUSES_WAKEUP or
+              PowerManager.ON_AFTER_RELEASE,
+            "lxr_ai:wake_for_task",
+          )
+        wl.setReferenceCounted(false)
+        wl.acquire(4500L)
+        Thread.sleep(420L)
+        try {
+          if (wl.isHeld) wl.release()
+        } catch (_: Throwable) {}
+      }
+
+      // 3. Second Double-Tap fallback if display still needs a wake pulse
+      if (!pm.isInteractive && acc != null) {
+        try {
+          val dm = acc.resources.displayMetrics
+          acc.doubleTap(dm.widthPixels * 0.5f, dm.heightPixels * 0.44f, gapMs = 95L)
+          Thread.sleep(420L)
+        } catch (_: Throwable) {}
+      }
     } catch (_: Throwable) {}
   }
 
@@ -183,7 +222,7 @@ object LockVaultManager {
       )
     }
 
-    wakeScreenIfNeeded(ctx)
+    wakeScreenIfNeeded(ctx, acc)
     val dm = acc.resources.displayMetrics
     val w = dm.widthPixels.toFloat().coerceAtLeast(720f)
     val h = dm.heightPixels.toFloat().coerceAtLeast(1400f)
@@ -206,7 +245,7 @@ object LockVaultManager {
 
     return if (unlocked || km?.isKeyguardLocked == false) {
       Thread.sleep(320L)
-      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন স্বয়ংক্রিয়ভাবে আনলক হয়েছে ✓")
+      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "ডাবল-ট্যাপে স্ক্রিনের আলো জ্বালিয়ে স্বয়ংক্রিয়ভাবে আনলক করা হয়েছে ✓")
     } else {
       UnlockAttemptResult(
         UnlockStatus.FAILED_TO_UNLOCK,
@@ -222,24 +261,46 @@ object LockVaultManager {
       val pkg = root.packageName?.toString()?.lowercase().orEmpty()
       if (pkg in appLockPackages) return true
     }
-    val textDump = collectCompactScreenText(roots).lowercase()
-    return appLockTitleHints.any { textDump.contains(it) }
+    val textDump = collectCompactScreenText(roots)
+    return matchesAppLockHint(textDump)
   }
 
-  fun unlockAppLockIfPresent(ctx: Context, acc: RiyaAccessibilityService?): Boolean {
-    if (acc == null || !Store.autoUnlockEnabled(ctx) || !Store.hasAnyAppLockSaved(ctx)) return false
-    if (!isAppLockScreenShowing(acc)) return false
+  fun unlockAppLockWithResult(ctx: Context, acc: RiyaAccessibilityService?): UnlockAttemptResult {
+    if (acc == null) {
+      return UnlockAttemptResult(UnlockStatus.ACCESSIBILITY_OFF, "অ্যাপ লক খুলতে Accessibility চালু থাকা প্রয়োজন বস।")
+    }
+    if (!isAppLockScreenShowing(acc)) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "এই মুহূর্তে কোনো অ্যাপ লক স্ক্রিন নেই।")
+    }
+    if (!Store.hasAnyAppLockSaved(ctx)) {
+      return UnlockAttemptResult(
+        UnlockStatus.NO_CREDENTIALS_SAVED,
+        "অ্যাপ লক স্ক্রিন দেখা যাচ্ছে বস, কিন্তু 'ফোন ও অ্যাপ লক' ভল্টে পাসওয়ার্ড বা প্যাটার্ন সেভ করা নেই।",
+      )
+    }
 
     val usePhoneCreds = Store.appLockSameAsPhone(ctx)
     val type = if (usePhoneCreds) Store.phoneLockType(ctx) else Store.appLockType(ctx)
     val pin = if (usePhoneCreds) Store.phonePin(ctx) else Store.appPin(ctx)
     val pattern = if (usePhoneCreds) Store.phonePattern(ctx) else Store.appPattern(ctx)
 
-    return when (type) {
-      ScreenLockType.PIN -> enterPinOnCurrentScreen(acc, pin) { !isAppLockScreenShowing(acc) }
-      ScreenLockType.PATTERN -> drawPatternOnCurrentScreen(acc, pattern) { !isAppLockScreenShowing(acc) }
-      ScreenLockType.NONE -> false
+    // Autonomous App Lock unlock without asking Boss for permission
+    val ok =
+      when (type) {
+        ScreenLockType.PIN -> enterPinOnCurrentScreen(acc, pin) { !isAppLockScreenShowing(acc) }
+        ScreenLockType.PATTERN -> drawPatternOnCurrentScreen(acc, pattern) { !isAppLockScreenShowing(acc) }
+        ScreenLockType.NONE -> false
+      }
+    return if (ok) {
+      Thread.sleep(280L)
+      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "অ্যাপ লক সরাসরি আনলক করা হয়েছে ✓")
+    } else {
+      UnlockAttemptResult(UnlockStatus.FAILED_TO_UNLOCK, "অ্যাপ লক স্ক্রিনে সেভ করা পাসওয়ার্ড/প্যাটার্ন মেলানো যায়নি।")
     }
+  }
+
+  fun unlockAppLockIfPresent(ctx: Context, acc: RiyaAccessibilityService?): Boolean {
+    return unlockAppLockWithResult(ctx, acc).status == UnlockStatus.UNLOCKED_SUCCESSFULLY
   }
 
   fun relockScreen(acc: RiyaAccessibilityService?): Boolean {

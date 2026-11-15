@@ -909,6 +909,13 @@ class RiyaAccessibilityService : AccessibilityService() {
     )
   }
 
+  fun doubleTap(x: Float, y: Float, gapMs: Long = 95L): Boolean {
+    val tap1 = tapAt(x, y)
+    Thread.sleep(gapMs.coerceIn(50L, 180L))
+    val tap2 = tapAt(x, y)
+    return tap1 && tap2
+  }
+
   fun tapFallback() {
     val m = resources.displayMetrics
     val path = Path().apply { moveTo(m.widthPixels * 0.5f, m.heightPixels * 0.38f) }

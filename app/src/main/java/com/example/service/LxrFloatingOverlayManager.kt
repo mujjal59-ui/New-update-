@@ -57,16 +57,18 @@ object LxrFloatingOverlayManager {
 
   private val wakePatterns =
     listOf(
-      Regex("\\bl[\\s.]*x[\\s.]*r\\b", RegexOption.IGNORE_CASE),
-      Regex("\\bel[\\s.]*x[\\s.]*r\\b", RegexOption.IGNORE_CASE),
-      Regex("\\b(?:alexander|alexar|lexar|elxr)\\b", RegexOption.IGNORE_CASE),
-      Regex("এল\\s*এক্স\\s*আর"),
-      Regex("এলএক্সআর"),
-      Regex("এলেক্সার"),
-      Regex("এলএক্সার"),
+      Regex("\\bl[\\s.]*x[\\s.]*r(?:\\s*(?:orb|অরব))?\\b", RegexOption.IGNORE_CASE),
+      Regex("\\bel[\\s.]*x[\\s.]*r(?:\\s*(?:orb|অরব))?\\b", RegexOption.IGNORE_CASE),
+      Regex("\\b(?:alexander|alexar|lexar|elxr|elaxar)(?:\\s*(?:orb|অরব))?\\b", RegexOption.IGNORE_CASE),
+      Regex("এল\\s*এক্স\\s*আর(?:\\s*অরব)?"),
+      Regex("এলএক্সআর(?:\\s*অরব)?"),
+      Regex("অ্যা?লেক্সা(?:র)?(?:\\s*অরব)?"),
+      Regex("এলেক্সার(?:\\s*অরব)?"),
+      Regex("লক্সার(?:\\s*অরব)?"),
+      Regex("(?:অরব\\s*(?:আসো|দেখাও|অন\\s*করো|চালু\\s*করো)|vashoman\\s*orb)", RegexOption.IGNORE_CASE),
     )
 
-  /** Returns true whenever Boss calls "LxR" / "L.x.R" in Bengali or English. */
+  /** Returns true whenever Boss calls "LxR", "L.x.R", or "LxR অরব" in Bengali or English. */
   fun containsWakeWord(transcript: String): Boolean {
     val clean = transcript.trim()
     if (clean.isEmpty()) return false
@@ -74,7 +76,18 @@ object LxrFloatingOverlayManager {
   }
 
   /**
-   * Returns true if the transcript is essentially just calling "LxR" to summon the assistant
+   * Returns true if Gemini's own output transcription confirms Boss just woke LxR up.
+   */
+  fun isAiWakeGreeting(reply: String): Boolean {
+    val clean = reply.trim()
+    if (clean.isEmpty()) return false
+    return clean.contains("কেনো ডেকেছেন") ||
+      clean.contains("কেন ডেকেছেন") ||
+      (clean.contains("বস") && clean.contains("কি করতে হবে"))
+  }
+
+  /**
+   * Returns true if the transcript is essentially just calling "LxR" / "LxR অরব" to summon the assistant
    * (without a separate follow-up command attached yet).
    */
   fun isPureWakeCall(transcript: String): Boolean {
@@ -85,8 +98,8 @@ object LxrFloatingOverlayManager {
     stripped =
       stripped
         .replace(Regex("[.,!?❤️♥।\\s]+"), " ")
-        .replace(Regex("\\b(?:hey|hi|hello|boss|ok|okay)\\b", RegexOption.IGNORE_CASE), " ")
-        .replace(Regex("(?:হেই|হ্যালো|ওই|শোন|শোনো|এই|বস)"), " ")
+        .replace(Regex("\\b(?:hey|hi|hello|boss|ok|okay|orb|come|show)\\b", RegexOption.IGNORE_CASE), " ")
+        .replace(Regex("(?:হেই|হ্যালো|ওই|শোন|শোনো|এই|বস|অরব|আসো|দেখাও|বলো)"), " ")
         .trim()
     return stripped.length <= 3
   }

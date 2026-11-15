@@ -120,14 +120,21 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var isTorchOn = false
   @Volatile private var greetedThisSession = false
   @Volatile private var micMuteUntilMs = 0L
+  @Volatile private var transcriptionCompatFallback = false
+  @Volatile private var summonedOrbToolOnly = false
 
   fun isReady(): Boolean = ready && !stopped
 
   private fun toolsJson() =
     (if (searchOn) """[{"googleSearch":{}},""" else "[") +
       """{"functionDeclarations":[
-      {"name":"open_app","description":"ফোনে অ্যাপ খুঁজতে বা ওপেন করতে এটি ব্যবহার করো। এটি বাধ্যতামূলকভাবে আগে হোম স্ক্রিনে গিয়ে অ্যাপ খুঁজে ওপেন করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
-      {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও (imo বললে imo, WhatsApp বললে WhatsApp)। এই টুল নিজেই অ্যাপ খোলে, নাম খোঁজে, মেসেজ লেখে এবং ইমোজি বাদ দিয়ে সঠিক সেন্ড বাটনে ক্লিক করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
+      {"name":"open_app","description":"ফোনে অ্যাপ খুঁজতে বা ওপেন করতে এটি ব্যবহার করো। এটি বাধ্যতামূলকভাবে আগে হোম স্ক্রিনে গিয়ে অ্যাপ খুঁজে ওপেন করে এবং অ্যাপ লক থাকলে অনুমতি ছাড়াই খুলে দেয়।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
+      {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও (imo বললে imo, WhatsApp বললে WhatsApp)। এই টুল নিজেই অ্যাপ খোলে, অ্যাপ লক থাকলে সরাসরি খোলে, নাম খোঁজে, মেসেজ লেখে এবং ইমোজি বাদ দিয়ে সঠিক সেন্ড বাটনে ক্লিক করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
+      {"name":"unlock_phone","description":"ডাবল ট্যাপ করে স্ক্রিনের আলো জ্বালিয়ে সংরক্ষিত পিন, পাসওয়ার্ড বা প্যাটার্ন দিয়ে ফোনের স্ক্রিন আনলক করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি পিন/পাসওয়ার্ড/প্যাটার্ন দিয়ে আনলক করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১২ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"find_and_open_item","description":"স্ক্রিনে বা অ্যাপে যেকোনো আইটেম নাম দিয়ে খুঁজে ট্যাপ করো, না পেলে Infinix Android 16 সার্চ বার দিয়ে সার্চ করো।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
       {"name":"current_screen","description":"বস এখন কোন অ্যাপ বা স্ক্রিনে আছেন তা জানো"},
       {"name":"read_screen","description":"এখন সম্পূর্ণ স্ক্রিনে কী কী লেখা, বাটন, সুইচ ও লেখার বক্স আছে তা পড়ো"},
@@ -435,6 +442,7 @@ class GeminiLive(private val ctx: Context) {
     totalSpeakerFramesWritten = 0L
     speakerHeadBaseFrames = 0L
     hadCommandOrToolThisTurn = false
+    summonedOrbToolOnly = false
     lastWakeOrMicPopupMs = System.currentTimeMillis()
     turnStartedLocked = false
     lockStateCapturedForTurn = false
@@ -559,6 +567,9 @@ class GeminiLive(private val ctx: Context) {
 
           override fun onClosed(w: WebSocket, code: Int, reason: String) {
             if (w !== ws) return
+            if (!ready && code == 1007 && !transcriptionCompatFallback) {
+              transcriptionCompatFallback = true
+            }
             if (
               !ready &&
                 code != 1000 &&
@@ -635,13 +646,19 @@ class GeminiLive(private val ctx: Context) {
       - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না; কোনো প্রশ্ন/নির্দেশের উত্তর একবারেই পরিষ্কারভাবে শেষ করবে।
       - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন মুখে উচ্চারণ করবে না।
 
-      [LxR WAKE PRESENCE & AUTO-HIDE]
-      - বস যেকোনো অ্যাপে থাকা অবস্থায় তোমাকে শুধু "LxR", "L.x.R" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!" (হার্ট চিহ্ন মুখে পড়বে না)।
-      - আর যদি বস ডাকার সাথেই সরাসরি কাজ বা প্রশ্ন বলেন, কোনো বাড়তি সময় নষ্ট না করে সরাসরি কাজটি শুরু করবে।
+      [LxR WAKE PRESENCE & FLOATING ORB OVER ANY APP]
+      - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!" (হার্ট চিহ্ন মুখে পড়বে না)।
+      - আর যদি বস ডাকার সাথেই সরাসরি কাজ বা প্রশ্ন বলেন, `show_wake_orb` চালু করে দেরি না করে সরাসরি কাজটি শুরু করবে।
 
-      [SMART PHONE LOCK & APP LOCK RULE — CRITICAL]
-      - ফোন আগে থেকেই লক অবস্থায় থাকা অবস্থায় বস কোনো কাজ দিলে LXR--AI নিজেই সংরক্ষিত লক খুলে কাজটি সম্পন্ন করবে এবং কাজ শেষ হলে ফোন আবার লক করে বসকে স্ক্রিন লকের বিষয়ে স্পষ্টভাবে জানাবে।
-      - কিন্তু ফোন যদি আগে থেকেই আনলক (খোলা) অবস্থায় থাকে, তবে বসের স্পষ্ট অনুমতি ছাড়া কখনোই স্ক্রিন লক করবে না!
+      [SMART PHONE LOCK, DOUBLE-TAP WAKE & ZERO-PERMISSION APP LOCK — CRITICAL]
+      - তুমি ফোনের স্ক্রিন লক (`lock_phone`) ও আনলক (`unlock_phone`) দুটোই করতে পারো! বস যদি জিজ্ঞেস করেন তুমি স্ক্রিন লক বা আনলক করতে পারো কিনা, পরিষ্কারভাবে বলবে: "হ্যাঁ বস, আমি ডাবল-ট্যাপে স্ক্রিনের আলো জ্বালিয়ে সংরক্ষিত পাসওয়ার্ড বা প্যাটার্ন দিয়ে ফোন আনলক করতে পারি, আর আপনি বললে স্ক্রিন লকও করতে পারি।"
+      - ফোনের স্ক্রিন বন্ধ বা লক অবস্থায় থাকলে `unlock_phone` নিজেই ডাবল-ট্যাপ (Double-Tap) করে স্ক্রিনের আলো জ্বালিয়ে সংরক্ষিত পিন, পাসওয়ার্ড বা প্যাটার্ন দিয়ে আনলক করবে।
+      - যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন থাকলে বসের আলাদা কোনো অনুমতি না নিয়েই সরাসরি `unlock_locked_app` বা অটো আনলক দিয়ে লক খুলে মূল কাজ শেষ করে তারপর বসকে জানাবে।
+      - ফোন আগে থেকেই লক অবস্থায় থাকলে কাজ শেষে ফোন আবার লক করে বসকে জানাবে। কিন্তু ফোন আগে থেকে আনলক অবস্থায় থাকলে বসের স্পষ্ট নির্দেশ ছাড়া কখনোই স্ক্রিন লক করবে না।
+
+      [A-TO-Z CAPABILITIES KNOWLEDGE — MANDATORY]
+      - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১২ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না):
+      ${RiyaPersona.CAPABILITIES_A_TO_Z_BN}
 
       [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
       - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
@@ -679,6 +696,11 @@ class GeminiLive(private val ctx: Context) {
         )
     genConfig.put("speechConfig", speechConfig)
     s.put("generationConfig", genConfig)
+
+    if (!transcriptionCompatFallback) {
+      s.put("inputAudioTranscription", JSONObject())
+      s.put("outputAudioTranscription", JSONObject())
+    }
 
     s.put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sys))))
     s.put("tools", JSONArray(toolsJson()))
@@ -739,7 +761,17 @@ class GeminiLive(private val ctx: Context) {
             main.post { sendScreenNow() }
           }
         }
-        sc.optJSONObject("outputTranscription")?.optString("text")?.let { pText.append(it) }
+        sc.optJSONObject("outputTranscription")?.optString("text")?.let {
+          pText.append(it)
+          val replySnippet = pText.toString().takeLast(80)
+          if (
+            LxrFloatingOverlayManager.isAiWakeGreeting(it) ||
+              LxrFloatingOverlayManager.isAiWakeGreeting(replySnippet)
+          ) {
+            lastWakeOrMicPopupMs = System.currentTimeMillis()
+            LxrFloatingOverlayManager.showForWakeOrMic(ctx)
+          }
+        }
         sc.optJSONObject("modelTurn")?.optJSONArray("parts")?.let { ps ->
           for (i in 0 until ps.length()) {
             ps.getJSONObject(i).optJSONObject("inlineData")?.let {
@@ -829,6 +861,7 @@ class GeminiLive(private val ctx: Context) {
 
           val waitingNextCommand =
             pureWake ||
+              summonedOrbToolOnly ||
               (u.isEmpty() && !hadCommandOrToolThisTurn && LxrFloatingOverlayManager.isShowing &&
                 (System.currentTimeMillis() - lastWakeOrMicPopupMs) < 12_000L)
           if (pureWake && p.isEmpty() && LxrFloatingOverlayManager.canTriggerWakeGreetingNow()) {
@@ -844,6 +877,7 @@ class GeminiLive(private val ctx: Context) {
           }
 
           hadCommandOrToolThisTurn = false
+          summonedOrbToolOnly = false
           lockStateCapturedForTurn = false
           turnStartedLocked = false
           uText.setLength(0)
@@ -853,6 +887,8 @@ class GeminiLive(private val ctx: Context) {
       }
       j.optJSONObject("toolCall")?.optJSONArray("functionCalls")?.let { fc ->
         hadCommandOrToolThisTurn = true
+        summonedOrbToolOnly =
+          fc.length() == 1 && fc.getJSONObject(0).optString("name") == "show_wake_orb"
         LxrFloatingOverlayManager.cancelPendingHide()
         toolExec.execute {
           try {
@@ -912,7 +948,16 @@ class GeminiLive(private val ctx: Context) {
       turnStartedLocked = LockVaultManager.isDeviceLocked(ctx)
     }
 
-    val skipUnlockTools = setOf("current_time", "remember", "web_search", "get_battery_level")
+    val skipUnlockTools =
+      setOf(
+        "current_time",
+        "remember",
+        "web_search",
+        "get_battery_level",
+        "get_capabilities_a_to_z",
+        "show_wake_orb",
+        "lock_phone",
+      )
     if (name !in skipUnlockTools && LockVaultManager.isDeviceLocked(ctx)) {
       turnStartedLocked = true
       val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
@@ -924,9 +969,19 @@ class GeminiLive(private val ctx: Context) {
       }
     }
 
+    // Autonomous App Lock detection BEFORE running non-lock tools (no Boss permission prompt)
+    if (acc != null && name != "lock_phone" && name != "unlock_phone" && LockVaultManager.isAppLockScreenShowing(acc)) {
+      LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+      Thread.sleep(280L)
+    }
+
     val watch = Store.screenWatch(ctx) && acc != null && Keep.accessibilityOn(ctx)
     if (!watch || name !in actionTools) {
       val r = runToolRaw(name, a)
+      if (acc != null && (name == "open_app" || name == "send_message") && LockVaultManager.isAppLockScreenShowing(acc)) {
+        LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+        Thread.sleep(300L)
+      }
       val base = if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
       return if (turnStartedLocked && name !in skipUnlockTools) {
         "$base\n[নিরাপত্তা নোট]: ফোন আগে থেকেই লক ছিল; কাজ শেষে LXR--AI আবার লক করে বসকে জানাবে।"
@@ -944,7 +999,7 @@ class GeminiLive(private val ctx: Context) {
     }
     val r = runToolRaw(name, a)
     Thread.sleep(if (name == "open_app" || name == "play_youtube") 450L else 280L)
-    if ((name == "open_app" || name == "send_message") && LockVaultManager.isAppLockScreenShowing(acc)) {
+    if ((name == "open_app" || name == "send_message" || name == "play_youtube") && LockVaultManager.isAppLockScreenShowing(acc)) {
       LockVaultManager.unlockAppLockIfPresent(ctx, acc)
       Thread.sleep(360L)
     }
@@ -968,6 +1023,43 @@ class GeminiLive(private val ctx: Context) {
       when (name) {
         "open_app" -> openApp(a.optString("app_name"))
         "send_message" -> messageSend(a)
+        "unlock_phone" -> {
+          val devRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
+          if (
+            (devRes.status == UnlockStatus.ALREADY_UNLOCKED ||
+              devRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) &&
+              LockVaultManager.isAppLockScreenShowing(acc)
+          ) {
+            val appRes = LockVaultManager.unlockAppLockWithResult(ctx, acc)
+            "${devRes.messageBn} এবং ${appRes.messageBn}"
+          } else {
+            devRes.messageBn
+          }
+        }
+        "lock_phone" -> {
+          if (acc == null) {
+            noAcc
+          } else if (LockVaultManager.relockScreen(acc)) {
+            turnStartedLocked = false
+            lockStateCapturedForTurn = false
+            "হয়েছে, বস! কাজ শেষ — ফোনের স্ক্রিন লক করে দিয়েছি।"
+          } else {
+            "স্ক্রিন লক করা যায়নি বস, Accessibility পারমিশন যাচাই করুন।"
+          }
+        }
+        "unlock_locked_app" -> LockVaultManager.unlockAppLockWithResult(ctx, acc).messageBn
+        "show_wake_orb" -> {
+          lastWakeOrMicPopupMs = System.currentTimeMillis()
+          val shown = LxrFloatingOverlayManager.showForWakeOrMic(ctx)
+          if (shown) {
+            "হয়েছে, বস! ৫০ শতাংশ স্বচ্ছ ঘূর্ণায়মান LxR অরব এখন স্ক্রিনের ওপর ভেসে উঠেছে।"
+          } else if (!Store.floatingOrbEnabled(ctx)) {
+            "LxR ভাসমান অরব সেটিংস থেকে বন্ধ করা আছে বস।"
+          } else {
+            "অন্য অ্যাপের ওপর LxR অরব দেখাতে 'Display over other apps' অনুমতি চালু করুন বস।"
+          }
+        }
+        "get_capabilities_a_to_z" -> RiyaPersona.CAPABILITIES_A_TO_Z_BN
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
         "current_screen" ->
           if (RiyaState.cameraOn) {
@@ -1219,9 +1311,30 @@ class GeminiLive(private val ctx: Context) {
     contact: String,
     msg: String,
   ): String {
+    val watching = AtomicBoolean(true)
+    val watcher =
+      Thread {
+        while (watching.get() && !stopped) {
+          try {
+            if (LockVaultManager.isAppLockScreenShowing(acc)) {
+              LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+            }
+            Thread.sleep(240L)
+          } catch (_: InterruptedException) {
+            break
+          } catch (_: Throwable) {}
+        }
+      }.apply {
+        isDaemon = true
+        start()
+      }
     return try {
       MessageAgent.run(ctx, acc, app, contact, msg)
     } finally {
+      watching.set(false)
+      try {
+        watcher.interrupt()
+      } catch (_: Throwable) {}
       bringRiyaBack()
     }
   }
@@ -1788,6 +1901,10 @@ class GeminiLive(private val ctx: Context) {
       )
     }
     Thread.sleep(900)
+    if (LockVaultManager.isAppLockScreenShowing(acc)) {
+      LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+      Thread.sleep(450)
+    }
     repeat(5) {
       if (acc.clickFirstVideo()) {
         RiyaState.markTaskCompleted(
