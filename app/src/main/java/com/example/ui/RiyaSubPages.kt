@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -533,7 +534,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     val action = {
       recordingStep = stepNumber
       testingMatch = false
-      vmFeedback = "ধাপ $stepNumber শুনছি... স্ক্রিনের বাক্যটি স্পষ্টভাবে বলুন"
+      vmFeedback = "ধাপ $stepNumber শুনছি ও কথা যাচাই করছি — সঠিক বাক্যটি বলুন..."
       vmFeedbackPositive = true
       VoiceMatchManager.enrollStep(
         ctx = ctx,
@@ -883,7 +884,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         ) {
           Text(
             if (testingMatch) "🎙️ কণ্ঠ মিলিয়ে দেখা হচ্ছে..."
-            else "🎙️ ধাপ $recordingStep রেকর্ড হচ্ছে — স্পষ্টভাবে বলুন...",
+            else "🎙️ ধাপ $recordingStep শুনছি ও কথা যাচাই করছি — সঠিক বাক্যটি বলুন...",
             color = CYBER_CYAN,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp,
@@ -980,26 +981,59 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         }
       }
 
-      if (vmProfile.isComplete) {
-        Text("সনাক্তকরণ সতর্কতা (Sensitivity):", color = Color(0xFFD5DEF5), fontSize = 11.5.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          VoiceMatchSensitivity.entries.forEach { preset ->
-            FilterChip(
-              selected = vmSensitivity == preset,
-              onClick = {
-                vmSensitivity = preset
-                Store.setVoiceMatchSensitivity(ctx, preset)
-              },
-              label = { Text(preset.labelBn, fontSize = 11.sp) },
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = CYBER_PURPLE,
-                  selectedLabelColor = Color.White,
-                  labelColor = Color(0xFFB8C4E0),
-                ),
-            )
-          }
+      Text("সনাক্তকরণ সতর্কতা (Sensitivity / বন্ধ):", color = Color(0xFFD5DEF5), fontSize = 11.5.sp)
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        FilterChip(
+          selected = !vmEnabled,
+          onClick = {
+            vmEnabled = false
+            Store.setVoiceMatchEnabled(ctx, false)
+            vmFeedback = "ভয়েস ম্যাচ বন্ধ করা হয়েছে — অ্যাপের সব কাজ ও কমান্ড ১০০% স্বাভাবিকভাবে চলবে।"
+            vmFeedbackPositive = true
+          },
+          modifier = Modifier.testTag("voice_match_mode_off"),
+          label = { Text("বন্ধ (কোনটাই না)", fontSize = 11.sp) },
+          colors =
+            FilterChipDefaults.filterChipColors(
+              selectedContainerColor = CYBER_AMBER,
+              selectedLabelColor = Color.Black,
+              labelColor = Color(0xFFB8C4E0),
+            ),
+        )
+        VoiceMatchSensitivity.entries.forEach { preset ->
+          FilterChip(
+            selected = vmEnabled && vmSensitivity == preset,
+            onClick = {
+              vmSensitivity = preset
+              vmEnabled = true
+              Store.setVoiceMatchSensitivity(ctx, preset)
+              Store.setVoiceMatchEnabled(ctx, true)
+            },
+            modifier = Modifier.testTag("voice_match_mode_${preset.name.lowercase()}"),
+            label = { Text(preset.labelBn, fontSize = 11.sp) },
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = CYBER_PURPLE,
+                selectedLabelColor = Color.White,
+                labelColor = Color(0xFFB8C4E0),
+              ),
+          )
         }
+      }
+
+      Text(
+        text =
+          if (!vmEnabled)
+            "ভয়েস ম্যাচ বন্ধ — অ্যাপের সব কাজ ও কমান্ড ১০০% স্বাভাবিকভাবে চলবে এবং ফোনের নিজস্ব স্পিকারের শব্দ কখনোই শুনবে না।"
+          else vmSensitivity.descriptionBn,
+        color = if (!vmEnabled) CYBER_AMBER else CYBER_CYAN,
+        fontSize = 11.5.sp,
+      )
+
+      if (vmProfile.isComplete) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
           OutlinedButton(
             onClick = {
@@ -1339,6 +1373,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var tick by remember { mutableIntStateOf(0) }
   var torchOn by remember { mutableStateOf(false) }
   var note by remember { mutableStateOf("") }
+  var floatingOrbOn by remember { mutableStateOf(Store.floatingOrbEnabled(ctx)) }
   val health by AccessibilityStatusMonitor.healthState.collectAsState()
   val audioDevice by RiyaState.connectedAudioDevice.collectAsState()
   val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
@@ -1442,22 +1477,28 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     }
     StateTile(Modifier.fillMaxWidth(), "Battery", "battery", true, if (pct >= 0) "$pct%" else "N/A") {}
 
-    // LxR 50%-Opacity Rotating Planet Wake Orb quick test / control card
+    // LxR 50%-Opacity Rotating Planet Wake Orb ON/OFF + quick test card
     Row(
       modifier =
         Modifier
           .fillMaxWidth()
           .testTag("lxr_wake_orb_card")
           .background(CYBER_CARD, RoundedCornerShape(18.dp))
-          .border(1.dp, CYBER_AMBER.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+          .border(
+            1.dp,
+            if (floatingOrbOn) CYBER_AMBER.copy(alpha = 0.55f) else Color(0xFF3A4260),
+            RoundedCornerShape(18.dp),
+          )
           .clickable {
-            if (com.example.service.LxrFloatingOverlayManager.isShowing) {
+            if (!floatingOrbOn) {
+              note = "আগে ডানের সুইচ চালু করে ভাসমান অরব ON করুন।"
+            } else if (com.example.service.LxrFloatingOverlayManager.isShowing) {
               com.example.service.LxrFloatingOverlayManager.hide(ctx)
-              note = "LxR ভাসমান অরব বন্ধ — আবার 'LxR' বললেই সব স্ক্রিনে দেখাবে"
+              note = "LxR ভাসমান অরব লুকানো হয়েছে — 'LxR' বললেই আবার ভেসে উঠবে"
             } else {
               val shown = com.example.service.LxrFloatingOverlayManager.show(ctx, openPermissionIfMissing = true)
               note =
-                if (shown) "LxR ৫০% স্বচ্ছ ঘূর্ণায়মান অরব চালু ✓"
+                if (shown) "LxR ৫০% স্বচ্ছ গোলাকার অরব প্রিভিউ চালু ✓"
                 else "অন্য অ্যাপের ওপর দেখাতে 'Display over apps' অনুমতি দিন"
             }
           }
@@ -1469,8 +1510,51 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       Column(Modifier.weight(1f)) {
         Text("LxR ভাসমান ঘূর্ণায়মান অরব (৫০% স্বচ্ছ)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Text(
-          "'LxR' বললেই যেকোনো অ্যাপের ওপর ঘুরবে — ট্যাপ করে টেস্ট করুন",
-          color = CYBER_AMBER,
+          if (floatingOrbOn) "'LxR' ডাকলে বা মাইকে ক্লিক করলে ভাসবে, কাজ শেষে চলে যাবে"
+          else "ভাসমান অরব বন্ধ আছে (ব্যাকগ্রাউন্ড সচল থাকবে)",
+          color = if (floatingOrbOn) CYBER_AMBER else Color(0xFFAAB4D0),
+          fontSize = 11.5.sp,
+        )
+      }
+      Spacer(Modifier.width(8.dp))
+      Switch(
+        checked = floatingOrbOn,
+        onCheckedChange = { enabled ->
+          floatingOrbOn = enabled
+          Store.setFloatingOrbEnabled(ctx, enabled)
+          if (!enabled) {
+            com.example.service.LxrFloatingOverlayManager.hide(ctx)
+            note = "ভাসমান অরব বন্ধ (OFF) করা হয়েছে ✓"
+          } else {
+            note = "ভাসমান অরব চালু (ON) করা হয়েছে — 'LxR' ডাকলেই দেখাবে ✓"
+          }
+        },
+        modifier = Modifier.testTag("floating_orb_toggle"),
+        colors = SwitchDefaults.colors(checkedTrackColor = CYBER_AMBER, checkedThumbColor = Color.White),
+      )
+    }
+
+    // Smartphone Screen Lock & App Lock Vault Card
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("settings_lock_vault_card")
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_PURPLE.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+          .clickable { onNavigate("lockvault") }
+          .padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      PremiumIconBadge(Icons.Filled.Lock, "Lock Vault", listOf(CYBER_RED, CYBER_PURPLE), sizeDp = 40)
+      Spacer(Modifier.width(12.dp))
+      Column(Modifier.weight(1f)) {
+        Text("ফোন ও অ্যাপ লক (PIN / Pattern ভল্ট)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(
+          if (Store.hasAnyPhoneLockSaved(ctx) || Store.hasAnyAppLockSaved(ctx))
+            "লক সংরক্ষিত ✓ — লক থাকা অবস্থায় কাজ করে পুনরায় লক করবে"
+          else "৮ ডিজিট PIN বা প্যাটার্ন লক সেভ করতে ট্যাপ করুন",
+          color = CYBER_CYAN,
           fontSize = 11.5.sp,
         )
       }

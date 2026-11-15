@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkChatRead
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
@@ -175,6 +176,11 @@ fun PremiumThreeDotButton(
             "playbook",
             "Infinix সার্চ ও imo সেন্ড টেস্ট",
             Pair(Icons.Filled.PhoneAndroid, listOf(CYBER_PURPLE, CYBER_BLUE)),
+          ),
+          Triple(
+            "lockvault",
+            "ফোন ও অ্যাপ লক (PIN / Pattern)",
+            Pair(Icons.Filled.Lock, listOf(CYBER_RED, CYBER_AMBER)),
           ),
           Triple(
             "settings",
@@ -370,6 +376,17 @@ fun RiyaThreeLineMenuDialog(
         ) {
           onDismiss()
           onNavigate("mem")
+        }
+
+        MenuSectionRow(
+          icon = Icons.Filled.Lock,
+          colors = listOf(CYBER_RED, CYBER_AMBER),
+          title = "ফোন ও অ্যাপ লক (PIN / Pattern)",
+          subtitle = "৮ ডিজিট PIN / প্যাটার্ন সেভ ও অটো আনলক",
+          tag = "menu_lockvault",
+        ) {
+          onDismiss()
+          onNavigate("lockvault")
         }
 
         MenuSectionRow(

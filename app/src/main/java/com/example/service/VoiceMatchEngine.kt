@@ -24,6 +24,8 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -237,7 +239,8 @@ object VoiceMatchEngine {
     }
     if (activeFrames < 4) return null
     val meanActiveRms = (activeRmsSum / activeFrames).toFloat().coerceAtLeast(14f)
-    val normGain = (2200f / meanActiveRms).coerceIn(1f, 16f)
+    // Scale both ultra-soft whisper (~50 RMS) AND loud shouting (~18000 RMS) cleanly to a neutral 2200 RMS
+    val normGain = (2200f / meanActiveRms).coerceIn(0.35f, 20f)
 
     val accumMfcc = FloatArray(MFCC_COUNT)
     val re = FloatArray(FFT_SIZE)
@@ -450,6 +453,23 @@ object VoiceMatchEngine {
     return (dot / denom).toFloat().coerceIn(-1f, 1f)
   }
 
+  fun cosineSimilarityHighOrder(a: FloatArray, b: FloatArray): Float {
+    val n = minOf(a.size, b.size)
+    if (n <= 2) return cosineSimilarity(a, b)
+    // Skip c1 spectral-tilt coefficient (index 0) so whisper vs loud speech clusters tightly by vocal-tract formants
+    var dot = 0.0
+    var na = 0.0
+    var nb = 0.0
+    for (i in 1 until n) {
+      dot += a[i] * b[i]
+      na += a[i] * a[i]
+      nb += b[i] * b[i]
+    }
+    val denom = sqrt(na * nb)
+    if (denom <= 1e-8) return 0f
+    return (dot / denom).toFloat().coerceIn(-1f, 1f)
+  }
+
   fun buildProfile(steps: Map<Int, SpeakerSignature>): VoiceMatchProfile {
     if (steps.isEmpty()) {
       return VoiceMatchProfile(
@@ -507,48 +527,300 @@ object VoiceMatchEngine {
     }
 
     val cosCentroid = cosineSimilarity(candidate.mfcc, profile.centroidMfcc)
-    val maxStepCos =
-      profile.stepSignatures.values.maxOfOrNull { cosineSimilarity(candidate.mfcc, it.mfcc) }
-        ?: cosCentroid
-    val mfccSim = ((0.60f * cosCentroid) + (0.40f * maxStepCos)).coerceIn(-1f, 1f)
+    val stepSims = profile.stepSignatures.values.map { cosineSimilarity(candidate.mfcc, it.mfcc) }
+    val maxStepCos = stepSims.maxOrNull() ?: cosCentroid
+    val minStepCos = stepSims.minOrNull() ?: cosCentroid
+    val simFull = ((0.60f * cosCentroid) + (0.40f * maxStepCos)).coerceIn(-1f, 1f)
+
+    val cosHighCentroid = cosineSimilarityHighOrder(candidate.mfcc, profile.centroidMfcc)
+    val maxHighStep =
+      profile.stepSignatures.values.maxOfOrNull { cosineSimilarityHighOrder(candidate.mfcc, it.mfcc) }
+        ?: cosHighCentroid
+    val simTiltInvariant = ((0.55f * cosHighCentroid) + (0.45f * maxHighStep)).coerceIn(-1f, 1f)
+
+    // Each VoiceMatchSensitivity has genuinely distinct biometric rules & weights
+    val mfccSim =
+      when (sensitivity) {
+        VoiceMatchSensitivity.EASY ->
+          (0.32f * simFull + 0.68f * simTiltInvariant).coerceIn(-1f, 1f)
+        VoiceMatchSensitivity.BALANCED ->
+          (0.50f * simFull + 0.50f * simTiltInvariant).coerceIn(-1f, 1f)
+        VoiceMatchSensitivity.STRICT ->
+          (0.60f * simFull + 0.25f * simTiltInvariant + 0.15f * minStepCos).coerceIn(-1f, 1f)
+      }
     val mfccUnit = mfccSim.coerceIn(0f, 1f)
+    val timbreWeight = (1f - sensitivity.pitchWeight - sensitivity.centroidWeight).coerceAtLeast(0.5f)
 
     val pitchScore: Float
     val rawScore: Float
     if (candidate.pitchHz > 0f && profile.meanPitchHz > 0f) {
       val directDiff = abs(candidate.pitchHz - profile.meanPitchHz)
-      // Only forgive autocorrelation octave jumps when the vocal-tract MFCC timbre already closely matches Boss
+      // Allow wider F0 variance only when vocal-tract timbre strongly matches Boss (loud shout / soft voice)
+      val allowOctaveOrShout =
+        when (sensitivity) {
+          VoiceMatchSensitivity.EASY -> simTiltInvariant >= 0.62f
+          VoiceMatchSensitivity.BALANCED -> simTiltInvariant >= 0.72f
+          VoiceMatchSensitivity.STRICT -> simTiltInvariant >= 0.84f && simFull >= 0.76f
+        }
       val bestDiff =
-        if (mfccUnit >= 0.72f) {
+        if (allowOctaveOrShout) {
           minOf(
             directDiff,
-            abs(candidate.pitchHz * 2f - profile.meanPitchHz) * 1.35f,
-            abs(candidate.pitchHz * 0.5f - profile.meanPitchHz) * 1.35f,
+            abs(candidate.pitchHz * 2f - profile.meanPitchHz) * 1.30f,
+            abs(candidate.pitchHz * 0.5f - profile.meanPitchHz) * 1.30f,
+            directDiff * 0.78f,
           )
         } else {
           directDiff
         }
       val relDiff = bestDiff / maxOf(profile.meanPitchHz, 100f)
-      pitchScore = exp(-(relDiff * relDiff) / (2f * 0.28f * 0.28f)).coerceIn(0f, 1f)
+      val sigma = sensitivity.pitchSigma
+      pitchScore = exp(-(relDiff * relDiff) / (2f * sigma * sigma)).coerceIn(0f, 1f)
       val centroidDiff = abs(candidate.spectralCentroid - profile.meanCentroid)
       val centroidScore = (1f - centroidDiff * 1.25f).coerceIn(0f, 1f)
-      rawScore = (0.80f * mfccUnit + 0.12f * pitchScore + 0.08f * centroidScore).coerceIn(0f, 1f)
+      rawScore =
+        (timbreWeight * mfccUnit +
+            sensitivity.pitchWeight * pitchScore +
+            sensitivity.centroidWeight * centroidScore)
+          .coerceIn(0f, 1f)
     } else {
       pitchScore = mfccUnit
       rawScore = mfccUnit
     }
 
-    // Never allow a stranger with unrelated vocal-tract timbre to pass on pitch/centroid alone
-    val finalScore = if (mfccSim < 0.45f) minOf(rawScore, 0.42f) else rawScore
+    val strictStepOk =
+      if (sensitivity == VoiceMatchSensitivity.STRICT) minStepCos >= sensitivity.minStepFloor else true
+    val mfccGateOk = mfccSim >= sensitivity.mfccFloor
+
+    val finalScore =
+      when {
+        !mfccGateOk -> minOf(rawScore, sensitivity.threshold - 0.08f)
+        !strictStepOk -> minOf(rawScore, sensitivity.threshold - 0.05f)
+        else -> rawScore
+      }.coerceIn(0f, 1f)
 
     val pct = (finalScore * 100f).toInt().coerceIn(0, 100)
     return VoiceMatchResult(
-      matched = finalScore >= sensitivity.threshold,
+      matched = finalScore >= sensitivity.threshold && mfccGateOk && strictStepOk,
       score = finalScore,
       confidencePercent = pct,
       mfccSimilarity = mfccSim,
       pitchScore = pitchScore,
       voicedFrames = candidate.voicedFrames,
+    )
+  }
+}
+
+data class PhraseVerifyResult(
+  val matched: Boolean,
+  val transcript: String,
+  val reasonBn: String,
+)
+
+/**
+ * Verifies that Enrollment Steps 1, 2, 3 actually speak the exact written Bengali + LxR phrases
+ * rather than random/unrelated words.
+ */
+object VoiceMatchPhraseVerifier {
+  private val httpClient by lazy {
+    okhttp3.OkHttpClient.Builder()
+      .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+      .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+      .writeTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+      .build()
+  }
+
+  fun normalizeTranscript(raw: String): String {
+    var s = raw.lowercase().trim()
+    val lxrPatterns =
+      listOf(
+        Regex("\\bl[\\s.,_-]*x[\\s.,_-]*r\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bel[\\s.,_-]*x[\\s.,_-]*r\\b", RegexOption.IGNORE_CASE),
+        Regex("\\b(?:alexar|alexander|lexar|elxr)\\b", RegexOption.IGNORE_CASE),
+        Regex("এল[\\s.,_-]*এক্স[\\s.,_-]*আর"),
+        Regex("এলএক্সআর|এলেক্সার|অ্যালেক্সার|এলএক্সার"),
+      )
+    lxrPatterns.forEach { s = s.replace(it, " lxr ") }
+    s =
+      s.replace("পারসনাল", "পার্সোনাল")
+        .replace("পারসোনাল", "পার্সোনাল")
+        .replace("personal", "পার্সোনাল")
+        .replace("এসিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("এসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("অ্যাসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("এ্যাসিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("assistant", "অ্যাসিস্ট্যান্ট")
+        .replace("boss", "বস")
+        .replace(Regex("[.,!?।\"'`~:;()\\-_/]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return s
+  }
+
+  fun matchesStepPhrase(step: Int, rawTranscript: String): Boolean {
+    val norm = normalizeTranscript(rawTranscript)
+    if (norm.isBlank()) return false
+    val tokens = norm.split(' ').filter { it.isNotBlank() }
+    return when (step) {
+      1 -> {
+        // Expected: "তোমার নাম LxR"
+        val hasTomar = tokens.any { it.contains("তোমার") || it == "tomar" }
+        val hasNam = tokens.any { it.contains("নাম") || it == "nam" || it == "name" }
+        val hasLxr = tokens.any { it == "lxr" }
+        hasTomar && hasNam && hasLxr && tokens.size <= 7
+      }
+      2 -> {
+        // Expected: "তুমি আমার পার্সোনাল অ্যাসিস্ট্যান্ট LxR"
+        val hasTumi = tokens.any { it.contains("তুমি") || it == "tumi" }
+        val hasAmar = tokens.any { it.contains("আমার") || it == "amar" }
+        val hasPersonal = tokens.any { it.contains("পার্সোনাল") }
+        val hasAssistant = tokens.any { it.contains("অ্যাসিস্ট্যান্ট") }
+        val hasLxr = tokens.any { it == "lxr" }
+        val coreHits = listOf(hasTumi, hasAmar, hasPersonal, hasAssistant).count { it }
+        hasLxr && coreHits >= 3 && (hasPersonal || hasAssistant) && tokens.size <= 9
+      }
+      3 -> {
+        // Expected: "LxR এখন থেকে আমি তোমার বস"
+        val hasLxr = tokens.any { it == "lxr" }
+        val hasEkhon = tokens.any { it.contains("এখন") || it == "ekhon" }
+        val hasTheke = tokens.any { it.contains("থেকে") || it == "theke" }
+        val hasAmi = tokens.any { it.contains("আমি") || it == "ami" }
+        val hasTomar = tokens.any { it.contains("তোমার") || it == "tomar" }
+        val hasBoss = tokens.any { it.contains("বস") }
+        val midHits = listOf(hasEkhon, hasTheke, hasAmi, hasTomar).count { it }
+        hasLxr && hasBoss && midHits >= 2 && tokens.size <= 10
+      }
+      else -> false
+    }
+  }
+
+  fun buildWavBytes(pcm16Mono16k: ByteArray): ByteArray {
+    val dataLen = pcm16Mono16k.size
+    val totalDataLen = dataLen + 36
+    val sampleRate = VoiceMatchEngine.SAMPLE_RATE
+    val channels = 1
+    val byteRate = sampleRate * channels * 2
+    val out = ByteArray(44 + dataLen)
+    // RIFF header
+    out[0] = 'R'.code.toByte(); out[1] = 'I'.code.toByte(); out[2] = 'F'.code.toByte(); out[3] = 'F'.code.toByte()
+    writeIntLE(out, 4, totalDataLen)
+    out[8] = 'W'.code.toByte(); out[9] = 'A'.code.toByte(); out[10] = 'V'.code.toByte(); out[11] = 'E'.code.toByte()
+    out[12] = 'f'.code.toByte(); out[13] = 'm'.code.toByte(); out[14] = 't'.code.toByte(); out[15] = ' '.code.toByte()
+    writeIntLE(out, 16, 16) // Subchunk1Size for PCM
+    out[20] = 1; out[21] = 0 // PCM format
+    out[22] = channels.toByte(); out[23] = 0
+    writeIntLE(out, 24, sampleRate)
+    writeIntLE(out, 28, byteRate)
+    out[32] = 2; out[33] = 0 // block align
+    out[34] = 16; out[35] = 0 // bits per sample
+    out[36] = 'd'.code.toByte(); out[37] = 'a'.code.toByte(); out[38] = 't'.code.toByte(); out[39] = 'a'.code.toByte()
+    writeIntLE(out, 40, dataLen)
+    System.arraycopy(pcm16Mono16k, 0, out, 44, dataLen)
+    return out
+  }
+
+  private fun writeIntLE(buf: ByteArray, offset: Int, value: Int) {
+    buf[offset] = (value and 0xFF).toByte()
+    buf[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+    buf[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+    buf[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+  }
+
+  fun verifyEnrolledAudioPhrase(ctx: Context, step: Int, pcmBytes: ByteArray): PhraseVerifyResult {
+    val expected = Store.VOICE_MATCH_PHRASES.getOrNull(step - 1) ?: return PhraseVerifyResult(false, "", "ভুল ধাপ")
+    val apiKey = Store.apiKey(ctx)
+    if (apiKey.isBlank()) {
+      return PhraseVerifyResult(
+        matched = false,
+        transcript = "",
+        reasonBn = "ভয়েস ম্যাচ ধাপের কথা যাচাই করতে আগে Menu > Gemini API Key দিন।",
+      )
+    }
+    val wav = buildWavBytes(pcmBytes)
+    val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
+    val prompt =
+      """
+      Listen strictly to the attached Bengali/English audio clip.
+      Transcribe EXACTLY what the speaker actually said, verbatim, without autocorrecting wrong words into the target sentence.
+      If they said something different from "$expected", transcribe what they actually said.
+      If unclear or no speech, return an empty string "".
+      Return ONLY JSON: {"transcript":"..."}
+      """.trimIndent()
+
+    val payload =
+      JSONObject()
+        .put(
+          "contents",
+          JSONArray()
+            .put(
+              JSONObject()
+                .put(
+                  "parts",
+                  JSONArray()
+                    .put(JSONObject().put("text", prompt))
+                    .put(
+                      JSONObject()
+                        .put(
+                          "inlineData",
+                          JSONObject()
+                            .put("mimeType", "audio/wav")
+                            .put("data", b64),
+                        )
+                    ),
+                )
+            )
+        )
+        .put(
+          "generationConfig",
+          JSONObject().put("responseMimeType", "application/json").put("temperature", 0.0),
+        )
+
+    for (model in listOf("gemini-2.5-flash", "gemini-flash-latest")) {
+      try {
+        val req =
+          okhttp3.Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        httpClient.newCall(req).execute().use { resp ->
+          val body = resp.body?.string().orEmpty()
+          if (!resp.isSuccessful || body.isBlank()) return@use
+          val textOut =
+            JSONObject(body)
+              .optJSONArray("candidates")
+              ?.optJSONObject(0)
+              ?.optJSONObject("content")
+              ?.optJSONArray("parts")
+              ?.optJSONObject(0)
+              ?.optString("text")
+              ?.trim()
+              .orEmpty()
+          if (textOut.isBlank()) return@use
+          val parsed =
+            try {
+              JSONObject(textOut).optString("transcript", textOut)
+            } catch (_: Throwable) {
+              textOut
+            }.trim()
+          val ok = matchesStepPhrase(step, parsed)
+          return if (ok) {
+            PhraseVerifyResult(true, parsed, "কথা সঠিকভাবে মিলেছে ✓")
+          } else {
+            PhraseVerifyResult(
+              false,
+              parsed,
+              "✗ কথা মেলেনি বস! আপনি বলেছেন: \"${parsed.ifBlank { "অস্পষ্ট" }}\" — ঠিক এই বাক্যটি বলুন: \"$expected\"",
+            )
+          }
+        }
+      } catch (_: Throwable) {
+        // try next fallback model
+      }
+    }
+    return PhraseVerifyResult(
+      matched = false,
+      transcript = "",
+      reasonBn = "নেটওয়ার্কের কারণে কথা যাচাই করা যায়নি বস — ইন্টারনেট চালু রেখে সঠিক বাক্যটি বলুন: \"$expected\"",
     )
   }
 }
@@ -691,17 +963,23 @@ object VoiceMatchManager {
             return@Thread
           }
 
+          val phraseCheck = VoiceMatchPhraseVerifier.verifyEnrolledAudioPhrase(appCtx, step, rawBytes)
+          if (!phraseCheck.matched) {
+            postError(onDone, phraseCheck.reasonBn)
+            return@Thread
+          }
+
           Store.setVoiceMatchStepJson(appCtx, step, signature.toJsonString())
           val profile = loadProfile(appCtx, forceReload = true)
           if (profile.isComplete) {
             Store.setVoiceMatchEnabled(appCtx, true)
             RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
             mainHandler.post {
-              onDone(true, "হয়েছে, বস! ৩ ধাপেই আপনার কণ্ঠ সনাক্ত সম্পন্ন। এখন থেকে অন্যদের কথা এভোয়েড করবে।")
+              onDone(true, "হয়েছে, বস! ৩ ধাপেই কথা ও আপনার কণ্ঠ সনাক্ত সম্পন্ন। এখন থেকে অন্যদের কথা এভোয়েড করবে।")
             }
           } else {
             mainHandler.post {
-              onDone(true, "ধাপ $step সম্পন্ন ✓ — এবার পরের ধাপটি বলুন।")
+              onDone(true, "ধাপ $step সম্পন্ন ✓ (“${phraseCheck.transcript}”) — এবার পরের ধাপটি বলুন।")
             }
           }
         } catch (_: Throwable) {

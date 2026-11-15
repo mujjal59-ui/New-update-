@@ -82,6 +82,7 @@ import com.example.data.Store
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.IncomingReplyStatus
 import com.example.service.Keep
+import com.example.service.LxrFloatingOverlayManager
 import com.example.service.RiyaNotificationHelper
 import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
@@ -94,6 +95,7 @@ import com.example.ui.CYBER_GREEN
 import com.example.ui.CYBER_RED
 import com.example.ui.KeyPage
 import com.example.ui.LiveCamera
+import com.example.ui.LockVaultPage
 import com.example.ui.LxrLiveAvatarOverlay
 import com.example.ui.MemPage
 import com.example.ui.PermPage
@@ -169,6 +171,7 @@ private fun startRiya(c: Context) {
     Toast.makeText(c, "প্রথমে Menu > Gemini API Key দিন (অথবা Chat বাটন ব্যবহার করুন)", Toast.LENGTH_LONG).show()
     return
   }
+  LxrFloatingOverlayManager.showForWakeOrMic(c)
   ContextCompat.startForegroundService(c, Intent(c, RiyaService::class.java))
 }
 
@@ -270,6 +273,7 @@ fun RiyaApp() {
       "key" -> KeyPage(back = { page = "home" }, onNavigate = { page = it })
       "mem" -> MemPage(back = { page = "home" }, onNavigate = { page = it })
       "settings" -> SettingsPage(back = { page = "home" }, onNavigate = { page = it })
+      "lockvault" -> LockVaultPage(back = { page = "home" }, onNavigate = { page = it })
       "tasks" -> TasksPage(back = { page = "home" }, onNavigate = { page = it })
       "autoreply" -> AutoReplyPage(back = { page = "home" }, onNavigate = { page = it })
       "playbook" -> PlaybookPage(back = { page = "home" }, onNavigate = { page = it })

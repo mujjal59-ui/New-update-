@@ -293,10 +293,25 @@ class RiyaCoreUnitTest {
     assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু"))
     assertTrue(Store.MIC_TAP_GREETING_BN.contains("প্রাণ প্রিয় বস"))
     assertTrue(Store.MIC_TAP_GREETING_BN.contains("বলুন কি করতে হবে"))
+    assertTrue(Store.WAKE_CALL_GREETING_BN.contains("কেনো ডেকেছেন"))
 
-    assertEquals(0.46f, com.example.data.VoiceMatchSensitivity.EASY.threshold, 0.001f)
-    assertEquals(0.52f, com.example.data.VoiceMatchSensitivity.BALANCED.threshold, 0.001f)
-    assertEquals(0.60f, com.example.data.VoiceMatchSensitivity.STRICT.threshold, 0.001f)
+    assertEquals(0.44f, com.example.data.VoiceMatchSensitivity.EASY.threshold, 0.001f)
+    assertEquals(0.53f, com.example.data.VoiceMatchSensitivity.BALANCED.threshold, 0.001f)
+    assertEquals(0.63f, com.example.data.VoiceMatchSensitivity.STRICT.threshold, 0.001f)
+
+    // Verify EASY, BALANCED, STRICT are genuinely distinct algorithms & thresholds
+    assertTrue(
+      com.example.data.VoiceMatchSensitivity.EASY.mfccFloor <
+        com.example.data.VoiceMatchSensitivity.BALANCED.mfccFloor
+    )
+    assertTrue(
+      com.example.data.VoiceMatchSensitivity.BALANCED.mfccFloor <
+        com.example.data.VoiceMatchSensitivity.STRICT.mfccFloor
+    )
+    assertTrue(
+      com.example.data.VoiceMatchSensitivity.EASY.onsetMinChunks <
+        com.example.data.VoiceMatchSensitivity.STRICT.onsetMinChunks
+    )
   }
 
   @Test
@@ -366,12 +381,172 @@ class RiyaCoreUnitTest {
   }
 
   @Test
-  fun lxrFloatingOverlay_triggersOnWakeWordsAndUsesExact50PercentOpacity() {
+  fun lxrFloatingOverlay_triggersOnWakeWords_keeps1to1SquareCrop_andRespectsToggle() {
     assertEquals(0.50f, com.example.service.LxrFloatingOverlayManager.OVERLAY_ALPHA, 0.001f)
     assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("Hey LxR, open WhatsApp"))
     assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("L X R"))
     assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("এল এক্স আর লাইট জ্বালাও"))
     assertTrue(com.example.service.LxrFloatingOverlayManager.containsWakeWord("এলএক্সআর কেমন আছো"))
     assertFalse(com.example.service.LxrFloatingOverlayManager.containsWakeWord("আবহাওয়া কেমন আজ"))
+
+    assertTrue(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("LxR"))
+    assertTrue(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("হ্যালো L.x.R"))
+    assertFalse(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("LxR ইউটিউব ওপেন করো"))
+
+    // Landscape image with wide transparent margins must produce strict 1:1 square crop around the planet
+    val crop = com.example.service.LxrFloatingOverlayManager.computeCenteredSquareCrop(
+      imgWidth = 1024,
+      imgHeight = 512,
+      minX = 312,
+      minY = 56,
+      maxX = 711,
+      maxY = 455,
+    )
+    assertEquals("Crop must be strict 1:1 square so planet never stretches oval", crop.width(), crop.height())
+    assertEquals(400, crop.width())
+
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    assertTrue(Store.floatingOrbEnabled(ctx))
+    Store.setFloatingOrbEnabled(ctx, false)
+    assertFalse(Store.floatingOrbEnabled(ctx))
+    assertFalse(com.example.service.LxrFloatingOverlayManager.showForWakeOrMic(ctx))
+    Store.setFloatingOrbEnabled(ctx, true)
+  }
+
+  @Test
+  fun audioEchoGuard_blocksPhoneSpeakerSelfHearingUnconditionallyEvenAtHighRms() {
+    // On Phone Speaker (!usingBtAudio): high speaker RMS (14000) MUST still mute mic during pending frames, TTS, or 850ms tail
+    assertTrue(
+      com.example.service.AudioEchoGuard.shouldMuteMic(
+        usingBtAudio = false,
+        nowMs = 10_000L,
+        micMuteUntilMs = 0L,
+        hasPendingSpeakerFrames = true,
+        ttsIsSpeaking = false,
+        lastSpeakerSoundingMs = 0L,
+        rawRms = 14_000.0,
+      )
+    )
+    assertTrue(
+      com.example.service.AudioEchoGuard.shouldMuteMic(
+        usingBtAudio = false,
+        nowMs = 10_400L,
+        micMuteUntilMs = 0L,
+        hasPendingSpeakerFrames = false,
+        ttsIsSpeaking = false,
+        lastSpeakerSoundingMs = 10_000L,
+        rawRms = 14_000.0,
+      )
+    )
+    assertTrue(
+      com.example.service.AudioEchoGuard.shouldMuteMic(
+        usingBtAudio = false,
+        nowMs = 10_000L,
+        micMuteUntilMs = 0L,
+        hasPendingSpeakerFrames = false,
+        ttsIsSpeaking = true,
+        lastSpeakerSoundingMs = 0L,
+        rawRms = 14_000.0,
+      )
+    )
+    // After acoustic echo tail (>850ms) and no pending audio, Phone Mic hears Boss clearly
+    assertFalse(
+      com.example.service.AudioEchoGuard.shouldMuteMic(
+        usingBtAudio = false,
+        nowMs = 11_000L,
+        micMuteUntilMs = 0L,
+        hasPendingSpeakerFrames = false,
+        ttsIsSpeaking = false,
+        lastSpeakerSoundingMs = 10_000L,
+        rawRms = 800.0,
+      )
+    )
+    // Bluetooth headset allows Boss barge-in above 950 RMS even within short tail
+    assertFalse(
+      com.example.service.AudioEchoGuard.shouldMuteMic(
+        usingBtAudio = true,
+        nowMs = 10_200L,
+        micMuteUntilMs = 0L,
+        hasPendingSpeakerFrames = false,
+        ttsIsSpeaking = false,
+        lastSpeakerSoundingMs = 10_000L,
+        rawRms = 1200.0,
+      )
+    )
+  }
+
+  @Test
+  fun voiceMatchEngine_loudAndSoftBossMatchDistinctSensitivityAndStrictPhraseVerification() {
+    fun synthScaledVoice(f0Hz: Double, formantBoostHz: Double, amplitude: Double): ShortArray {
+      val n = (16000 * 0.8).toInt()
+      return ShortArray(n) { i ->
+        val t = i / 16000.0
+        val fund = kotlin.math.sin(2.0 * Math.PI * f0Hz * t)
+        val h2 = 0.6 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 2.0) * t)
+        val h3 = 0.4 * kotlin.math.sin(2.0 * Math.PI * (f0Hz * 3.0) * t)
+        val formant = 0.75 * kotlin.math.sin(2.0 * Math.PI * formantBoostHz * t)
+        ((fund + h2 + h3 + formant) * amplitude).toInt().coerceIn(-32768, 32767).toShort()
+      }
+    }
+
+    val b1 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(130.0, 600.0, 3500.0))!!
+    val b2 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(132.0, 610.0, 3400.0))!!
+    val b3 = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(128.0, 590.0, 3600.0))!!
+    val profile = com.example.service.VoiceMatchEngine.buildProfile(mapOf(1 to b1, 2 to b2, 3 to b3))
+
+    // Both whisper-quiet (150) AND loud-close (14000) Boss speech must match in BALANCED
+    val quietBoss = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(130.0, 605.0, 150.0))!!
+    val loudBoss = com.example.service.VoiceMatchEngine.extractSignatureFromSamples(synthScaledVoice(133.0, 605.0, 14000.0))!!
+    assertTrue(
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile, quietBoss, com.example.data.VoiceMatchSensitivity.BALANCED
+      ).matched
+    )
+    assertTrue(
+      com.example.service.VoiceMatchEngine.compareCandidate(
+        profile, loudBoss, com.example.data.VoiceMatchSensitivity.BALANCED
+      ).matched
+    )
+
+    // Strict phrase matching rejects unrelated speech & accepts proper Step 1-3 Bengali+LxR sentences
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "তোমার নাম L.x.R"))
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "তোমার নাম এল এক্স আর"))
+    assertFalse(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "আজকের আবহাওয়া খুব সুন্দর"))
+
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(2, "তুমি আমার পার্সোনাল অ্যাসিস্ট্যান্ট এলএক্সআর"))
+    assertFalse(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(2, "আমি ভাত খাবো এখন"))
+
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(3, "LxR এখন থেকে আমি তোমার বস"))
+    assertFalse(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(3, "হ্যালো কেমন আছেন ভাই"))
+  }
+
+  @Test
+  fun lockVaultManager_saves8DigitPinPatternAndEnforcesConditionalRelockOnlyWhenStartedLocked() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    Store.setDeviceBrandProfile(ctx, com.example.data.DeviceBrandProfile.INFINIX)
+    Store.setPhoneLockType(ctx, com.example.data.ScreenLockType.PIN)
+    Store.setPhonePin(ctx, "1234567890") // must clamp to 8 chars
+    assertEquals("12345678", Store.phonePin(ctx))
+    assertTrue(Store.hasAnyPhoneLockSaved(ctx))
+
+    Store.setAppLockSameAsPhone(ctx, false)
+    Store.setAppLockType(ctx, com.example.data.ScreenLockType.PATTERN)
+    Store.setAppPattern(ctx, "12589")
+    assertEquals("12589", Store.appPattern(ctx))
+    assertTrue(Store.hasAnyAppLockSaved(ctx))
+
+    val centers = com.example.service.LockVaultManager.computePatternDotCenters(Rect(0, 0, 900, 900))
+    assertEquals(9, centers.size)
+    assertEquals(150f, centers[0].first, 0.5f)
+    assertEquals(150f, centers[0].second, 0.5f)
+    assertEquals(750f, centers[8].first, 0.5f)
+    assertEquals(750f, centers[8].second, 0.5f)
+    val pts = com.example.service.LockVaultManager.patternDigitsToPoints("12589", centers)
+    assertEquals(5, pts.size)
+
+    // Conditional re-lock rule: MUST ONLY relock if turn began while locked!
+    assertTrue(com.example.service.LockVaultManager.shouldAutoRelockAfterTask(startedWithLockedScreen = true, autoUnlockEnabled = true))
+    assertFalse(com.example.service.LockVaultManager.shouldAutoRelockAfterTask(startedWithLockedScreen = false, autoUnlockEnabled = true))
+    assertFalse(com.example.service.LockVaultManager.shouldAutoRelockAfterTask(startedWithLockedScreen = true, autoUnlockEnabled = false))
   }
 }

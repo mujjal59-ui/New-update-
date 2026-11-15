@@ -919,6 +919,78 @@ class RiyaAccessibilityService : AccessibilityService() {
     )
   }
 
+  fun swipe(
+    startX: Float,
+    startY: Float,
+    endX: Float,
+    endY: Float,
+    durationMs: Long = 320L,
+  ): Boolean {
+    val path =
+      Path().apply {
+        moveTo(startX, startY)
+        lineTo(endX, endY)
+      }
+    val latch = java.util.concurrent.CountDownLatch(1)
+    var ok = false
+    val dispatched =
+      dispatchGesture(
+        GestureDescription.Builder()
+          .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(120L, 1200L)))
+          .build(),
+        object : GestureResultCallback() {
+          override fun onCompleted(gestureDescription: GestureDescription?) {
+            ok = true
+            latch.countDown()
+          }
+
+          override fun onCancelled(gestureDescription: GestureDescription?) {
+            latch.countDown()
+          }
+        },
+        null,
+      )
+    if (!dispatched) return false
+    try {
+      latch.await(durationMs + 500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {}
+    return ok || dispatched
+  }
+
+  fun drawPatternPath(points: List<Pair<Float, Float>>, durationMs: Long = 750L): Boolean {
+    if (points.size < 2) return false
+    val path = Path()
+    path.moveTo(points.first().first, points.first().second)
+    for (i in 1 until points.size) {
+      path.lineTo(points[i].first, points[i].second)
+    }
+    val latch = java.util.concurrent.CountDownLatch(1)
+    var completed = false
+    val strokeDuration = durationMs.coerceIn(400L, 2000L)
+    val dispatched =
+      dispatchGesture(
+        GestureDescription.Builder()
+          .addStroke(GestureDescription.StrokeDescription(path, 0, strokeDuration))
+          .build(),
+        object : GestureResultCallback() {
+          override fun onCompleted(gestureDescription: GestureDescription?) {
+            completed = true
+            latch.countDown()
+          }
+
+          override fun onCancelled(gestureDescription: GestureDescription?) {
+            latch.countDown()
+          }
+        },
+        null,
+      )
+    if (!dispatched) return false
+    try {
+      latch.await(strokeDuration + 650L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {}
+    return completed || dispatched
+  }
+
   /**
    * Executes a fast multi-step task while strictly reading the entire screen at every phase.
    * Completes within ~1 to 3 seconds using tight 220ms–300ms transitions.

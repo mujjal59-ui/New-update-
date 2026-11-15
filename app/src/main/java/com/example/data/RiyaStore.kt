@@ -14,10 +14,70 @@ enum class VoiceGender(val labelBn: String) {
   MALE("ছেলের ভয়েস"),
 }
 
-enum class VoiceMatchSensitivity(val labelBn: String, val threshold: Float) {
-  EASY("সহজ", 0.46f),
-  BALANCED("মাঝারি", 0.52f),
-  STRICT("কঠোর", 0.60f),
+enum class VoiceMatchSensitivity(
+  val labelBn: String,
+  val threshold: Float,
+  val mfccFloor: Float,
+  val pitchWeight: Float,
+  val pitchSigma: Float,
+  val centroidWeight: Float,
+  val minStepFloor: Float,
+  val onsetMinChunks: Int,
+  val rejectAfterChunks: Int,
+  val descriptionBn: String,
+) {
+  EASY(
+    labelBn = "সহজ",
+    threshold = 0.44f,
+    mfccFloor = 0.36f,
+    pitchWeight = 0.05f,
+    pitchSigma = 0.55f,
+    centroidWeight = 0.03f,
+    minStepFloor = 0.25f,
+    onsetMinChunks = 5,
+    rejectAfterChunks = 13,
+    descriptionBn = "আস্তে, ফিসফিস বা যেকোনো ভঙ্গিতে বসের কণ্ঠ দ্রুত ধরবে",
+  ),
+  BALANCED(
+    labelBn = "মাঝারি",
+    threshold = 0.53f,
+    mfccFloor = 0.46f,
+    pitchWeight = 0.16f,
+    pitchSigma = 0.30f,
+    centroidWeight = 0.08f,
+    minStepFloor = 0.38f,
+    onsetMinChunks = 7,
+    rejectAfterChunks = 10,
+    descriptionBn = "স্মার্ট ভারসাম্য — আস্তে ও জোরে উভয় কণ্ঠে বসের ভয়েস চিনবে",
+  ),
+  STRICT(
+    labelBn = "কঠোর",
+    threshold = 0.63f,
+    mfccFloor = 0.56f,
+    pitchWeight = 0.24f,
+    pitchSigma = 0.20f,
+    centroidWeight = 0.12f,
+    minStepFloor = 0.50f,
+    onsetMinChunks = 9,
+    rejectAfterChunks = 8,
+    descriptionBn = "কঠোর বায়োমেট্রিক — শুধু ৩ ধাপের বসের কণ্ঠের সাথে হুবহু মিললে চলবে",
+  ),
+}
+
+enum class ScreenLockType(val labelBn: String) {
+  NONE("লক নেই"),
+  PIN("৮ ডিজিট PIN / পাসওয়ার্ড"),
+  PATTERN("প্যাটার্ন লক (Pattern)"),
+}
+
+enum class DeviceBrandProfile(val labelBn: String) {
+  AUTO("অটো-ডিটেক্ট"),
+  INFINIX("Infinix"),
+  XIAOMI_REDMI("Xiaomi / Redmi"),
+  REALME("Realme"),
+  TECNO("Tecno"),
+  ITEL("itel"),
+  OTHER("অন্যান্য"),
 }
 
 data class GeminiVoiceOption(
@@ -70,6 +130,7 @@ object Store {
   const val DEFAULT_TTS_STYLE = "Read aloud in a warm, welcoming tone."
   const val MIC_TAP_GREETING_BN =
     "আসসালামু ওয়ালাইকুম... কেমন আছেন আমার প্রাণ প্রিয় বস, বলুন কি করতে হবে।"
+  const val WAKE_CALL_GREETING_BN = "বস ❤️ কেনো ডেকেছেন বলুন কি করতে হবে"
 
   val VOICE_OPTIONS =
     listOf(
@@ -203,6 +264,81 @@ object Store {
       .remove("vmStep_3")
       .apply()
   }
+
+  fun floatingOrbEnabled(c: Context): Boolean = p(c).getBoolean("floatingOrbEnabled", true)
+
+  fun setFloatingOrbEnabled(c: Context, v: Boolean) =
+    p(c).edit().putBoolean("floatingOrbEnabled", v).apply()
+
+  fun deviceBrandProfile(c: Context): DeviceBrandProfile {
+    val raw = p(c).getString("lockBrand", DeviceBrandProfile.AUTO.name)
+    return DeviceBrandProfile.entries.firstOrNull { it.name == raw } ?: DeviceBrandProfile.AUTO
+  }
+
+  fun setDeviceBrandProfile(c: Context, brand: DeviceBrandProfile) =
+    p(c).edit().putString("lockBrand", brand.name).apply()
+
+  fun phoneLockType(c: Context): ScreenLockType {
+    val raw = p(c).getString("phoneLockType", ScreenLockType.NONE.name)
+    return ScreenLockType.entries.firstOrNull { it.name == raw } ?: ScreenLockType.NONE
+  }
+
+  fun setPhoneLockType(c: Context, type: ScreenLockType) =
+    p(c).edit().putString("phoneLockType", type.name).apply()
+
+  fun phonePin(c: Context): String = p(c).getString("phonePin", "") ?: ""
+
+  fun setPhonePin(c: Context, pin: String) =
+    p(c).edit().putString("phonePin", pin.trim().take(8)).apply()
+
+  fun phonePattern(c: Context): String = p(c).getString("phonePattern", "") ?: ""
+
+  fun setPhonePattern(c: Context, dots: String) =
+    p(c).edit().putString("phonePattern", dots.filter { it in '1'..'9' }.take(9)).apply()
+
+  fun appLockSameAsPhone(c: Context): Boolean = p(c).getBoolean("appLockSame", true)
+
+  fun setAppLockSameAsPhone(c: Context, same: Boolean) =
+    p(c).edit().putBoolean("appLockSame", same).apply()
+
+  fun appLockType(c: Context): ScreenLockType {
+    val raw = p(c).getString("appLockType", ScreenLockType.NONE.name)
+    return ScreenLockType.entries.firstOrNull { it.name == raw } ?: ScreenLockType.NONE
+  }
+
+  fun setAppLockType(c: Context, type: ScreenLockType) =
+    p(c).edit().putString("appLockType", type.name).apply()
+
+  fun appPin(c: Context): String = p(c).getString("appPin", "") ?: ""
+
+  fun setAppPin(c: Context, pin: String) =
+    p(c).edit().putString("appPin", pin.trim().take(8)).apply()
+
+  fun appPattern(c: Context): String = p(c).getString("appPattern", "") ?: ""
+
+  fun setAppPattern(c: Context, dots: String) =
+    p(c).edit().putString("appPattern", dots.filter { it in '1'..'9' }.take(9)).apply()
+
+  fun autoUnlockEnabled(c: Context): Boolean = p(c).getBoolean("autoUnlockEnabled", true)
+
+  fun setAutoUnlockEnabled(c: Context, enabled: Boolean) =
+    p(c).edit().putBoolean("autoUnlockEnabled", enabled).apply()
+
+  fun hasAnyPhoneLockSaved(c: Context): Boolean =
+    when (phoneLockType(c)) {
+      ScreenLockType.NONE -> false
+      ScreenLockType.PIN -> phonePin(c).isNotBlank()
+      ScreenLockType.PATTERN -> phonePattern(c).length >= 4
+    }
+
+  fun hasAnyAppLockSaved(c: Context): Boolean =
+    if (appLockSameAsPhone(c)) hasAnyPhoneLockSaved(c)
+    else
+      when (appLockType(c)) {
+        ScreenLockType.NONE -> false
+        ScreenLockType.PIN -> appPin(c).isNotBlank()
+        ScreenLockType.PATTERN -> appPattern(c).length >= 4
+      }
 
   private fun f(c: Context) = File(c.filesDir, "memory.txt")
 

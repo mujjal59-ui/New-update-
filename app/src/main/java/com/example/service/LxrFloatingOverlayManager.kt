@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.os.Handler
@@ -25,23 +26,26 @@ import android.view.animation.LinearInterpolator
 import android.widget.Toast
 import com.example.MainActivity
 import com.example.R
+import com.example.data.Store
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Floating 50%-opacity LXR--AI wake presence orb displayed directly over ANY active screen/app
- * whenever Boss calls "LxR":
- * - Central rotating circular planet avatar (`R.drawable.lxr_globe_avatar`)
- * - 5 vibrant orbiting colors circling continuously behind/around the planet
- * - Exact 50% opacity (`alpha = 0.50f`) so the underlying screen stays clearly readable
+ * Floating 50%-opacity LXR--AI wake presence orb displayed directly over ANY active screen/app:
+ * - Hidden while LXR--AI listens quietly in background
+ * - Appears immediately on top of ANY screen when Boss calls "LxR" or taps the Mic button
+ * - Renders the inner Earth/planet avatar (`R.drawable.lxr_globe_avatar`) in a strict 1:1 circle
+ *   surrounded by 5 glowing orbiting colored satellites at exact 50% opacity (`alpha = 0.50f`)
+ * - Disappears automatically once the task & reply complete, while LXR--AI stays active in background
  */
 object LxrFloatingOverlayManager {
   private const val TAG = "LxrFloatingOverlay"
   const val OVERLAY_ALPHA = 0.50f
 
   private val mainHandler = Handler(Looper.getMainLooper())
+  private var pendingHideRunnable: Runnable? = null
 
   @Volatile private var windowManager: WindowManager? = null
   @Volatile private var overlayView: LxrPlanetOrbitView? = null
@@ -49,26 +53,113 @@ object LxrFloatingOverlayManager {
   @Volatile var isShowing: Boolean = false
     private set
 
+  @Volatile private var lastWakeGreetAtMs: Long = 0L
+
   private val wakePatterns =
     listOf(
-      Regex("\\bl\\s*x\\s*r\\b", RegexOption.IGNORE_CASE),
-      Regex("\\blxr\\b", RegexOption.IGNORE_CASE),
-      Regex("\\bel\\s*x\\s*r\\b", RegexOption.IGNORE_CASE),
-      Regex("\\balexander\\b", RegexOption.IGNORE_CASE),
+      Regex("\\bl[\\s.]*x[\\s.]*r\\b", RegexOption.IGNORE_CASE),
+      Regex("\\bel[\\s.]*x[\\s.]*r\\b", RegexOption.IGNORE_CASE),
+      Regex("\\b(?:alexander|alexar|lexar|elxr)\\b", RegexOption.IGNORE_CASE),
       Regex("এল\\s*এক্স\\s*আর"),
       Regex("এলএক্সআর"),
       Regex("এলেক্সার"),
+      Regex("এলএক্সার"),
     )
 
-  /** Returns true whenever Boss calls "LxR" in Bengali or English. */
+  /** Returns true whenever Boss calls "LxR" / "L.x.R" in Bengali or English. */
   fun containsWakeWord(transcript: String): Boolean {
     val clean = transcript.trim()
     if (clean.isEmpty()) return false
     return wakePatterns.any { it.containsMatchIn(clean) }
   }
 
-  fun show(context: Context, openPermissionIfMissing: Boolean = false): Boolean {
+  /**
+   * Returns true if the transcript is essentially just calling "LxR" to summon the assistant
+   * (without a separate follow-up command attached yet).
+   */
+  fun isPureWakeCall(transcript: String): Boolean {
+    val clean = transcript.trim()
+    if (!containsWakeWord(clean)) return false
+    var stripped = clean
+    wakePatterns.forEach { pat -> stripped = stripped.replace(pat, " ") }
+    stripped =
+      stripped
+        .replace(Regex("[.,!?❤️♥।\\s]+"), " ")
+        .replace(Regex("\\b(?:hey|hi|hello|boss|ok|okay)\\b", RegexOption.IGNORE_CASE), " ")
+        .replace(Regex("(?:হেই|হ্যালো|ওই|শোন|শোনো|এই|বস)"), " ")
+        .trim()
+    return stripped.length <= 3
+  }
+
+  fun canTriggerWakeGreetingNow(): Boolean {
+    val now = System.currentTimeMillis()
+    if (now - lastWakeGreetAtMs < 4500L) return false
+    lastWakeGreetAtMs = now
+    return true
+  }
+
+  /**
+   * Computes an exact 1:1 square source crop [Rect] centered on the non-transparent planet pixels,
+   * eliminating horizontal/vertical egg-stretching when rendered inside a circular clip.
+   */
+  fun computeCenteredSquareCrop(
+    imgWidth: Int,
+    imgHeight: Int,
+    minX: Int,
+    minY: Int,
+    maxX: Int,
+    maxY: Int,
+  ): Rect {
+    if (imgWidth <= 0 || imgHeight <= 0) return Rect(0, 0, 1, 1)
+    if (maxX <= minX || maxY <= minY) {
+      val side = minOf(imgWidth, imgHeight)
+      val left = (imgWidth - side) / 2
+      val top = (imgHeight - side) / 2
+      return Rect(left, top, left + side, top + side)
+    }
+    val opaqueW = maxX - minX + 1
+    val opaqueH = maxY - minY + 1
+    val side = maxOf(opaqueW, opaqueH).coerceAtMost(minOf(imgWidth, imgHeight))
+    val cx = (minX + maxX) / 2
+    val cy = (minY + maxY) / 2
+    val left = (cx - side / 2).coerceIn(0, (imgWidth - side).coerceAtLeast(0))
+    val top = (cy - side / 2).coerceIn(0, (imgHeight - side).coerceAtLeast(0))
+    return Rect(left, top, left + side, top + side)
+  }
+
+  fun cancelPendingHide() {
+    pendingHideRunnable?.let { mainHandler.removeCallbacks(it) }
+    pendingHideRunnable = null
+  }
+
+  fun scheduleAutoHide(context: Context, delayMs: Long = 1300L) {
     val appCtx = context.applicationContext
+    cancelPendingHide()
+    val r = Runnable {
+      pendingHideRunnable = null
+      hide(appCtx)
+    }
+    pendingHideRunnable = r
+    mainHandler.postDelayed(r, delayMs.coerceAtLeast(400L))
+  }
+
+  fun showForWakeOrMic(context: Context): Boolean {
+    cancelPendingHide()
+    if (!Store.floatingOrbEnabled(context)) return false
+    return show(context, openPermissionIfMissing = false, forceShow = false)
+  }
+
+  fun show(
+    context: Context,
+    openPermissionIfMissing: Boolean = false,
+    forceShow: Boolean = false,
+  ): Boolean {
+    val appCtx = context.applicationContext
+    if (!forceShow && !Store.floatingOrbEnabled(appCtx)) {
+      return false
+    }
+    cancelPendingHide()
+
     if (!Settings.canDrawOverlays(appCtx)) {
       if (openPermissionIfMissing) {
         try {
@@ -85,6 +176,7 @@ object LxrFloatingOverlayManager {
 
     mainHandler.post {
       try {
+        if (!forceShow && !Store.floatingOrbEnabled(appCtx)) return@post
         val existing = overlayView
         if (existing != null && existing.isAttachedToWindow) {
           existing.alpha = OVERLAY_ALPHA
@@ -95,7 +187,8 @@ object LxrFloatingOverlayManager {
 
         val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val dm = appCtx.resources.displayMetrics
-        val viewSizePx = (96f * dm.density).toInt().coerceAtLeast(180)
+        // Strictly square container so width == height at any screen density
+        val viewSizePx = (82f * dm.density).toInt().coerceAtLeast(164)
         val type =
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -116,7 +209,7 @@ object LxrFloatingOverlayManager {
           ).apply {
             gravity = Gravity.TOP or Gravity.END
             x = (16f * dm.density).toInt()
-            y = (110f * dm.density).toInt()
+            y = (108f * dm.density).toInt()
           }
 
         val view =
@@ -144,6 +237,7 @@ object LxrFloatingOverlayManager {
   }
 
   fun hide(context: Context? = null) {
+    cancelPendingHide()
     mainHandler.post {
       try {
         val view = overlayView
@@ -186,19 +280,47 @@ object LxrFloatingOverlayManager {
     private val clipPath = Path()
     private val arcRect = RectF()
 
-    private val planetBitmap: Bitmap? = loadPlanetBitmap(context)
+    private val planetBitmap: Bitmap? = loadSquarePlanetBitmap(context)
     private var phaseDeg = 0f
     private var speakingBoost = false
     private var pulseScale = 1f
     private var animator: ValueAnimator? = null
 
-    private fun loadPlanetBitmap(ctx: Context): Bitmap? =
-      try {
+    private fun loadSquarePlanetBitmap(ctx: Context): Bitmap? {
+      return try {
         val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
-        BitmapFactory.decodeResource(ctx.resources, R.drawable.lxr_globe_avatar, opts)
+        val decoded = BitmapFactory.decodeResource(ctx.resources, R.drawable.lxr_globe_avatar, opts)
+          ?: return null
+        val w = decoded.width
+        val h = decoded.height
+        val pixels = IntArray(w * h)
+        decoded.getPixels(pixels, 0, w, 0, 0, w, h)
+        var minX = w
+        var minY = h
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until h) {
+          val rowOff = y * w
+          for (x in 0 until w) {
+            val a = (pixels[rowOff + x] ushr 24) and 0xFF
+            if (a > 16) {
+              if (x < minX) minX = x
+              if (x > maxX) maxX = x
+              if (y < minY) minY = y
+              if (y > maxY) maxY = y
+            }
+          }
+        }
+        val crop = computeCenteredSquareCrop(w, h, minX, minY, maxX, maxY)
+        val cropped = Bitmap.createBitmap(decoded, crop.left, crop.top, crop.width(), crop.height())
+        if (cropped !== decoded) {
+          decoded.recycle()
+        }
+        cropped
       } catch (_: Throwable) {
         null
       }
+    }
 
     fun pulseWake() {
       pulseScale = 1.12f
@@ -224,7 +346,7 @@ object LxrFloatingOverlayManager {
       if (animator?.isRunning == true) return
       animator =
         ValueAnimator.ofFloat(0f, 360f).apply {
-          duration = 4800L
+          duration = 4600L
           repeatCount = ValueAnimator.INFINITE
           interpolator = LinearInterpolator()
           addUpdateListener { anim ->
@@ -260,35 +382,34 @@ object LxrFloatingOverlayManager {
       val planetRadius = minSide * 0.255f * pulseScale
       val density = resources.displayMetrics.density
 
-      // 1. Background 5-color orbital rings + glowing orbiting satellites
+      // 1. Background 5-color orbital rings + glowing orbiting colored spheres
       for (i in orbitColors.indices) {
         val color = orbitColors[i]
-        val orbitR = planetRadius + ((i + 1) * 3.4f + 2f) * density
+        val orbitR = planetRadius + ((i + 1) * 3.1f + 1.8f) * density
         if (orbitR + 4f * density > minSide * 0.49f) continue
 
         ringPaint.color = color
-        ringPaint.alpha = 115
-        ringPaint.strokeWidth = 1.6f * density
+        ringPaint.alpha = 125
+        ringPaint.strokeWidth = 1.5f * density
         arcRect.set(cx - orbitR, cy - orbitR, cx + orbitR, cy + orbitR)
 
         val sweepStart = (phaseDeg * (if (i % 2 == 0) 1f else -1.25f) + i * 72f) % 360f
         canvas.drawArc(arcRect, sweepStart, 130f, false, ringPaint)
 
-        // Orbiting colored circle along the track
         val angleRad = (sweepStart + 130f) * (PI / 180.0)
         val dotX = cx + (cos(angleRad) * orbitR).toFloat()
         val dotY = cy + (sin(angleRad) * orbitR).toFloat()
 
         glowPaint.color = color
-        glowPaint.alpha = 90
-        canvas.drawCircle(dotX, dotY, 4.6f * density, glowPaint)
+        glowPaint.alpha = 95
+        canvas.drawCircle(dotX, dotY, 4.4f * density, glowPaint)
 
         orbPaint.color = color
         orbPaint.alpha = 255
-        canvas.drawCircle(dotX, dotY, 2.5f * density, orbPaint)
+        canvas.drawCircle(dotX, dotY, 2.4f * density, orbPaint)
       }
 
-      // 2. Central rotating circular planet image (`lxr_globe_avatar`)
+      // 2. Central rotating 1:1 circular Earth/planet image (`lxr_globe_avatar`)
       canvas.save()
       clipPath.reset()
       clipPath.addCircle(cx, cy, planetRadius, Path.Direction.CW)
@@ -297,8 +418,8 @@ object LxrFloatingOverlayManager {
 
       val bmp = planetBitmap
       if (bmp != null && !bmp.isRecycled) {
-        // Scale slightly up to trim transparent margin so planet fills the circle crisply
-        val drawR = planetRadius * 1.24f
+        // Since bmp is already tightly cropped 1:1 square around the globe, 1.03x fills circle crisply with zero oval squish
+        val drawR = planetRadius * 1.03f
         arcRect.set(cx - drawR, cy - drawR, cx + drawR, cy + drawR)
         canvas.drawBitmap(bmp, null, arcRect, planetPaint)
       } else {
@@ -307,10 +428,9 @@ object LxrFloatingOverlayManager {
       }
       canvas.restore()
 
-      // Outer luminous energy ring framing the planet
       ringPaint.color = Color.parseColor("#00E5FF")
-      ringPaint.alpha = 190
-      ringPaint.strokeWidth = 1.8f * density
+      ringPaint.alpha = 195
+      ringPaint.strokeWidth = 1.6f * density
       canvas.drawCircle(cx, cy, planetRadius, ringPaint)
     }
 
@@ -343,7 +463,6 @@ object LxrFloatingOverlayManager {
             val dy = ev.rawY - downRawY
             if (abs(dx) > 8f || abs(dy) > 8f) moved = true
             if (moved) {
-              // Gravity is TOP|END so positive dx shifts x negatively
               params.x = (startX - dx.toInt()).coerceAtLeast(0)
               params.y = (startY + dy.toInt()).coerceAtLeast(0)
               try {
