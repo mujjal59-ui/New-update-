@@ -153,7 +153,8 @@ class RiyaCoreUnitTest {
   fun geminiTtsVoiceStudio_containsAllRequestedVoicesAndBnBdConfig() {
     assertEquals("gemini-3.1-flash-tts-preview", Store.TTS_MODEL_ID)
     assertEquals("bn-BD", Store.TTS_LOCALE_TAG)
-    assertEquals("Read aloud in a warm, welcoming tone.", Store.DEFAULT_TTS_STYLE)
+    assertTrue(Store.DEFAULT_TTS_STYLE.contains("calmly", ignoreCase = true))
+    assertTrue(Store.DEFAULT_TTS_STYLE.contains("slightly slower", ignoreCase = true))
 
     val expectedNames = listOf("Aoede", "Iapetus", "Leda", "Orus", "Achernar", "Charon", "Sulafat")
     val actualNames = Store.VOICE_OPTIONS.map { it.id }
@@ -707,5 +708,81 @@ class RiyaCoreUnitTest {
         consecutiveLoudChunks = 0,
       )
     )
+  }
+
+  @Test
+  fun voiceMatchPhraseVerifier_boostsQuietPcm_handlesPhoneticSteps_andNeverFalselyBlamesOfflineWhenOnline() {
+    // 1. Phonetic Bengali/Banglish STT variants + ZWNJ handling
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "তোমার নাম এল\u200Cএক্স\u200Cআর"))
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "তোমার নাম এলেক্স আর"))
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(2, "তুমি আমার পারছোনাল এসিসটেন্ট অ্যালেক্সার"))
+    assertTrue(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(3, "এল.এক্স.আর এখন থেকে আমি তোমার বোস"))
+    assertFalse(com.example.service.VoiceMatchPhraseVerifier.matchesStepPhrase(1, "ভুল বাক্য বলছি এখন"))
+
+    // 2. Honest error classification: NEVER claim "নেট সংযোগ পাওয়া যাচ্ছে না" when internetOnline == true
+    val onlineTimeoutMsg =
+      com.example.service.VoiceMatchPhraseVerifier.classifyPhraseVerifyFailure(
+        internetOnline = true,
+        lastHttpCode = 0,
+        lastApiMessage = "",
+        sawEmptySuccessfulReply = false,
+        lastNetworkErr = "SocketTimeoutException",
+        expectedPhrase = "তোমার নাম LxR",
+      )
+    assertTrue(onlineTimeoutMsg.contains("ইন্টারনেট চালু আছে"))
+    assertFalse(onlineTimeoutMsg.contains("নেটওয়ার্কের কারণে কথা যাচাই"))
+
+    val quotaMsg =
+      com.example.service.VoiceMatchPhraseVerifier.classifyPhraseVerifyFailure(
+        internetOnline = true,
+        lastHttpCode = 429,
+        lastApiMessage = "Quota exceeded",
+        sawEmptySuccessfulReply = false,
+        lastNetworkErr = "",
+        expectedPhrase = "তোমার নাম LxR",
+      )
+    assertTrue(quotaMsg.contains("429"))
+
+    val emptyMsg =
+      com.example.service.VoiceMatchPhraseVerifier.classifyPhraseVerifyFailure(
+        internetOnline = true,
+        lastHttpCode = 0,
+        lastApiMessage = "",
+        sawEmptySuccessfulReply = true,
+        lastNetworkErr = "",
+        expectedPhrase = "তোমার নাম LxR",
+      )
+    assertTrue(emptyMsg.contains("স্পষ্ট বোঝা যায়নি"))
+
+    // 3. Quiet PCM speech amplification for clear STT recognition
+    val quietSamples =
+      ShortArray(1600) { i ->
+        val t = i.toDouble() / 16000.0
+        (120.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 180.0 * t)).toInt().toShort()
+      }
+    val quietBytes = ByteArray(quietSamples.size * 2)
+    for (i in quietSamples.indices) {
+      quietBytes[i * 2] = (quietSamples[i].toInt() and 0xFF).toByte()
+      quietBytes[i * 2 + 1] = ((quietSamples[i].toInt() ushr 8) and 0xFF).toByte()
+    }
+    val boosted = com.example.service.VoiceMatchPhraseVerifier.boostPcmForTranscription(quietBytes)
+    val boostedSamples = com.example.service.VoiceMatchEngine.pcm16BytesToSamples(boosted)
+    var peakAfter = 0
+    for (s in boostedSamples) peakAfter = maxOf(peakAfter, kotlin.math.abs(s.toInt()))
+    assertTrue("Expected quiet audio to be cleanly boosted for transcription, peak=$peakAfter", peakAfter > 1500)
+  }
+
+  @Test
+  fun voiceSpeedConfig_defaultsSlightlySlower_andClampsAndPersists() {
+    val ctx = org.robolectric.RuntimeEnvironment.getApplication()
+    assertEquals(0.88f, Store.voiceSpeed(ctx), 0.001f)
+    Store.setVoiceSpeed(ctx, 0.50f)
+    assertEquals(Store.MIN_VOICE_SPEED, Store.voiceSpeed(ctx), 0.001f)
+    Store.setVoiceSpeed(ctx, 1.80f)
+    assertEquals(Store.MAX_VOICE_SPEED, Store.voiceSpeed(ctx), 0.001f)
+    Store.setVoiceSpeed(ctx, 1.15f)
+    assertEquals(1.15f, Store.voiceSpeed(ctx), 0.001f)
+    assertTrue(Store.voiceSpeedLabelBn(0.88f).contains("ডিফল্ট"))
+    Store.setVoiceSpeed(ctx, Store.DEFAULT_VOICE_SPEED)
   }
 }

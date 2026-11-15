@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.PlaybackParams
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -32,7 +33,7 @@ object RiyaVoiceManager {
   @Volatile private var appCtx: Context? = null
   @Volatile private var tts: TextToSpeech? = null
   @Volatile private var isReady = false
-  @Volatile private var currentRate = 0.96f
+  @Volatile private var currentRate = Store.DEFAULT_VOICE_SPEED
   @Volatile private var voiceEnabled = true
   @Volatile private var pendingSpeech: String? = null
   @Volatile private var activeAudioTrack: AudioTrack? = null
@@ -61,6 +62,7 @@ object RiyaVoiceManager {
   fun initialize(context: Context) {
     val ctx = context.applicationContext
     appCtx = ctx
+    currentRate = Store.voiceSpeed(ctx)
     updateActiveStatusLabel(ctx)
     if (tts != null) return
     try {
@@ -173,8 +175,17 @@ object RiyaVoiceManager {
   fun refreshVoicePreferences(context: Context) {
     val ctx = context.applicationContext
     appCtx = ctx
+    currentRate = Store.voiceSpeed(ctx)
     updateActiveStatusLabel(ctx)
     tts?.let { configureBengaliVoice(it, ctx) }
+    synchronized(trackLock) {
+      val t = activeAudioTrack
+      if (t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+        try {
+          t.playbackParams = PlaybackParams().setSpeed(currentRate).setPitch(1.0f)
+        } catch (_: Throwable) {}
+      }
+    }
   }
 
   fun setVoiceEnabled(enabled: Boolean) {
@@ -183,11 +194,19 @@ object RiyaVoiceManager {
   }
 
   fun setSpeechRate(rate: Float) {
-    currentRate = rate.coerceIn(0.70f, 1.30f)
+    currentRate = rate.coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
     try {
       tts?.setSpeechRate(currentRate)
     } catch (e: Exception) {
       Log.e(TAG, "Failed setting speech rate", e)
+    }
+    synchronized(trackLock) {
+      val t = activeAudioTrack
+      if (t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+        try {
+          t.playbackParams = PlaybackParams().setSpeed(currentRate).setPitch(1.0f)
+        } catch (_: Throwable) {}
+      }
     }
   }
 
@@ -212,6 +231,7 @@ object RiyaVoiceManager {
     }
 
     if (useGeminiTts && ctx != null) {
+      currentRate = Store.voiceSpeed(ctx)
       val voiceName = Store.voice(ctx)
       val stylePrompt = Store.ttsStyleInstruction(ctx)
       val isSlowNet = Store.lowNetFastMode(ctx) && isNetworkVerySlow(ctx)
@@ -225,6 +245,8 @@ object RiyaVoiceManager {
         }
         return
       }
+    } else if (ctx != null) {
+      currentRate = Store.voiceSpeed(ctx)
     }
 
     speakWithLocalTts(cleanText, interrupt)
@@ -239,7 +261,13 @@ object RiyaVoiceManager {
     seq: Int,
   ): Boolean {
     return try {
-      val promptText = "$styleInstruction Speak in natural Bengali (Bangladesh, bn-BD): $cleanText"
+      val paceHint =
+        when {
+          currentRate <= 0.92f -> "Deliver in a calm, measured, slightly unhurried manner."
+          currentRate >= 1.12f -> "Deliver briskly yet clearly."
+          else -> "Deliver in a balanced, warm cadence."
+        }
+      val promptText = "$styleInstruction $paceHint Speak in natural Bengali (Bangladesh, bn-BD): $cleanText"
       val payload =
         JSONObject()
           .put(
@@ -343,6 +371,11 @@ object RiyaVoiceManager {
           .build()
       synchronized(trackLock) {
         activeAudioTrack = track
+        try {
+          val speed = (appCtx?.let { Store.voiceSpeed(it) } ?: currentRate)
+            .coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
+          track.playbackParams = PlaybackParams().setSpeed(speed).setPitch(1.0f)
+        } catch (_: Throwable) {}
         track.play()
       }
 

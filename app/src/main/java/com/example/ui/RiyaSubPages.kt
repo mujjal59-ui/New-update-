@@ -50,6 +50,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -74,7 +75,6 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -85,6 +85,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -497,6 +499,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var voice by remember { mutableStateOf(Store.voice(ctx)) }
   var ttsCloud by remember { mutableStateOf(Store.ttsCloudEnabled(ctx)) }
   var ttsStyle by remember { mutableStateOf(Store.ttsStyleInstruction(ctx)) }
+  var voiceSpeed by remember { mutableFloatStateOf(Store.voiceSpeed(ctx)) }
   var whisperBoost by remember { mutableStateOf(Store.whisperBoost(ctx)) }
   var lowNetFast by remember { mutableStateOf(Store.lowNetFastMode(ctx)) }
   var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
@@ -601,11 +604,21 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     Store.setVoice(ctx, voice)
     Store.setTtsCloudEnabled(ctx, ttsCloud)
     Store.setTtsStyleInstruction(ctx, ttsStyle)
+    Store.setVoiceSpeed(ctx, voiceSpeed)
     Store.setWhisperBoost(ctx, whisperBoost)
     Store.setLowNetFastMode(ctx, lowNetFast)
     Store.setVoiceMatchEnabled(ctx, vmEnabled)
     Store.setVoiceMatchSensitivity(ctx, vmSensitivity)
     RiyaVoiceManager.refreshVoicePreferences(ctx)
+    RiyaState.live?.updatePlaybackSpeed(voiceSpeed)
+  }
+
+  fun updateSpeed(newRate: Float) {
+    val snapped = ((newRate * 20f).toInt() / 20f).coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
+    voiceSpeed = snapped
+    Store.setVoiceSpeed(ctx, snapped)
+    RiyaVoiceManager.refreshVoicePreferences(ctx)
+    RiyaState.live?.updatePlaybackSpeed(snapped)
   }
 
   Column(
@@ -762,18 +775,101 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         colors = fieldColors,
       )
 
+      // Dedicated Voice Model Speaking Speed Control (Slow <-> Fast)
+      Column(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .testTag("voice_speed_card")
+            .background(Color(0xFF0A1229), RoundedCornerShape(14.dp))
+            .border(1.dp, CYBER_PURPLE.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Filled.Tune, contentDescription = "কথার গতি", tint = CYBER_CYAN, modifier = Modifier.size(18.dp))
+            Text("কথার স্পিড / গতি (কমানো ও বাড়ানো)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+          }
+        }
+        Text(
+          text = Store.voiceSpeedLabelBn(voiceSpeed),
+          color = CYBER_CYAN,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          OutlinedButton(
+            onClick = { updateSpeed(voiceSpeed - 0.05f) },
+            modifier = Modifier.size(48.dp).testTag("voice_speed_decrease_btn"),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+          ) {
+            Text("−", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+          }
+          Slider(
+            value = voiceSpeed,
+            onValueChange = { updateSpeed(it) },
+            valueRange = Store.MIN_VOICE_SPEED..Store.MAX_VOICE_SPEED,
+            steps = 11,
+            modifier = Modifier.weight(1f).testTag("voice_speed_slider"),
+            colors =
+              SliderDefaults.colors(
+                thumbColor = CYBER_CYAN,
+                activeTrackColor = CYBER_PURPLE,
+                inactiveTrackColor = Color(0xFF283358),
+              ),
+          )
+          OutlinedButton(
+            onClick = { updateSpeed(voiceSpeed + 0.05f) },
+            modifier = Modifier.size(48.dp).testTag("voice_speed_increase_btn"),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+          ) {
+            Text("+", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+          }
+        }
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          listOf(
+            0.80f to "ধীর (0.80x)",
+            0.88f to "শান্ত (0.88x)",
+            1.00f to "স্বাভাবিক (1.00x)",
+            1.15f to "দ্রুত (1.15x)",
+          ).forEach { (presetSpeed, label) ->
+            val active = kotlin.math.abs(voiceSpeed - presetSpeed) < 0.03f
+            FilterChip(
+              selected = active,
+              onClick = { updateSpeed(presetSpeed) },
+              modifier = Modifier.testTag("voice_speed_preset_${(presetSpeed * 100).toInt()}"),
+              label = { Text(label, fontSize = 11.sp) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = CYBER_PURPLE,
+                  selectedLabelColor = Color.White,
+                  labelColor = Color(0xFFB8C4E0),
+                ),
+            )
+          }
+        }
+      }
+
       OutlinedButton(
         onClick = {
           applyVoiceSettings()
           val opt = Store.voiceOption(ctx)
           RiyaVoiceManager.speakUrgent(
             ctx,
-            "হ্যালো বস, আমি এল এক্স আর এ আই। এখন ${opt.displayName} ভয়েসে কথা বলছি।",
+            "হ্যালো বস, আমি এল এক্স আর এ আই। এখন ${opt.displayName} ভয়েসে আপনার নির্ধারিত গতিতে কথা বলছি।",
           )
         },
         modifier = Modifier.fillMaxWidth().testTag("test_voice_button"),
       ) {
-        Icon(Icons.Filled.VolumeUp, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(18.dp))
+        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
         Text("🔊 টেস্ট ভয়েস শুনুন ($voice)", color = CYBER_CYAN, fontWeight = FontWeight.Bold)
       }

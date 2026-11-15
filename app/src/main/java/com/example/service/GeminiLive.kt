@@ -17,6 +17,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.PlaybackParams
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
@@ -218,6 +219,20 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var hadCommandOrToolThisTurn = false
   @Volatile private var lastWakeOrMicPopupMs = 0L
   @Volatile private var turnUnlockedMainScreenByLxr = false
+  @Volatile private var playbackSpeed: Float = Store.voiceSpeed(ctx)
+
+  fun updatePlaybackSpeed(speed: Float) {
+    val clamped = speed.coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
+    playbackSpeed = clamped
+    synchronized(trackLock) {
+      val t = track
+      if (t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+        try {
+          t.playbackParams = PlaybackParams().setSpeed(clamped).setPitch(1.0f)
+        } catch (_: Throwable) {}
+      }
+    }
+  }
 
   private fun findBuiltInMicDevice(): AudioDeviceInfo? {
     val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
@@ -702,6 +717,7 @@ class GeminiLive(private val ctx: Context) {
 
       [VOICE CLARITY, GREETING & NO DUPLICATES — বাধ্যতামূলক]
       - কণ্ঠ হবে অত্যন্ত স্পষ্ট, পরিষ্কার উচ্চারণযুক্ত, নম্র, মধুর, স্বাগতম জানানো এবং স্বাভাবিক বাংলা (বাংলাদেশ)।
+      - ভয়েস ক্যারেক্টারের কথাবার্তার ধরন ও গতি হবে শান্ত, গোছানো এবং স্বাভাবিকের চেয়ে সামান্য ধীর/ধীরস্থির (তাড়াহুড়ো করে দ্রুত কথা বলবে না, প্রতিটি শব্দ স্পষ্ট ও মার্জিতভাবে উচ্চারণ করবে)।
       - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না; কোনো প্রশ্ন/নির্দেশের উত্তর একবারেই পরিষ্কারভাবে শেষ করবে।
       - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন মুখে উচ্চারণ করবে না।
 
@@ -882,7 +898,8 @@ class GeminiLive(private val ctx: Context) {
               val t = track
               if (t != null && t.state == AudioTrack.STATE_INITIALIZED) {
                 val head = (t.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
-                ((totalSpeakerFramesWritten - head).coerceAtLeast(0L) * 1000L) / 24000L
+                val effectiveRate = (24000f * playbackSpeed).toLong().coerceAtLeast(12000L)
+                ((totalSpeakerFramesWritten - head).coerceAtLeast(0L) * 1000L) / effectiveRate
               } else {
                 0L
               }
@@ -1991,6 +2008,7 @@ class GeminiLive(private val ctx: Context) {
         AudioFormat.CHANNEL_OUT_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
       )
+    playbackSpeed = Store.voiceSpeed(ctx)
     val t =
       AudioTrack.Builder()
         .setAudioAttributes(
@@ -2009,7 +2027,12 @@ class GeminiLive(private val ctx: Context) {
         .setBufferSizeInBytes(maxOf(minAudioBuf * 8, 32768))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
-        .also { it.play() }
+        .also {
+          try {
+            it.playbackParams = PlaybackParams().setSpeed(playbackSpeed).setPitch(1.0f)
+          } catch (_: Throwable) {}
+          it.play()
+        }
     synchronized(trackLock) {
       totalSpeakerFramesWritten = 0L
       speakerHeadBaseFrames = 0L

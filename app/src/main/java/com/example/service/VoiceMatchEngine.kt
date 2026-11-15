@@ -624,32 +624,127 @@ data class PhraseVerifyResult(
 object VoiceMatchPhraseVerifier {
   private val httpClient by lazy {
     okhttp3.OkHttpClient.Builder()
-      .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-      .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
-      .writeTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+      .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+      .readTimeout(22, java.util.concurrent.TimeUnit.SECONDS)
+      .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+      .retryOnConnectionFailure(true)
       .build()
   }
 
+  fun hasActiveInternet(ctx: Context): Boolean {
+    return try {
+      val cm =
+        ctx.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+          as? android.net.ConnectivityManager ?: return false
+      val net = cm.activeNetwork ?: return false
+      val caps = cm.getNetworkCapabilities(net) ?: return false
+      caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+          caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+          caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
+          caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET))
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun classifyPhraseVerifyFailure(
+    internetOnline: Boolean,
+    lastHttpCode: Int,
+    lastApiMessage: String,
+    sawEmptySuccessfulReply: Boolean,
+    lastNetworkErr: String,
+    expectedPhrase: String,
+  ): String {
+    return when {
+      sawEmptySuccessfulReply && lastHttpCode == 0 ->
+        "✗ কথা স্পষ্ট বোঝা যায়নি বস — স্বাভাবিক ও স্পষ্ট স্বরে বাক্যটি বলুন: \"$expectedPhrase\""
+      lastHttpCode == 400 || lastHttpCode == 401 || lastHttpCode == 403 ->
+        "Gemini API Key বা মডেল যাচাই হয়নি (HTTP $lastHttpCode) — Menu > API Key পরীক্ষা করে আবার বলুন।"
+      lastHttpCode == 429 ->
+        "Gemini API রিকোয়েস্ট সীমা সাময়িক পূর্ণ হয়েছে (HTTP 429) — কয়েক সেকেন্ড পর আবার চেষ্টা করুন বস।"
+      lastHttpCode in 500..599 ->
+        "সার্ভার সাময়িকভাবে ব্যস্ত (HTTP $lastHttpCode) — আবার চেষ্টা করুন বস।"
+      lastHttpCode > 0 ->
+        "কথা যাচাই করা যায়নি (HTTP $lastHttpCode${if (lastApiMessage.isNotBlank()) ": ${lastApiMessage.take(60)}" else ""}) — আবার বলুন বস।"
+      !internetOnline ->
+        "ফোনে ইন্টারনেট সংযোগ পাওয়া যাচ্ছে না বস — Wi-Fi বা মোবাইল ডেটা চালু করে আবার বলুন: \"$expectedPhrase\""
+      else ->
+        "ইন্টারনেট চালু আছে কিন্তু সার্ভারে সাড়া পেতে দেরি হয়েছে (${lastNetworkErr.ifBlank { "Timeout" }}) — অনুগ্রহ করে আবার বলুন বস।"
+    }
+  }
+
+  fun boostPcmForTranscription(pcm16Mono: ByteArray): ByteArray {
+    if (pcm16Mono.size < 4) return pcm16Mono
+    val samples = VoiceMatchEngine.pcm16BytesToSamples(pcm16Mono)
+    if (samples.isEmpty()) return pcm16Mono
+    var sumSq = 0.0
+    var activeCount = 0
+    for (s in samples) {
+      val av = abs(s.toInt())
+      if (av > 25) {
+        sumSq += s.toDouble() * s.toDouble()
+        activeCount++
+      }
+    }
+    if (activeCount < 40) return pcm16Mono
+    val activeRms = sqrt(sumSq / activeCount)
+    if (activeRms >= 2600.0 || activeRms < 6.0) return pcm16Mono
+    val gain = (3800.0 / activeRms).coerceIn(1.0, 26.0)
+    val out = ByteArray(samples.size * 2)
+    for (i in samples.indices) {
+      val boosted = (kotlin.math.tanh((samples[i].toDouble() * gain) / 32767.0) * 32767.0)
+        .toInt()
+        .coerceIn(-32768, 32767)
+      out[i * 2] = (boosted and 0xFF).toByte()
+      out[i * 2 + 1] = ((boosted ushr 8) and 0xFF).toByte()
+    }
+    return out
+  }
+
   fun normalizeTranscript(raw: String): String {
-    var s = raw.lowercase().trim()
+    var s =
+      raw
+        .replace("\u200B", "")
+        .replace("\u200C", "")
+        .replace("\u200D", "")
+        .replace("\uFEFF", "")
+        .lowercase()
+        .trim()
     val lxrPatterns =
       listOf(
         Regex("\\bl[\\s.,_-]*x[\\s.,_-]*r\\b", RegexOption.IGNORE_CASE),
         Regex("\\bel[\\s.,_-]*x[\\s.,_-]*r\\b", RegexOption.IGNORE_CASE),
-        Regex("\\b(?:alexar|alexander|lexar|elxr)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\b(?:alexar|alexander|lexar|elxr|lxr|lx\\s*r|alxr)\\b", RegexOption.IGNORE_CASE),
         Regex("এল[\\s.,_-]*এক্স[\\s.,_-]*আর"),
-        Regex("এলএক্সআর|এলেক্সার|অ্যালেক্সার|এলএক্সার"),
+        Regex("এল[\\s.,_-]*এস[\\s.,_-]*আর"),
+        Regex("এলেক্স[\\s.,_-]*আর|অ্যালেক্স[\\s.,_-]*আর"),
+        Regex("এলএক্সআর|এলেক্সার|অ্যালেক্সার|এলএক্সার|লেক্সার|লক্সার|ইলেক্সার|এক্স[\\s.,_-]*আর"),
       )
     lxrPatterns.forEach { s = s.replace(it, " lxr ") }
     s =
       s.replace("পারসনাল", "পার্সোনাল")
         .replace("পারসোনাল", "পার্সোনাল")
+        .replace("পার্সনাল", "পার্সোনাল")
+        .replace("পারছোনাল", "পার্সোনাল")
+        .replace("পারছনাল", "পার্সোনাল")
         .replace("personal", "পার্সোনাল")
         .replace("এসিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
         .replace("এসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("এসিসট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("এসিসটেন্ট", "অ্যাসিস্ট্যান্ট")
         .replace("অ্যাসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("অ্যাসিসট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("অ্যাসিসটেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("অ্যাসিস্টান্ট", "অ্যাসিস্ট্যান্ট")
         .replace("এ্যাসিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("এ্যাসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("আসিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("আসিস্টেন্ট", "অ্যাসিস্ট্যান্ট")
+        .replace("সিস্ট্যান্ট", "অ্যাসিস্ট্যান্ট")
         .replace("assistant", "অ্যাসিস্ট্যান্ট")
+        .replace("বোস", "বস")
+        .replace("বস্", "বস")
         .replace("boss", "বস")
         .replace(Regex("[.,!?।\"'`~:;()\\-_/]+"), " ")
         .replace(Regex("\\s+"), " ")
@@ -667,7 +762,7 @@ object VoiceMatchPhraseVerifier {
         val hasTomar = tokens.any { it.contains("তোমার") || it == "tomar" }
         val hasNam = tokens.any { it.contains("নাম") || it == "nam" || it == "name" }
         val hasLxr = tokens.any { it == "lxr" }
-        hasTomar && hasNam && hasLxr && tokens.size <= 7
+        hasTomar && hasNam && hasLxr && tokens.size <= 9
       }
       2 -> {
         // Expected: "তুমি আমার পার্সোনাল অ্যাসিস্ট্যান্ট LxR"
@@ -677,7 +772,7 @@ object VoiceMatchPhraseVerifier {
         val hasAssistant = tokens.any { it.contains("অ্যাসিস্ট্যান্ট") }
         val hasLxr = tokens.any { it == "lxr" }
         val coreHits = listOf(hasTumi, hasAmar, hasPersonal, hasAssistant).count { it }
-        hasLxr && coreHits >= 3 && (hasPersonal || hasAssistant) && tokens.size <= 9
+        hasLxr && coreHits >= 2 && (hasPersonal || hasAssistant) && tokens.size <= 11
       }
       3 -> {
         // Expected: "LxR এখন থেকে আমি তোমার বস"
@@ -688,7 +783,7 @@ object VoiceMatchPhraseVerifier {
         val hasTomar = tokens.any { it.contains("তোমার") || it == "tomar" }
         val hasBoss = tokens.any { it.contains("বস") }
         val midHits = listOf(hasEkhon, hasTheke, hasAmi, hasTomar).count { it }
-        hasLxr && hasBoss && midHits >= 2 && tokens.size <= 10
+        hasLxr && hasBoss && midHits >= 2 && tokens.size <= 12
       }
       else -> false
     }
@@ -726,6 +821,32 @@ object VoiceMatchPhraseVerifier {
     buf[offset + 3] = ((value ushr 24) and 0xFF).toByte()
   }
 
+  private fun extractTranscriptFromGeminiBody(body: String): String? {
+    val root = JSONObject(body)
+    val parts =
+      root.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+        ?: return null
+    val sb = StringBuilder()
+    for (i in 0 until parts.length()) {
+      val part = parts.optJSONObject(i) ?: continue
+      if (part.optBoolean("thought", false)) continue
+      val txt = part.optString("text", "").trim()
+      if (txt.isNotBlank()) sb.append(txt).append(' ')
+    }
+    var clean = sb.toString().trim()
+    if (clean.isEmpty()) return ""
+    clean =
+      clean
+        .replace(Regex("^```(?:json)?\\s*", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("\\s*```$"), "")
+        .trim()
+    return try {
+      JSONObject(clean).optString("transcript", clean).trim()
+    } catch (_: Throwable) {
+      clean
+    }
+  }
+
   fun verifyEnrolledAudioPhrase(ctx: Context, step: Int, pcmBytes: ByteArray): PhraseVerifyResult {
     val expected = Store.VOICE_MATCH_PHRASES.getOrNull(step - 1) ?: return PhraseVerifyResult(false, "", "ভুল ধাপ")
     val apiKey = Store.apiKey(ctx)
@@ -736,47 +857,56 @@ object VoiceMatchPhraseVerifier {
         reasonBn = "ভয়েস ম্যাচ ধাপের কথা যাচাই করতে আগে Menu > Gemini API Key দিন।",
       )
     }
-    val wav = buildWavBytes(pcmBytes)
+    val boostedPcm = boostPcmForTranscription(pcmBytes)
+    val wav = buildWavBytes(boostedPcm)
     val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
     val prompt =
       """
       Listen strictly to the attached Bengali/English audio clip.
-      Transcribe EXACTLY what the speaker actually said, verbatim, without autocorrecting wrong words into the target sentence.
-      If they said something different from "$expected", transcribe what they actually said.
-      If unclear or no speech, return an empty string "".
+      Transcribe EXACTLY what the speaker actually said verbatim in Bengali script (or LxR in English), without autocorrecting wrong words into "$expected".
+      If they said something different, write what they actually said.
+      If unclear or silence only, return "".
       Return ONLY JSON: {"transcript":"..."}
       """.trimIndent()
 
-    val payload =
-      JSONObject()
-        .put(
-          "contents",
-          JSONArray()
+    var lastHttpCode = 0
+    var lastApiErr = ""
+    var lastNetErr = ""
+    var sawEmptyOk = false
+
+    val models = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest")
+    for (model in models) {
+      try {
+        val genCfg =
+          JSONObject().put("responseMimeType", "application/json").put("temperature", 0.0)
+        if (model.startsWith("gemini-2.5")) {
+          genCfg.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        }
+        val payload =
+          JSONObject()
             .put(
-              JSONObject()
+              "contents",
+              JSONArray()
                 .put(
-                  "parts",
-                  JSONArray()
-                    .put(JSONObject().put("text", prompt))
+                  JSONObject()
                     .put(
-                      JSONObject()
+                      "parts",
+                      JSONArray()
+                        .put(JSONObject().put("text", prompt))
                         .put(
-                          "inlineData",
                           JSONObject()
-                            .put("mimeType", "audio/wav")
-                            .put("data", b64),
-                        )
-                    ),
+                            .put(
+                              "inlineData",
+                              JSONObject()
+                                .put("mimeType", "audio/wav")
+                                .put("data", b64),
+                            )
+                        ),
+                    )
                 )
             )
-        )
-        .put(
-          "generationConfig",
-          JSONObject().put("responseMimeType", "application/json").put("temperature", 0.0),
-        )
+            .put("generationConfig", genCfg)
 
-    for (model in listOf("gemini-2.5-flash", "gemini-flash-latest")) {
-      try {
         val req =
           okhttp3.Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
@@ -784,24 +914,32 @@ object VoiceMatchPhraseVerifier {
             .build()
         httpClient.newCall(req).execute().use { resp ->
           val body = resp.body?.string().orEmpty()
-          if (!resp.isSuccessful || body.isBlank()) return@use
-          val textOut =
-            JSONObject(body)
-              .optJSONArray("candidates")
-              ?.optJSONObject(0)
-              ?.optJSONObject("content")
-              ?.optJSONArray("parts")
-              ?.optJSONObject(0)
-              ?.optString("text")
-              ?.trim()
-              .orEmpty()
-          if (textOut.isBlank()) return@use
-          val parsed =
-            try {
-              JSONObject(textOut).optString("transcript", textOut)
-            } catch (_: Throwable) {
-              textOut
-            }.trim()
+          if (!resp.isSuccessful) {
+            lastHttpCode = resp.code
+            lastApiErr =
+              try {
+                JSONObject(body).optJSONObject("error")?.optString("message", "").orEmpty()
+              } catch (_: Throwable) {
+                ""
+              }
+            return@use
+          }
+          if (body.isBlank()) {
+            sawEmptyOk = true
+            return@use
+          }
+          val parsed = extractTranscriptFromGeminiBody(body)
+          if (parsed == null) {
+            sawEmptyOk = true
+            return@use
+          }
+          if (parsed.isBlank()) {
+            return PhraseVerifyResult(
+              matched = false,
+              transcript = "",
+              reasonBn = "✗ কথা স্পষ্ট শোনা যায়নি বা অস্পষ্ট ছিল বস — ঠিক এই বাক্যটি বলুন: \"$expected\"",
+            )
+          }
           val ok = matchesStepPhrase(step, parsed)
           return if (ok) {
             PhraseVerifyResult(true, parsed, "কথা সঠিকভাবে মিলেছে ✓")
@@ -809,18 +947,28 @@ object VoiceMatchPhraseVerifier {
             PhraseVerifyResult(
               false,
               parsed,
-              "✗ কথা মেলেনি বস! আপনি বলেছেন: \"${parsed.ifBlank { "অস্পষ্ট" }}\" — ঠিক এই বাক্যটি বলুন: \"$expected\"",
+              "✗ কথা মেলেনি বস! আপনি বলেছেন: \"$parsed\" — ঠিক এই বাক্যটি বলুন: \"$expected\"",
             )
           }
         }
-      } catch (_: Throwable) {
-        // try next fallback model
+      } catch (t: Throwable) {
+        lastNetErr = t.javaClass.simpleName + (t.message?.let { ": ${it.take(50)}" } ?: "")
       }
     }
+
+    val onlineNow = hasActiveInternet(ctx)
     return PhraseVerifyResult(
       matched = false,
       transcript = "",
-      reasonBn = "নেটওয়ার্কের কারণে কথা যাচাই করা যায়নি বস — ইন্টারনেট চালু রেখে সঠিক বাক্যটি বলুন: \"$expected\"",
+      reasonBn =
+        classifyPhraseVerifyFailure(
+          internetOnline = onlineNow,
+          lastHttpCode = lastHttpCode,
+          lastApiMessage = lastApiErr,
+          sawEmptySuccessfulReply = sawEmptyOk,
+          lastNetworkErr = lastNetErr,
+          expectedPhrase = expected,
+        ),
     )
   }
 }
@@ -831,6 +979,7 @@ object VoiceMatchManager {
   private val recLock = Any()
 
   @Volatile private var activeRecord: AudioRecord? = null
+  @Volatile private var activeWorkerThread: Thread? = null
   @Volatile private var cachedProfile: VoiceMatchProfile? = null
 
   fun loadProfile(ctx: Context, forceReload: Boolean = false): VoiceMatchProfile {
@@ -853,19 +1002,48 @@ object VoiceMatchManager {
     RiyaState.voiceMatchLiveLabel.value = ""
   }
 
+  private fun releaseRecordSafely(target: AudioRecord?) {
+    synchronized(recLock) {
+      val r = target ?: activeRecord ?: return
+      if (activeRecord === r) activeRecord = null
+      try {
+        if (r.recordingState == AudioRecord.RECORDSTATE_RECORDING) r.stop()
+      } catch (_: Throwable) {}
+      try {
+        r.release()
+      } catch (_: Throwable) {}
+    }
+  }
+
   fun cancelActiveCapture() {
     captureActive.set(false)
-    synchronized(recLock) {
-      activeRecord?.let { r ->
+    releaseRecordSafely(null)
+  }
+
+  private fun prepareNormalAudioAndReleaseLive(appCtx: Context) {
+    if (RiyaState.running.value) {
+      try {
+        appCtx.startService(Intent(appCtx, RiyaService::class.java).setAction("STOP"))
+      } catch (_: Throwable) {}
+      val deadline = System.currentTimeMillis() + 950L
+      while (RiyaState.running.value && System.currentTimeMillis() < deadline) {
         try {
-          if (r.recordingState == AudioRecord.RECORDSTATE_RECORDING) r.stop()
-        } catch (_: Throwable) {}
-        try {
-          r.release()
-        } catch (_: Throwable) {}
+          Thread.sleep(50L)
+        } catch (_: Throwable) {
+          break
+        }
       }
-      activeRecord = null
     }
+    try {
+      RiyaVoiceManager.stopSpeaking()
+    } catch (_: Throwable) {}
+    try {
+      val am = appCtx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+      if (am != null && am.mode != android.media.AudioManager.MODE_IN_CALL) {
+        if (android.os.Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
+        am.mode = android.media.AudioManager.MODE_NORMAL
+      }
+    } catch (_: Throwable) {}
   }
 
   @SuppressLint("MissingPermission")
@@ -884,28 +1062,30 @@ object VoiceMatchManager {
       return
     }
 
-    // Pause active GeminiLive session cleanly so AudioRecord never conflicts on Android
-    if (RiyaState.running.value) {
-      try {
-        appCtx.startService(Intent(appCtx, RiyaService::class.java).setAction("STOP"))
-      } catch (_: Throwable) {}
-    }
-
     cancelActiveCapture()
+    val prevThread = activeWorkerThread
     captureActive.set(true)
 
-    Thread {
+    val worker =
+      Thread {
         var record: AudioRecord? = null
         try {
-          // Small yield if live service just began releasing AudioRecord
-          Thread.sleep(160)
+          try {
+            prevThread?.join(600L)
+          } catch (_: Throwable) {}
+          prepareNormalAudioAndReleaseLive(appCtx)
+          if (!captureActive.get()) {
+            postError(onDone, "ভয়েস সনাক্ত বাতিল করা হয়েছে।")
+            return@Thread
+          }
+
           val minBuf =
             AudioRecord.getMinBufferSize(
               VoiceMatchEngine.SAMPLE_RATE,
               AudioFormat.CHANNEL_IN_MONO,
               AudioFormat.ENCODING_PCM_16BIT,
             )
-          record = createSafeAudioRecord(maxOf(minBuf * 2, 6400))
+          record = createSafeAudioRecord(appCtx, maxOf(minBuf * 2, 6400))
           if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
             postError(onDone, "মাইক্রোফোন চালু করা যায়নি বস। অন্য কল বন্ধ করে আবার চেষ্টা করুন।")
             return@Thread
@@ -918,13 +1098,15 @@ object VoiceMatchManager {
           val startedAt = System.currentTimeMillis()
           var voicedChunks = 0
           var lastVoiceAt = 0L
+          var noiseFloor = 20f
+          var noiseSamples = 0
 
           while (captureActive.get()) {
             val now = System.currentTimeMillis()
             val elapsed = now - startedAt
-            if (elapsed >= 4000L) break
-            // Once user finishes speaking clearly (>=1.6s and at least 0.6s after voice paused), auto-finish smoothly
-            if (elapsed >= 1700L && voicedChunks >= 12 && lastVoiceAt > 0L && (now - lastVoiceAt) > 650L) {
+            if (elapsed >= 6000L) break
+            // Once Boss speaks clearly and pauses ~850ms after finishing, stop smoothly
+            if (elapsed >= 1900L && voicedChunks >= 10 && lastVoiceAt > 0L && (now - lastVoiceAt) > 850L) {
               break
             }
 
@@ -936,17 +1118,26 @@ object VoiceMatchManager {
               }
             if (n <= 0) {
               if (!captureActive.get()) break
+              if (elapsed > 1500L && out.size() == 0) break
               continue
             }
             out.write(buf, 0, n)
             val rms = computeRms(buf, n)
-            val normLevel = (rms / 1600f).coerceIn(0f, 1f)
-            if (rms > 32f) {
+            if (elapsed < 300L && rms > 1f) {
+              noiseSamples++
+              noiseFloor = ((noiseFloor * (noiseSamples - 1)) + rms) / noiseSamples
+            }
+            val speechThresh = maxOf(22f, minOf(noiseFloor * 1.45f, 180f))
+            val normLevel = (rms / 480f).coerceIn(0f, 1f)
+            if (rms >= speechThresh) {
               voicedChunks++
               lastVoiceAt = now
             }
             mainHandler.post { onLevel(normLevel) }
           }
+
+          releaseRecordSafely(record)
+          record = null
 
           if (!captureActive.get()) {
             postError(onDone, "ভয়েস সনাক্ত বাতিল করা হয়েছে।")
@@ -955,10 +1146,10 @@ object VoiceMatchManager {
 
           val rawBytes = out.toByteArray()
           val signature = VoiceMatchEngine.extractSignature(rawBytes)
-          if (signature == null || signature.voicedFrames < 6) {
+          if (signature == null || signature.voicedFrames < 4) {
             postError(
               onDone,
-              "স্পষ্ট কণ্ঠ শোনা যায়নি বস। স্বাভাবিক স্বরে বাক্যটি বলুন।",
+              "স্পষ্ট কণ্ঠ শোনা যায়নি বস। মাইক্রোফোনের কাছে স্বাভাবিক স্বরে বাক্যটি বলুন।",
             )
             return@Thread
           }
@@ -986,20 +1177,13 @@ object VoiceMatchManager {
           postError(onDone, "ভয়েস রেকর্ড করতে সমস্যা হয়েছে, আবার চেষ্টা করুন বস।")
         } finally {
           captureActive.set(false)
-          synchronized(recLock) {
-            try {
-              if (record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop()
-            } catch (_: Throwable) {}
-            try {
-              record?.release()
-            } catch (_: Throwable) {}
-            if (activeRecord === record) activeRecord = null
-          }
+          releaseRecordSafely(record)
           mainHandler.post { onLevel(0f) }
         }
       }
       .apply { name = "LxrVoiceMatchEnroll" }
-      .start()
+    activeWorkerThread = worker
+    worker.start()
   }
 
   @SuppressLint("MissingPermission")
@@ -1021,26 +1205,28 @@ object VoiceMatchManager {
       mainHandler.post { onDone(false, "মাইক্রোফোন অনুমতি (Microphone) দিন।") }
       return
     }
-    if (RiyaState.running.value) {
-      try {
-        appCtx.startService(Intent(appCtx, RiyaService::class.java).setAction("STOP"))
-      } catch (_: Throwable) {}
-    }
 
     cancelActiveCapture()
+    val prevThread = activeWorkerThread
     captureActive.set(true)
 
-    Thread {
+    val worker =
+      Thread {
         var record: AudioRecord? = null
         try {
-          Thread.sleep(150)
+          try {
+            prevThread?.join(600L)
+          } catch (_: Throwable) {}
+          prepareNormalAudioAndReleaseLive(appCtx)
+          if (!captureActive.get()) return@Thread
+
           val minBuf =
             AudioRecord.getMinBufferSize(
               VoiceMatchEngine.SAMPLE_RATE,
               AudioFormat.CHANNEL_IN_MONO,
               AudioFormat.ENCODING_PCM_16BIT,
             )
-          record = createSafeAudioRecord(maxOf(minBuf * 2, 6400))
+          record = createSafeAudioRecord(appCtx, maxOf(minBuf * 2, 6400))
           if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
             mainHandler.post { onDone(false, "মাইক্রোফোন চালু করা যায়নি।") }
             return@Thread
@@ -1051,7 +1237,7 @@ object VoiceMatchManager {
           val out = ByteArrayOutputStream()
           val buf = ByteArray(1600)
           val startedAt = System.currentTimeMillis()
-          while (captureActive.get() && System.currentTimeMillis() - startedAt < 2500L) {
+          while (captureActive.get() && System.currentTimeMillis() - startedAt < 2600L) {
             val n =
               try {
                 record.read(buf, 0, buf.size)
@@ -1060,9 +1246,12 @@ object VoiceMatchManager {
               }
             if (n <= 0) break
             out.write(buf, 0, n)
-            val level = (computeRms(buf, n) / 2200f).coerceIn(0f, 1f)
+            val level = (computeRms(buf, n) / 520f).coerceIn(0f, 1f)
             mainHandler.post { onLevel(level) }
           }
+
+          releaseRecordSafely(record)
+          record = null
 
           val sensitivity = Store.voiceMatchSensitivity(appCtx)
           val res = VoiceMatchEngine.verifyPcmChunk(profile, out.toByteArray(), sensitivity)
@@ -1087,29 +1276,30 @@ object VoiceMatchManager {
           mainHandler.post { onDone(false, "টেস্ট ব্যর্থ হয়েছে, আবার চেষ্টা করুন।") }
         } finally {
           captureActive.set(false)
-          synchronized(recLock) {
-            try {
-              if (record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop()
-            } catch (_: Throwable) {}
-            try {
-              record?.release()
-            } catch (_: Throwable) {}
-            if (activeRecord === record) activeRecord = null
-          }
+          releaseRecordSafely(record)
           mainHandler.post { onLevel(0f) }
         }
       }
       .apply { name = "LxrVoiceMatchTest" }
-      .start()
+    activeWorkerThread = worker
+    worker.start()
   }
 
   @SuppressLint("MissingPermission")
-  private fun createSafeAudioRecord(bufSize: Int): AudioRecord? {
+  private fun createSafeAudioRecord(appCtx: Context, bufSize: Int): AudioRecord? {
     val sources =
       listOf(
-        MediaRecorder.AudioSource.VOICE_RECOGNITION,
         MediaRecorder.AudioSource.MIC,
+        MediaRecorder.AudioSource.VOICE_RECOGNITION,
       )
+    val am = appCtx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+    val builtInMic =
+      try {
+        am?.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+          ?.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+      } catch (_: Throwable) {
+        null
+      }
     for (src in sources) {
       try {
         val candidate =
@@ -1121,6 +1311,9 @@ object VoiceMatchManager {
             bufSize,
           )
         if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+          try {
+            if (builtInMic != null) candidate.setPreferredDevice(builtInMic)
+          } catch (_: Throwable) {}
           if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
             try {
               android.media.audiofx.AutomaticGainControl.create(candidate.audioSessionId)?.enabled = true

@@ -127,7 +127,11 @@ object Store {
   const val TTS_MODEL_LABEL = "Gemini 3.1 Flash TTS (preview)"
   const val TTS_LOCALE_TAG = "bn-BD"
   const val TTS_LOCALE_LABEL = "Bengali (Bangladesh)"
-  const val DEFAULT_TTS_STYLE = "Read aloud in a warm, welcoming tone."
+  const val DEFAULT_TTS_STYLE =
+    "Speak calmly, warmly, and at a slightly slower, unhurried pace with crystal-clear Bengali pronunciation."
+  const val DEFAULT_VOICE_SPEED = 0.88f
+  const val MIN_VOICE_SPEED = 0.75f
+  const val MAX_VOICE_SPEED = 1.35f
   const val MIC_TAP_GREETING_BN =
     "আসসালামু ওয়ালাইকুম... কেমন আছেন আমার প্রাণ প্রিয় বস, বলুন কি করতে হবে।"
   const val WAKE_CALL_GREETING_BN = "বস ❤️ কেনো ডেকেছেন বলুন কি করতে হবে"
@@ -185,6 +189,25 @@ object Store {
 
   fun setTtsStyleInstruction(c: Context, v: String) =
     p(c).edit().putString("ttsStyle", v.trim().ifBlank { DEFAULT_TTS_STYLE }).apply()
+
+  fun voiceSpeed(c: Context): Float =
+    p(c).getFloat("voiceSpeed", DEFAULT_VOICE_SPEED).coerceIn(MIN_VOICE_SPEED, MAX_VOICE_SPEED)
+
+  fun setVoiceSpeed(c: Context, speed: Float) =
+    p(c).edit().putFloat("voiceSpeed", speed.coerceIn(MIN_VOICE_SPEED, MAX_VOICE_SPEED)).apply()
+
+  fun voiceSpeedLabelBn(speed: Float): String {
+    val s = speed.coerceIn(MIN_VOICE_SPEED, MAX_VOICE_SPEED)
+    val tag =
+      when {
+        s <= 0.82f -> "ধীর ও স্পষ্ট"
+        s <= 0.93f -> "শান্ত • সামান্য ধীর (ডিফল্ট)"
+        s <= 1.05f -> "স্বাভাবিক গতি"
+        s <= 1.20f -> "দ্রুত"
+        else -> "খুব দ্রুত"
+      }
+    return String.format(Locale.US, "%.2fx • %s", s, tag)
+  }
 
   fun whisperBoost(c: Context): Boolean = p(c).getBoolean("whisperBoost", true)
 
@@ -254,15 +277,16 @@ object Store {
   fun voiceMatchStepJson(c: Context, step: Int): String =
     p(c).getString("vmStep_$step", "") ?: ""
 
-  fun setVoiceMatchStepJson(c: Context, step: Int, json: String) =
-    p(c).edit().putString("vmStep_$step", json).apply()
+  fun setVoiceMatchStepJson(c: Context, step: Int, json: String) {
+    p(c).edit().putString("vmStep_$step", json).commit()
+  }
 
   fun clearVoiceMatch(c: Context) {
     p(c).edit()
       .remove("vmStep_1")
       .remove("vmStep_2")
       .remove("vmStep_3")
-      .apply()
+      .commit()
   }
 
   fun floatingOrbEnabled(c: Context): Boolean = p(c).getBoolean("floatingOrbEnabled", true)
