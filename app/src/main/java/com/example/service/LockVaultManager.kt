@@ -98,13 +98,58 @@ object LockVaultManager {
     }
   }
 
+  fun evaluateMainScreenLocked(
+    screenInteractive: Boolean,
+    keyguardLocked: Boolean,
+    deviceLocked: Boolean,
+    activeWindowPkg: String?,
+    lockScreenVisibleInUi: Boolean,
+  ): Boolean {
+    if (!screenInteractive) return true
+    val pkg = activeWindowPkg?.trim()?.lowercase().orEmpty()
+    val unlockedAppVisible =
+      pkg.isNotEmpty() &&
+        pkg != "com.android.systemui" &&
+        !pkg.contains("keyguard") &&
+        !pkg.contains("lockscreen") &&
+        !lockScreenVisibleInUi
+    if (unlockedAppVisible) return false
+    return keyguardLocked || deviceLocked || lockScreenVisibleInUi
+  }
+
+  fun isSystemKeyguardUiShowing(acc: RiyaAccessibilityService?): Boolean {
+    if (acc == null) return false
+    val pkg = acc.rootInActiveWindow?.packageName?.toString()?.lowercase().orEmpty()
+    if (pkg.contains("keyguard") || pkg.contains("lockscreen")) return true
+    if (pkg != "com.android.systemui") return false
+    val textDump = collectCompactScreenText(collectAllRoots(acc)).lowercase()
+    return textDump.contains("keyguard") ||
+      textDump.contains("lock_icon") ||
+      textDump.contains("pinentry") ||
+      textDump.contains("lockpattern") ||
+      textDump.contains("swipe up to unlock") ||
+      textDump.contains("enter password") ||
+      textDump.contains("enter pin") ||
+      textDump.contains("emergency")
+  }
+
   fun isDeviceLocked(ctx: Context): Boolean {
     return try {
       val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
       val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
-      val screenOff = pm != null && !pm.isInteractive
+      val screenInteractive = pm?.isInteractive ?: true
       val keyguardLocked = km?.isKeyguardLocked == true
-      screenOff || keyguardLocked
+      val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+      val acc = RiyaAccessibilityService.instance
+      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()
+      val lockUi = isSystemKeyguardUiShowing(acc)
+      evaluateMainScreenLocked(
+        screenInteractive = screenInteractive,
+        keyguardLocked = keyguardLocked,
+        deviceLocked = deviceLocked,
+        activeWindowPkg = activePkg,
+        lockScreenVisibleInUi = lockUi,
+      )
     } catch (_: Throwable) {
       false
     }

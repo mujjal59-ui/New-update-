@@ -600,4 +600,112 @@ class RiyaCoreUnitTest {
     val res = com.example.service.LockVaultManager.unlockAppLockWithResult(ctx, null)
     assertEquals(com.example.service.UnlockStatus.ACCESSIBILITY_OFF, res.status)
   }
+
+  @Test
+  fun mainScreenLockDetector_neverFalselyReportsLockedWhenUnlockedAppIsOnScreen() {
+    // Screen ON + unlocked user app visible (even if keyguardLocked briefly lagged true) -> MUST be false (unlocked)
+    assertFalse(
+      com.example.service.LockVaultManager.evaluateMainScreenLocked(
+        screenInteractive = true,
+        keyguardLocked = true,
+        deviceLocked = true,
+        activeWindowPkg = "com.whatsapp",
+        lockScreenVisibleInUi = false,
+      )
+    )
+    assertFalse(
+      com.example.service.LockVaultManager.evaluateMainScreenLocked(
+        screenInteractive = true,
+        keyguardLocked = false,
+        deviceLocked = false,
+        activeWindowPkg = "com.example",
+        lockScreenVisibleInUi = false,
+      )
+    )
+    // Screen OFF -> definitely locked
+    assertTrue(
+      com.example.service.LockVaultManager.evaluateMainScreenLocked(
+        screenInteractive = false,
+        keyguardLocked = true,
+        deviceLocked = true,
+        activeWindowPkg = "com.whatsapp",
+        lockScreenVisibleInUi = false,
+      )
+    )
+    // Screen ON + SystemUI keyguard visible -> locked
+    assertTrue(
+      com.example.service.LockVaultManager.evaluateMainScreenLocked(
+        screenInteractive = true,
+        keyguardLocked = true,
+        deviceLocked = true,
+        activeWindowPkg = "com.android.systemui",
+        lockScreenVisibleInUi = true,
+      )
+    )
+    assertTrue(RiyaPersona.TEXT.contains("MAIN SCREEN"))
+    assertTrue(RiyaPersona.TEXT.contains("STOP reciting the list IMMEDIATELY"))
+  }
+
+  @Test
+  fun audioEchoGuardWithBargeIn_unmutesBetweenListPausesAndAllowsBossInterruptMidSpeech() {
+    // 1. Mid-sentence during audible speaker frames with only normal speaker echo -> MUST stay muted
+    assertTrue(
+      com.example.service.AudioEchoGuard.shouldMuteMicWithBargeIn(
+        usingBtAudio = false,
+        nowMs = 10_000L,
+        micMuteUntilMs = 0L,
+        isSpeakerAudiblyPlayingNow = true,
+        ttsIsSpeaking = false,
+        lastAudibleStopMs = 10_000L,
+        rawRms = 3_200.0,
+        lastSpeakerOutputRms = 3_500.0,
+        voiceMatchBargeIn = false,
+        consecutiveLoudChunks = 0,
+      )
+    )
+    // 2. Natural 350ms pause between A-to-Z items (isSpeakerAudiblyPlayingNow = false, past 320ms tail) -> Mic UNMUTES so Boss can speak!
+    assertFalse(
+      com.example.service.AudioEchoGuard.shouldMuteMicWithBargeIn(
+        usingBtAudio = false,
+        nowMs = 10_360L,
+        micMuteUntilMs = 0L,
+        isSpeakerAudiblyPlayingNow = false,
+        ttsIsSpeaking = false,
+        lastAudibleStopMs = 10_000L,
+        rawRms = 600.0,
+        lastSpeakerOutputRms = 3_500.0,
+        voiceMatchBargeIn = false,
+        consecutiveLoudChunks = 0,
+      )
+    )
+    // 3. Boss speaks loudly right over the speaker for 2+ chunks OR matches Voice Match -> Instant barge-in!
+    assertFalse(
+      com.example.service.AudioEchoGuard.shouldMuteMicWithBargeIn(
+        usingBtAudio = false,
+        nowMs = 10_000L,
+        micMuteUntilMs = 0L,
+        isSpeakerAudiblyPlayingNow = true,
+        ttsIsSpeaking = false,
+        lastAudibleStopMs = 10_000L,
+        rawRms = 11_000.0,
+        lastSpeakerOutputRms = 3_000.0,
+        voiceMatchBargeIn = false,
+        consecutiveLoudChunks = 2,
+      )
+    )
+    assertFalse(
+      com.example.service.AudioEchoGuard.shouldMuteMicWithBargeIn(
+        usingBtAudio = false,
+        nowMs = 10_000L,
+        micMuteUntilMs = 0L,
+        isSpeakerAudiblyPlayingNow = true,
+        ttsIsSpeaking = false,
+        lastAudibleStopMs = 10_000L,
+        rawRms = 1_500.0,
+        lastSpeakerOutputRms = 3_000.0,
+        voiceMatchBargeIn = true,
+        consecutiveLoudChunks = 0,
+      )
+    )
+  }
 }

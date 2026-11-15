@@ -52,6 +52,9 @@ object LxrFloatingOverlayManager {
   @Volatile private var layoutParams: WindowManager.LayoutParams? = null
   @Volatile var isShowing: Boolean = false
     private set
+  @Volatile var isSpeakingNow: Boolean = false
+    private set
+  @Volatile var onInterruptSpeakRequest: (() -> Unit)? = null
 
   @Volatile private var lastWakeGreetAtMs: Long = 0L
 
@@ -244,6 +247,7 @@ object LxrFloatingOverlayManager {
   }
 
   fun setSpeakingBoost(speaking: Boolean) {
+    isSpeakingNow = speaking
     mainHandler.post {
       overlayView?.setSpeakingBoost(speaking)
     }
@@ -492,6 +496,14 @@ object LxrFloatingOverlayManager {
                 Toast.makeText(
                   appCtx,
                   "LxR অরব লুকানো হয়েছে — আবার 'LxR' বললেই দেখাবে",
+                  Toast.LENGTH_SHORT,
+                ).show()
+              } else if (isSpeakingNow && onInterruptSpeakRequest != null) {
+                onInterruptSpeakRequest?.invoke()
+                pulseWake()
+                Toast.makeText(
+                  appCtx,
+                  "শুনছি বস, বলুন...",
                   Toast.LENGTH_SHORT,
                 ).show()
               } else {
