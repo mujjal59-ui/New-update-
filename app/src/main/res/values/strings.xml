@@ -5,4 +5,19 @@
     <string name="notification_listener_label">LXR--AI মেসেজ অটো-রিপ্লাই</string>
     <string name="channel_alerts_name">LXR--AI জরুরি ও অ্যাক্সেসিবিলিটি সতর্কতা</string>
     <string name="channel_messages_name">LXR--AI মেসেজ ও রিপ্লাই অনুমতি</string>
+    <string name="section_btn_app_builder">অ্যাপস তৈরি</string>
+    <string name="section_btn_video_creator">ভিডিও তৈরি</string>
+    <string name="section_btn_youtube_seo">YouTube\nভিডিও SEO</string>
+    <string name="section_btn_youtube_seo_cd">YouTube ভিডিও SEO</string>
+    <string name="app_builder_screen_title">App Builder</string>
+    <string name="app_builder_screen_subtitle">অ্যাপস তৈরি • স্টুডিও লেআউট ও নেভিগেশন</string>
+    <string name="video_creator_screen_title">Video Creator</string>
+    <string name="video_creator_screen_subtitle">ভিডিও তৈরি • স্টুডিও লেআউট ও নেভিগেশন</string>
+    <string name="seo_studio_screen_title">SEO Studio</string>
+    <string name="seo_studio_screen_subtitle">YouTube ভিডিও SEO • স্টুডিও লেআউট ও নেভিগেশন</string>
+    <string name="studio_ui_only_badge">UI &amp; NAVIGATION READY</string>
+    <string name="app_builder_status_note">এই পর্যায়ে শুধুমাত্র App Builder স্ক্রিন ও নেভিগেশন প্রস্তুত করা হয়েছে।</string>
+    <string name="video_creator_status_note">এই পর্যায়ে শুধুমাত্র Video Creator স্ক্রিন ও নেভিগেশন প্রস্তুত করা হয়েছে।</string>
+    <string name="seo_studio_status_note">এই পর্যায়ে শুধুমাত্র YouTube SEO Studio স্ক্রিন ও নেভিগেশন প্রস্তুত করা হয়েছে।</string>
+    <string name="back_to_home_label">হোম স্ক্রিনে ফিরুন</string>
 </resources>

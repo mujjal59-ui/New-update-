@@ -31,13 +31,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -65,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -88,6 +92,7 @@ import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaService
 import com.example.service.RiyaVoiceManager
+import com.example.ui.AppBuilderScreen
 import com.example.ui.AutoReplyPage
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_CYAN
@@ -97,13 +102,16 @@ import com.example.ui.KeyPage
 import com.example.ui.LiveCamera
 import com.example.ui.LockVaultPage
 import com.example.ui.LxrLiveAvatarOverlay
+import com.example.ui.LxrThreeSectionRow
 import com.example.ui.MemPage
 import com.example.ui.PermPage
 import com.example.ui.PlaybookPage
 import com.example.ui.RiyaChatDialog
 import com.example.ui.RiyaThreeLineMenuDialog
+import com.example.ui.SeoStudioScreen
 import com.example.ui.SettingsPage
 import com.example.ui.TasksPage
+import com.example.ui.VideoCreatorScreen
 import com.example.ui.hasPerm
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -277,6 +285,9 @@ fun RiyaApp() {
       "tasks" -> TasksPage(back = { page = "home" }, onNavigate = { page = it })
       "autoreply" -> AutoReplyPage(back = { page = "home" }, onNavigate = { page = it })
       "playbook" -> PlaybookPage(back = { page = "home" }, onNavigate = { page = it })
+      "app_builder" -> AppBuilderScreen(back = { page = "home" }, onNavigate = { page = it })
+      "video_creator" -> VideoCreatorScreen(back = { page = "home" }, onNavigate = { page = it })
+      "seo_studio" -> SeoStudioScreen(back = { page = "home" }, onNavigate = { page = it })
       else ->
         RiyaHomeScreen(
           status = status,
@@ -301,6 +312,9 @@ fun RiyaApp() {
           },
           onChat = { chat = true },
           onSettings = { page = "settings" },
+          onAppBuilder = { page = "app_builder" },
+          onVideoCreator = { page = "video_creator" },
+          onSeoStudio = { page = "seo_studio" },
           onFixAccessibility = {
             if (!Keep.ensureAccessibility(ctx)) {
               Keep.openAccessibility(ctx)
@@ -365,6 +379,9 @@ fun RiyaHomeScreen(
   onCam: () -> Unit,
   onChat: () -> Unit,
   onSettings: () -> Unit,
+  onAppBuilder: () -> Unit = {},
+  onVideoCreator: () -> Unit = {},
+  onSeoStudio: () -> Unit = {},
   onFixAccessibility: () -> Unit,
   onFixNotifAccess: () -> Unit = {},
 ) {
@@ -670,5 +687,34 @@ fun RiyaHomeScreen(
       )
     }
     hot(0.887f, 0.904f, 0.14f, 0.08f, "dock_settings", onSettings)
+
+    // 5. New Three Premium Section Buttons + Neon Divider directly below the 6 App Icons
+    val density = LocalDensity.current
+    val navBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp().value }
+    val dockVisualBottomDp = oy + 0.861f * dh
+    val safeBottomDp = sh - navBottomDp - 4f
+    val spaceBelowDock = (safeBottomDp - dockVisualBottomDp).coerceAtLeast(0f)
+    val cardHeightDp = (spaceBelowDock - 22f).coerceIn(64f, 88f)
+    val totalSectionHeightDp = cardHeightDp + 19f
+    val sectionTopY =
+      minOf(
+          dockVisualBottomDp + 3f,
+          safeBottomDp - totalSectionHeightDp,
+        )
+        .coerceAtLeast(oy + 0.848f * dh)
+
+    Box(
+      modifier = Modifier.fillMaxWidth().offset(y = sectionTopY.dp),
+      contentAlignment = Alignment.TopCenter,
+    ) {
+      LxrThreeSectionRow(
+        cardHeight = cardHeightDp.dp,
+        isCompactWidth = sw < 365f,
+        onAppBuilder = onAppBuilder,
+        onVideoCreator = onVideoCreator,
+        onSeoStudio = onSeoStudio,
+        modifier = Modifier.widthIn(max = 600.dp),
+      )
+    }
   }
 }
