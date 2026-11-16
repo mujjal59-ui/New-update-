@@ -785,4 +785,105 @@ class RiyaCoreUnitTest {
     assertTrue(Store.voiceSpeedLabelBn(0.88f).contains("ডিফল্ট"))
     Store.setVoiceSpeed(ctx, Store.DEFAULT_VOICE_SPEED)
   }
+
+  @Test
+  fun voiceMatchAcousticFallbackAndStepAudioWav_workAcross429And503AndGenerateValidWav() {
+    // 1. Acoustic fallback rescues clear speech on 429/503/network outages, rejects bad key (401) & silence
+    assertTrue(
+      com.example.service.VoiceMatchPhraseVerifier.shouldAcceptAcousticFallback(
+        lastHttpCode = 429,
+        lastNetErr = "",
+        sawEmptyOk = false,
+        voicedFrames = 14,
+      )
+    )
+    assertTrue(
+      com.example.service.VoiceMatchPhraseVerifier.shouldAcceptAcousticFallback(
+        lastHttpCode = 503,
+        lastNetErr = "",
+        sawEmptyOk = false,
+        voicedFrames = 12,
+      )
+    )
+    assertFalse(
+      com.example.service.VoiceMatchPhraseVerifier.shouldAcceptAcousticFallback(
+        lastHttpCode = 401,
+        lastNetErr = "",
+        sawEmptyOk = false,
+        voicedFrames = 20,
+      )
+    )
+    assertFalse(
+      com.example.service.VoiceMatchPhraseVerifier.shouldAcceptAcousticFallback(
+        lastHttpCode = 429,
+        lastNetErr = "",
+        sawEmptyOk = false,
+        voicedFrames = 4,
+      )
+    )
+
+    // 2. Step audio WAV creation, duration, and reset cleanup
+    val ctx = org.robolectric.RuntimeEnvironment.getApplication()
+    val sampleCount = 16000 // 1 sec
+    val rawPcm = ByteArray(sampleCount * 2)
+    for (i in 0 until sampleCount) {
+      val s = (2200.0 * kotlin.math.sin(2.0 * Math.PI * 160.0 * (i / 16000.0))).toInt().toShort()
+      rawPcm[i * 2] = (s.toInt() and 0xFF).toByte()
+      rawPcm[i * 2 + 1] = ((s.toInt() ushr 8) and 0xFF).toByte()
+    }
+    assertTrue(com.example.service.VoiceMatchManager.saveStepAudioWav(ctx, 1, rawPcm))
+    assertTrue(com.example.service.VoiceMatchManager.hasStepAudio(ctx, 1))
+    assertTrue(com.example.service.VoiceMatchManager.stepAudioDurationSec(ctx, 1) >= 0.8f)
+
+    com.example.service.VoiceMatchManager.resetProfile(ctx)
+    assertFalse(com.example.service.VoiceMatchManager.hasStepAudio(ctx, 1))
+  }
+
+  @Test
+  fun lockVaultSwipeStrategiesAndPrivacy_matchInfinixBottomSwipeAndNeverExposeVault() {
+    val strategies = com.example.service.LockVaultManager.buildLockscreenSwipeStrategies(1080f, 2400f)
+    assertTrue(strategies.isNotEmpty())
+    val primary = strategies.first()
+    // Must match Infinix "Use Fingerprint or Swipe Up to Unlock" bottom-to-upper trajectory
+    assertTrue(primary.startY > 2400f * 0.85f)
+    assertTrue(primary.endY <= 2400f * 0.35f)
+
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    Store.setPhoneLockType(ctx, com.example.data.ScreenLockType.NONE)
+    val lockedNoCred = com.example.service.LockVaultManager.unlockAppLockWithResult(ctx, null)
+    assertFalse(lockedNoCred.messageBn.contains("পিন"))
+    assertFalse(lockedNoCred.messageBn.contains("ভল্ট"))
+    assertFalse(lockedNoCred.messageBn.contains("সেভ"))
+
+    assertTrue(RiyaPersona.TEXT.contains("PRIVACY STRICT RULE"))
+    assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("সংরক্ষিত পিন"))
+    assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("পাসওয়ার্ড"))
+  }
+
+  @Test
+  fun messageAgentOpenChatHeaderResolution_identifiesActiveChatAndMatchesPhonetics() {
+    assertTrue(com.example.service.MessageAgent.isLikelyChatHeaderContactText("Fahim Helper"))
+    assertTrue(com.example.service.MessageAgent.isLikelyChatHeaderContactText("রাকিব ভাই"))
+    assertFalse(com.example.service.MessageAgent.isLikelyChatHeaderContactText("last seen today at 7:21 PM"))
+    assertFalse(com.example.service.MessageAgent.isLikelyChatHeaderContactText("online"))
+    assertFalse(com.example.service.MessageAgent.isLikelyChatHeaderContactText("07:21"))
+
+    assertEquals("Fahim Helper", com.example.service.MessageAgent.resolveEffectiveContact("", "Fahim Helper"))
+    assertEquals("Fahim Helper", com.example.service.MessageAgent.resolveEffectiveContact("বর্তমান চ্যাট", "Fahim Helper"))
+    assertEquals("Fahim Helper", com.example.service.MessageAgent.resolveEffectiveContact("তাকে", "Fahim Helper"))
+    assertEquals("Karim", com.example.service.MessageAgent.resolveEffectiveContact("Karim", "Fahim Helper"))
+
+    assertTrue(com.example.service.MessageAgent.matchesContactName("Fahim Helper", "ফাহিম"))
+    assertTrue(com.example.service.MessageAgent.matchesContactName("Fahim Helper", "ফাহিম হেল্পার"))
+  }
+
+  @Test
+  fun personaRulesAndCapabilities_enforceAntiYesManExpressiveVoiceAndNoCatchphraseLoop() {
+    assertTrue(RiyaPersona.TEXT.contains("ANTI-YES-MAN RULE"))
+    assertTrue(RiyaPersona.TEXT.contains("Sad, heartbreaking, or emotional story"))
+    assertTrue(RiyaPersona.TEXT.contains("natural warm laugh"))
+    assertTrue(RiyaPersona.TEXT.contains("STRICT ANTI-REPETITION RULE"))
+    assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("সংরক্ষিত পাসওয়ার্ড"))
+    assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("কী লিখেছি তাও জানিয়ে দেই"))
+  }
 }

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Call
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RocketLaunch
@@ -120,6 +122,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
@@ -510,6 +513,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var vmSensitivity by remember { mutableStateOf(Store.voiceMatchSensitivity(ctx)) }
   var vmStamp by remember { mutableIntStateOf(0) }
   var recordingStep by remember { mutableIntStateOf(0) }
+  var playingAudioStep by remember { mutableIntStateOf(0) }
   var testingMatch by remember { mutableStateOf(false) }
   var vmLevel by remember { mutableFloatStateOf(0f) }
   var vmFeedback by remember { mutableStateOf("") }
@@ -530,11 +534,16 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     }
 
   DisposableEffect(Unit) {
-    onDispose { VoiceMatchManager.cancelActiveCapture() }
+    onDispose {
+      VoiceMatchManager.cancelActiveCapture()
+      VoiceMatchManager.stopStepAudio()
+    }
   }
 
   fun startEnrollStep(stepNumber: Int) {
     val action = {
+      playingAudioStep = 0
+      VoiceMatchManager.stopStepAudio()
       recordingStep = stepNumber
       testingMatch = false
       vmFeedback = "ধাপ $stepNumber শুনছি ও কথা যাচাই করছি — সঠিক বাক্যটি বলুন..."
@@ -563,6 +572,8 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
 
   fun startTestMatch() {
     val action = {
+      playingAudioStep = 0
+      VoiceMatchManager.stopStepAudio()
       testingMatch = true
       recordingStep = 0
       vmFeedback = "এখন কথা বলুন — বসের কণ্ঠ মিলিয়ে দেখছি..."
@@ -649,11 +660,49 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
     )
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-      TextButton({ show = !show }) { Text(if (show) "Hide Key" else "Show Key", color = CYBER_CYAN) }
+      TextButton({ show = !show }, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (show) "Hide Key" else "Show Key", color = CYBER_CYAN)
+      }
       Text(
-        "Free key: aistudio.google.com",
+        "Google AI Studio ফ্রি কী",
         color = Color(0xFFAAB4D0),
         fontSize = 11.sp,
+      )
+    }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .testTag("gemini_api_key_link")
+          .clip(RoundedCornerShape(12.dp))
+          .background(CYBER_CYAN.copy(alpha = 0.10f))
+          .border(1.dp, CYBER_CYAN.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+          .clickable {
+            try {
+              ctx.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/api-keys"))
+                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+              )
+            } catch (_: Throwable) {
+              Toast.makeText(ctx, "ব্রাউজার খোলা যায়নি", Toast.LENGTH_SHORT).show()
+            }
+          }
+          .padding(horizontal = 12.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      Text(
+        "Gemini API key সংগ্রহ করুন:",
+        color = Color.White,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Text(
+        "https://aistudio.google.com/api-keys",
+        color = CYBER_CYAN,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        textDecoration = TextDecoration.Underline,
       )
     }
 
@@ -1008,7 +1057,9 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         val stepNum = idx + 1
         val done = vmProfile.isStepDone(stepNum)
         val isRecordingThis = recordingStep == stepNum
-        Row(
+        val hasAudioClip = remember(vmStamp, done) { done && VoiceMatchManager.hasStepAudio(ctx, stepNum) }
+        val isPlayingThis = playingAudioStep == stepNum
+        Column(
           modifier =
             Modifier
               .fillMaxWidth()
@@ -1028,51 +1079,109 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                 RoundedCornerShape(14.dp),
               )
               .padding(horizontal = 12.dp, vertical = 10.dp),
-          verticalAlignment = Alignment.CenterVertically,
+          verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-              if (done) {
-                Icon(
-                  Icons.Filled.CheckCircle,
-                  contentDescription = "Step $stepNum Done",
-                  tint = CYBER_GREEN,
-                  modifier = Modifier.size(16.dp),
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (done) {
+                  Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Step $stepNum Done",
+                    tint = CYBER_GREEN,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+                Text(
+                  stepTitles[idx],
+                  color = if (done) CYBER_GREEN else Color(0xFFAAB4D0),
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
                 )
               }
+              Text("“$phrase”", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(
+              onClick = {
+                if (isRecordingThis) VoiceMatchManager.cancelActiveCapture()
+                else startEnrollStep(stepNum)
+              },
+              enabled = (recordingStep == 0 || isRecordingThis) && !testingMatch,
+              modifier = Modifier.heightIn(min = 48.dp).testTag("voice_match_step_${stepNum}_btn"),
+              colors =
+                ButtonDefaults.buttonColors(
+                  containerColor = if (isRecordingThis) CYBER_RED else if (done) CYBER_BLUE else CYBER_PURPLE,
+                ),
+            ) {
+              Icon(
+                imageVector = if (isRecordingThis) Icons.Filled.Stop else Icons.Filled.Mic,
+                contentDescription = if (isRecordingThis) "Stop recording" else "Record step $stepNum",
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(Modifier.width(4.dp))
               Text(
-                stepTitles[idx],
-                color = if (done) CYBER_GREEN else Color(0xFFAAB4D0),
+                text = if (isRecordingThis) "থামান" else if (done) "আবার" else "বলুন",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+          }
+
+          if (hasAudioClip) {
+            val durSec = remember(vmStamp, done) { VoiceMatchManager.stepAudioDurationSec(ctx, stepNum) }
+            Row(
+              modifier =
+                Modifier
+                  .fillMaxWidth()
+                  .heightIn(min = 48.dp)
+                  .testTag("voice_match_audio_play_${stepNum}")
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(if (isPlayingThis) CYBER_CYAN.copy(alpha = 0.18f) else Color(0xFF0A1128))
+                  .border(
+                    1.dp,
+                    if (isPlayingThis) CYBER_CYAN else CYBER_GREEN.copy(alpha = 0.45f),
+                    RoundedCornerShape(10.dp),
+                  )
+                  .clickable(enabled = recordingStep == 0 && !testingMatch) {
+                    if (isPlayingThis) {
+                      playingAudioStep = 0
+                      VoiceMatchManager.stopStepAudio()
+                    } else {
+                      playingAudioStep = stepNum
+                      VoiceMatchManager.playStepAudio(ctx, stepNum) {
+                        if (playingAudioStep == stepNum) playingAudioStep = 0
+                      }
+                    }
+                  }
+                  .padding(horizontal = 10.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = if (isPlayingThis) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                contentDescription =
+                  if (isPlayingThis) "ধাপ $stepNum অডিও থামান" else "ধাপ $stepNum অডিও শুনুন",
+                tint = if (isPlayingThis) CYBER_RED else CYBER_CYAN,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(Modifier.width(8.dp))
+              Text(
+                text = if (isPlayingThis) "আপনার অডিও বাজছে..." else "ধাপ $stepNum — আপনার কণ্ঠ শুনুন",
+                color = if (isPlayingThis) CYBER_CYAN else Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+              )
+              Text(
+                text = "${"%.1f".format(durSec)} সে.",
+                color = CYBER_GREEN,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
               )
             }
-            Text("“$phrase”", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-          }
-          Spacer(Modifier.width(8.dp))
-          Button(
-            onClick = {
-              if (isRecordingThis) VoiceMatchManager.cancelActiveCapture()
-              else startEnrollStep(stepNum)
-            },
-            enabled = (recordingStep == 0 || isRecordingThis) && !testingMatch,
-            modifier = Modifier.testTag("voice_match_step_${stepNum}_btn"),
-            colors =
-              ButtonDefaults.buttonColors(
-                containerColor = if (isRecordingThis) CYBER_RED else if (done) CYBER_BLUE else CYBER_PURPLE,
-              ),
-          ) {
-            Icon(
-              imageVector = if (isRecordingThis) Icons.Filled.Stop else Icons.Filled.Mic,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-              text = if (isRecordingThis) "থামান" else if (done) "আবার" else "বলুন",
-              fontSize = 11.5.sp,
-              fontWeight = FontWeight.Bold,
-            )
           }
         }
       }
@@ -1150,6 +1259,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
           }
           OutlinedButton(
             onClick = {
+              playingAudioStep = 0
               VoiceMatchManager.resetProfile(ctx)
               vmStamp++
               vmFeedback = "ভয়েস ম্যাচ রিসেট করা হয়েছে। আবার ৩ ধাপে সেট করুন।"

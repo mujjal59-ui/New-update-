@@ -114,13 +114,13 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         busy = false
         if (ok) {
           val insight = aiRepo.generateTaskCompletionInsight(title, summary).getOrNull()
-          val msg = insight?.completionAnnouncement ?: "হয়েছে, বস! কাজ শেষ — $title (${elapsed}ms)।"
-          val mot = insight?.motivationalPrompt ?: "দারুণ গতি! এরপর আর কোনো কাজ করবো বস?"
+          val msg = insight?.completionAnnouncement ?: "হয়েছে, বস — $title (${elapsed}ms)।"
+          val mot = insight?.motivationalPrompt ?: "সব সিস্টেম ঠিক আছে।"
           if (!insight?.suggestedNextTasks.isNullOrEmpty()) {
             nextSuggestions = insight!!.suggestedNextTasks
           }
           RiyaState.markTaskCompleted(msg, mot)
-          RiyaVoiceManager.speakUrgent(ctx, "$msg $mot")
+          RiyaVoiceManager.speakUrgent(ctx, msg)
         } else {
           Toast.makeText(ctx, summary, Toast.LENGTH_LONG).show()
         }

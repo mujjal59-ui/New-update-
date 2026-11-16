@@ -84,7 +84,15 @@ object MessageAgent {
       ?: launchByLabel(ctx, app)
   }
 
-  private fun norm(s: String) = s.lowercase().replace(Regex("[\\s._\\-]+"), "")
+  private fun stripInvisible(s: String): String =
+    s.replace("\u200B", "")
+      .replace("\u200C", "")
+      .replace("\u200D", "")
+      .replace("\u200E", "")
+      .replace("\u200F", "")
+      .replace("\uFEFF", "")
+
+  private fun norm(s: String) = stripInvisible(s).lowercase().replace(Regex("[\\s._\\-]+"), "")
 
   private fun rootPkg(acc: RiyaAccessibilityService) =
     acc.rootInActiveWindow?.packageName?.toString() ?: ""
@@ -266,7 +274,8 @@ object MessageAgent {
   }
 
   private fun splitCleanWords(s: String): List<String> =
-    s.lowercase()
+    stripInvisible(s)
+      .lowercase()
       .split(Regex("[\\s.,:/\\-_()]+"))
       .map { it.trim() }
       .filter {
@@ -327,6 +336,80 @@ object MessageAgent {
     }
   }
 
+  fun isLikelyChatHeaderContactText(raw: String): Boolean {
+    val clean = stripInvisible(raw).trim()
+    if (clean.length < 2 || clean.length > 65) return false
+    val lower = clean.lowercase()
+    if (lower.matches(Regex("^\\d{1,2}:\\d{2}.*")) || lower.matches(Regex("^\\d+$"))) return false
+    val blocked =
+      listOf(
+        "last seen",
+        "online",
+        "typing",
+        "active now",
+        "active ",
+        "tap here",
+        "navigate up",
+        "back",
+        "voice call",
+        "video call",
+        "call",
+        "more options",
+        "search",
+        "whatsapp",
+        "messenger",
+        "imo",
+        "chats",
+        "today",
+        "yesterday",
+        "মিউট",
+        "কল",
+        "ভিডিও",
+        "খুঁজুন",
+      )
+    return blocked.none { lower == it || lower.startsWith(it) || (it.length >= 6 && lower.contains(it)) }
+  }
+
+  fun extractOpenChatName(acc: RiyaAccessibilityService): String? {
+    val h = screenH(acc)
+    if (!isChatScreenOpen(acc)) return null
+    val candidates =
+      all(acc)
+        .mapNotNull { n ->
+          if (n.isEditable) return@mapNotNull null
+          val r = bounds(n)
+          if (r.top < (h * 0.025f).toInt() || r.top > (h * 0.24f).toInt() || r.width() <= 0 || r.height() <= 0) {
+            return@mapNotNull null
+          }
+          val t = stripInvisible(n.text?.toString()?.trim().orEmpty())
+          if (!isLikelyChatHeaderContactText(t)) return@mapNotNull null
+          Triple(t, r.top, r.left)
+        }
+        .sortedWith(compareBy<Triple<String, Int, Int>> { it.second }.thenBy { it.third })
+    return candidates.firstOrNull()?.first
+  }
+
+  fun resolveEffectiveContact(requestedContact: String, openChatName: String?): String {
+    val q = requestedContact.trim()
+    val genericRefs =
+      setOf(
+        "",
+        "current",
+        "current chat",
+        "open chat",
+        "খোলা চ্যাট",
+        "বর্তমান চ্যাট",
+        "এখানে",
+        "তাকে",
+        "ওকে",
+        "উনাকে",
+      )
+    if (q.lowercase() in genericRefs && !openChatName.isNullOrBlank()) {
+      return openChatName
+    }
+    return q
+  }
+
   /**
    * Ensures we are either ALREADY inside [contact]'s chat, or navigated back cleanly to the app's main chat list.
    */
@@ -338,8 +421,8 @@ object MessageAgent {
   ): Boolean {
     val allowedPkgs = listOf(app.pkg) + app.fallbackPkgs
     acc.readEntireScreenTree()
-    // Case 1: Target contact's chat was already open (minimized in background) -> use directly!
-    if (headerHas(acc, contact) && isChatScreenOpen(acc)) {
+    // Case 1: Target contact's chat was already open (minimized in background or currently visible) -> use directly!
+    if (isChatScreenOpen(acc) && (headerHas(acc, contact) || extractOpenChatName(acc)?.let { matchesContactName(it, contact) } == true)) {
       return true
     }
 
@@ -361,7 +444,7 @@ object MessageAgent {
         }
         return rootPkg(acc) in allowedPkgs
       }
-      if (headerHas(acc, contact) && isChatScreenOpen(acc)) {
+      if (isChatScreenOpen(acc) && (headerHas(acc, contact) || extractOpenChatName(acc)?.let { matchesContactName(it, contact) } == true)) {
         return true
       }
     }
@@ -372,7 +455,9 @@ object MessageAgent {
     val h = screenH(acc)
     acc.readEntireScreenTree()
     // 0. If already inside target chat, done immediately
-    if (headerHas(acc, contact) && bottomEditable(acc, h) != null) return true
+    if (bottomEditable(acc, h) != null && (headerHas(acc, contact) || extractOpenChatName(acc)?.let { matchesContactName(it, contact) } == true)) {
+      return true
+    }
 
     // 1. First look directly on the visible top chat list (WhatsApp / imo / Messenger main list)
     if (clickRowFor(acc, contact)) return true
@@ -519,13 +604,28 @@ object MessageAgent {
 
   fun headerHas(acc: RiyaAccessibilityService, contact: String): Boolean {
     val h = screenH(acc)
+    val openName = extractOpenChatName(acc)
+    if (openName != null && matchesContactName(openName, contact)) return true
     return all(acc).any { n ->
-      !n.isEditable && bounds(n).top < h * 0.24f && matchesContactName(label(n), contact)
+      !n.isEditable && bounds(n).top < h * 0.25f && matchesContactName(label(n), contact)
     }
   }
 
   private fun isInput(n: AccessibilityNodeInfo): Boolean =
     n.isEditable || (n.className?.toString()?.contains("EditText") == true)
+
+  private fun effectiveInputText(n: AccessibilityNodeInfo?): String {
+    if (n == null) return ""
+    if (Build.VERSION.SDK_INT >= 26 && n.isShowingHintText) return ""
+    val raw = n.text?.toString()?.trim().orEmpty()
+    val hint = if (Build.VERSION.SDK_INT >= 26) n.hintText?.toString()?.trim().orEmpty() else ""
+    if (raw.isEmpty() || (hint.isNotEmpty() && raw.equals(hint, ignoreCase = true))) return ""
+    val lower = raw.lowercase()
+    if (lower in setOf("message", "type a message", "aa", "মেসেজ লিখুন", "মেসেজ", "ask meta ai or search")) {
+      return ""
+    }
+    return raw
+  }
 
   private fun bottomEditable(acc: RiyaAccessibilityService, h: Int): AccessibilityNodeInfo? =
     all(acc).filter { isInput(it) && bounds(it).top > h * 0.45 }.maxByOrNull { bounds(it).top }
@@ -536,6 +636,8 @@ object MessageAgent {
     msg: String,
     h: Int,
   ): Boolean {
+    val cleanMsg = msg.trim()
+    if (cleanMsg.isEmpty()) return false
     acc.readEntireScreenTree()
     var box = bottomEditable(acc, h)
     if (box == null) {
@@ -550,22 +652,53 @@ object MessageAgent {
             ?: it.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
       Thread.sleep(240)
+      acc.readEntireScreenTree()
       box = bottomEditable(acc, h)
     }
     if (box == null) return false
-    setText(box, msg)
-    Thread.sleep(200)
-    val now = bottomEditable(acc, h)?.text?.toString()?.trim() ?: ""
-    if (!now.contains(msg.take(12))) {
+
+    val cleanNorm = norm(cleanMsg)
+    val initialText = effectiveInputText(box)
+    if (initialText.isNotEmpty() && norm(initialText) == cleanNorm) {
+      return true
+    }
+
+    setText(box, cleanMsg)
+    Thread.sleep(240)
+    // Refresh accessibility tree BEFORE inspecting text so we never double-paste on stale node text!
+    acc.readEntireScreenTree()
+    val boxAfterSet = bottomEditable(acc, h)
+    var now = effectiveInputText(boxAfterSet)
+    val nowNorm = norm(now)
+    val prefixNorm = norm(cleanMsg.take(12))
+
+    if (nowNorm.isEmpty() || !nowNorm.contains(prefixNorm)) {
+      if (boxAfterSet != null && now.isNotEmpty()) {
+        setText(boxAfterSet, "")
+        Thread.sleep(100)
+      }
       val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-      cm.setPrimaryClip(ClipData.newPlainText("lxr_ai", msg))
+      cm.setPrimaryClip(ClipData.newPlainText("lxr_ai", cleanMsg))
+      acc.readEntireScreenTree()
       bottomEditable(acc, h)?.let {
         it.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         it.performAction(AccessibilityNodeInfo.ACTION_PASTE)
       }
-      Thread.sleep(240)
+      Thread.sleep(260)
+      acc.readEntireScreenTree()
+      now = effectiveInputText(bottomEditable(acc, h))
     }
-    return (bottomEditable(acc, h)?.text?.toString() ?: "").isNotEmpty()
+
+    // Safety dedupe guard if any Android IME concatenated cleanMsg twice inside composer
+    val dedupCheckNorm = norm(now)
+    if (cleanNorm.length >= 4 && dedupCheckNorm == cleanNorm + cleanNorm) {
+      bottomEditable(acc, h)?.let {
+        setText(it, cleanMsg)
+        Thread.sleep(160)
+      }
+    }
+    acc.readEntireScreenTree()
+    return effectiveInputText(bottomEditable(acc, h)).isNotEmpty()
   }
 
   private fun findSend(acc: RiyaAccessibilityService, box: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -640,20 +773,31 @@ object MessageAgent {
           acc.tapAt(x, y)
         }
       if (diag.succeeded) {
-        Thread.sleep(260)
+        Thread.sleep(280)
         acc.readEntireScreenTree()
-        val left = bottomEditable(acc, h)?.text?.toString()?.trim() ?: ""
+        val left = effectiveInputText(bottomEditable(acc, h))
         if (left.isEmpty()) return "পাঠানো হয়েছে (ইমোজি বাটন এড়িয়ে সঠিক সেন্ড বাটনে)"
       }
     }
 
     val box0 = bottomEditable(acc, h) ?: return "লেখার বক্স হারিয়ে গেছে"
     val boxTop = bounds(box0).top
+    val probe = msg.trim().take(20)
+    val preSendBubbleCount =
+      if (probe.isNotEmpty()) {
+        all(acc).count { n ->
+          val t = n.text?.toString() ?: ""
+          val top = bounds(n).top
+          t.contains(probe) && top > h * 0.14 && top < boxTop
+        }
+      } else 0
+
     var found: AccessibilityNodeInfo? = null
     for (i in 0 until 6) {
       found = findSend(acc, box0)
       if (found != null) break
       Thread.sleep(220)
+      acc.readEntireScreenTree()
     }
     val sendNode = found ?: run {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
@@ -672,32 +816,35 @@ object MessageAgent {
     if (!clicked) clicked = acc.tapAt(sr.exactCenterX(), sr.exactCenterY())
     if (!clicked) return "সেন্ড বাটনে ক্লিক হয়নি"
 
-    val probe = msg.trim().take(20)
+    fun hasConfirmedSendNow(): Boolean {
+      val left = effectiveInputText(bottomEditable(acc, h))
+      if (left.isEmpty()) return true
+      if (probe.isNotEmpty()) {
+        val postCount =
+          all(acc).count { n ->
+            val t = n.text?.toString() ?: ""
+            val top = bounds(n).top
+            t.contains(probe) && top > h * 0.14 && top < boxTop
+          }
+        if (postCount > preSendBubbleCount) return true
+      }
+      return false
+    }
+
     for (i in 0 until 6) {
       Thread.sleep(220)
       acc.readEntireScreenTree()
-      val left = bottomEditable(acc, h)?.text?.toString()?.trim() ?: ""
-      if (left.isEmpty()) return "পাঠানো হয়েছে"
-      if (
-        probe.isNotEmpty() &&
-          all(acc).any { n ->
-            val t = n.text?.toString() ?: ""
-            val top = bounds(n).top
-            t.contains(probe) && top > h * 0.15 && top < boxTop
-          }
-      ) {
-        return "পাঠানো হয়েছে"
-      }
+      if (hasConfirmedSendNow()) return "পাঠানো হয়েছে"
     }
 
+    // Only retry Send if message truly was NOT sent yet
     findSend(acc, box0)?.let { s2 ->
       val r2 = bounds(s2)
       acc.tapAt(r2.exactCenterX(), r2.exactCenterY())
     }
     Thread.sleep(450)
     acc.readEntireScreenTree()
-    val left2 = bottomEditable(acc, h)?.text?.toString()?.trim() ?: ""
-    return if (left2.isEmpty()) "পাঠানো হয়েছে" else "লেখা বক্সে আছে, পাঠানো যায়নি"
+    return if (hasConfirmedSendNow()) "পাঠানো হয়েছে" else "লেখা বক্সে আছে, পাঠানো যায়নি"
   }
 
   fun run(
@@ -709,32 +856,60 @@ object MessageAgent {
   ): String {
     val startMs = System.currentTimeMillis()
     val app = find(appName) ?: return "এই অ্যাপটি চিনতে পারিনি: $appName"
-    if (msg.isBlank()) return "কী লিখবো বলোনি বস"
-    if (!app.isAi && contact.isBlank()) return "কাকে মেসেজ পাঠাবো বলোনি বস"
+    val cleanMsg = msg.trim()
+    if (cleanMsg.isEmpty()) return "কী লিখবো বলোনি বস"
     if (!openApp(ctx, acc, app)) return "${app.label} খুলতে পারিনি বস"
+
+    acc.readEntireScreenTree()
+    val openChatHeader = if (!app.isAi) extractOpenChatName(acc) else null
+    val effectiveContact =
+      if (app.isAi) "" else resolveEffectiveContact(contact, openChatHeader)
+
+    if (!app.isAi && effectiveContact.isBlank()) {
+      return "কাকে মেসেজ পাঠাবো বলোনি বস"
+    }
+
     if (!app.isAi) {
-      prepareChatSurface(ctx, acc, app, contact)
-      if (!openChat(acc, contact)) return "${app.label}-এ '$contact' নামের চ্যাট পাইনি বস"
-      val until = System.currentTimeMillis() + 3000
-      while (System.currentTimeMillis() < until && bottomEditable(acc, screenH(acc)) == null) {
-        Thread.sleep(180)
-      }
-      Thread.sleep(200)
-      acc.readEntireScreenTree()
-      if (!headerHas(acc, contact)) {
-        return "চ্যাট খুলেছি কিন্তু হেডারে '$contact' মিলছে না, তাই পাঠাইনি বস"
+      val alreadyInRightChat =
+        isChatScreenOpen(acc) &&
+          (headerHas(acc, effectiveContact) ||
+            (openChatHeader != null && matchesContactName(openChatHeader, effectiveContact)))
+      if (!alreadyInRightChat) {
+        prepareChatSurface(ctx, acc, app, effectiveContact)
+        if (!openChat(acc, effectiveContact)) {
+          return "${app.label}-এ '$effectiveContact' নামের চ্যাট পাইনি বস"
+        }
+        val until = System.currentTimeMillis() + 3000
+        while (System.currentTimeMillis() < until && bottomEditable(acc, screenH(acc)) == null) {
+          Thread.sleep(180)
+          acc.readEntireScreenTree()
+        }
+        Thread.sleep(220)
+        acc.readEntireScreenTree()
+        if (!headerHas(acc, effectiveContact)) {
+          // Wait briefly for chat header text animation to settle before declaring mismatch
+          val headerUntil = System.currentTimeMillis() + 1200L
+          while (System.currentTimeMillis() < headerUntil && !headerHas(acc, effectiveContact)) {
+            Thread.sleep(180)
+            acc.readEntireScreenTree()
+          }
+          if (!headerHas(acc, effectiveContact)) {
+            return "চ্যাট খুলেছি কিন্তু হেডারে '$effectiveContact' মিলছে না, তাই পাঠাইনি বস"
+          }
+        }
       }
     }
     val h = screenH(acc)
-    if (!writeMessage(ctx, acc, msg, h)) return "${app.label}-এ লেখার বক্স খুঁজে পাইনি বস"
-    val res = sendTyped(acc, app, h, msg)
+    if (!writeMessage(ctx, acc, cleanMsg, h)) return "${app.label}-এ লেখার বক্স খুঁজে পাইনি বস"
+    val res = sendTyped(acc, app, h, cleanMsg)
     val elapsed = System.currentTimeMillis() - startMs
+    val recipientLabel = if (app.isAi) "" else (extractOpenChatName(acc) ?: effectiveContact)
     if (res.contains("পাঠানো হয়েছে")) {
       RiyaState.markTaskCompleted(
-        "হয়েছে, বস! কাজ শেষ — ${app.label}${if (app.isAi) "" else " ($contact)"} এ মেসেজ পাঠানো হয়েছে (${elapsed}ms)।",
-        "দারুণ গতিতে কাজ শেষ! এরপর আর কোনো কাজ করবো বস?",
+        "${app.label}${if (app.isAi) "" else " ($recipientLabel)"}-এ লেখা পাঠানো হয়েছে: \"$cleanMsg\"",
+        "সফলভাবে পাঠানো সম্পন্ন হয়েছে (${elapsed}ms)",
       )
     }
-    return "${app.label}${if (app.isAi) "" else " / $contact"}: $res (${elapsed}ms)"
+    return "${app.label}${if (app.isAi) "" else " / $recipientLabel"}: $res — পাঠানো লেখা: \"$cleanMsg\" (${elapsed}ms)"
   }
 }

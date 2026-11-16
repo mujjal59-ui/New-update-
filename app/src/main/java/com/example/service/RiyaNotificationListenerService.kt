@@ -278,36 +278,35 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             )
             if (sent) {
               RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.AUTO_SENT)
-              val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg)
+              val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg, smartReply)
               val sentToLive = RiyaState.live?.onIncomingMessageReceived(liveMsg, autoSentReply = smartReply) == true
               if (!sentToLive) {
                 RiyaVoiceManager.speakUrgent(
                   ctx,
-                  "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি অটো রিপ্লাই দিয়ে দিয়েছি।",
+                  "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি অটো রিপ্লাইয়ে লিখে পাঠিয়েছি: $smartReply।",
                 )
               }
             } else {
               RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, event, notifId)
             }
           } else {
-            // Announce immediately via system notification, UI card, Live AI voice & TTS!
-            RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, event, notifId)
-            val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg)
+            // Prepare contextual draft reply first (fast timeout) so Boss hears both the incoming text AND prepared reply!
+            val plannedDraft =
+              (kotlinx.coroutines.withTimeoutOrNull(1400L) {
+                aiRepo.generateSmartAutoReply(appLabel, sender, msgText).getOrNull()
+              } ?: immediateTemplate).trim()
+            if (plannedDraft != immediateTemplate) {
+              RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, plannedDraft)
+            }
+            val updatedEvent = event.copy(suggestedReply = plannedDraft)
+            RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, updatedEvent, notifId)
+            val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg, plannedDraft)
             val sentToLive = RiyaState.live?.onIncomingMessageReceived(liveMsg, autoSentReply = null) == true
             if (!sentToLive) {
               RiyaVoiceManager.speakUrgent(
                 ctx,
-                "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি কি উত্তর পাঠাবো? বলুন বস।",
+                "বস, $appLabel-এ $sender মেসেজ পাঠিয়েছেন: $msgText। আমি রিপ্লাই হিসেবে পাঠানোর জন্য তৈরি রেখেছি: $plannedDraft। পাঠিয়ে দেবো কি বস?",
               )
-            }
-
-            // Refine suggested reply in background cleanly for 1-tap / voice approval
-            val smartDraft =
-              kotlinx.coroutines.withTimeoutOrNull(2500L) {
-                aiRepo.generateSmartAutoReply(appLabel, sender, msgText).getOrNull()
-              }
-            if (!smartDraft.isNullOrBlank()) {
-              RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, smartDraft)
             }
           }
         } catch (e: Exception) {
@@ -340,13 +339,13 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           RiyaRuntimeBridge.markSenderReplied("${event.packageName}:${event.senderName}")
           RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.SENT)
           RiyaState.markTaskCompleted(
-            "হয়েছে, বস! কাজ শেষ — ${event.appLabel}-এ ${event.senderName}-কে রিপ্লাই পাঠানো হয়েছে।",
-            "দারুণ হয়েছে বস! এরপর অন্য কোনো কাজ করবো?",
+            "${event.appLabel}-এ ${event.senderName}-কে রিপ্লাই পাঠানো হয়েছে: \"$replyText\"",
+            "মেসেজ পাঠানো সম্পন্ন",
           )
           if (RiyaState.live?.isReady() != true) {
             RiyaVoiceManager.speakUrgent(
               context,
-              "হয়েছে, বস! কাজ শেষ। ${event.appLabel}-এ ${event.senderName}-কে উত্তর পাঠানো হয়েছে।",
+              "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
             )
           }
           return true
@@ -366,7 +365,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           if (RiyaState.live?.isReady() != true) {
             RiyaVoiceManager.speakUrgent(
               context,
-              "হয়েছে, বস! কাজ শেষ। ${event.appLabel}-এ ${event.senderName}-কে উত্তর পাঠানো হয়েছে।",
+              "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
             )
           }
           return true
@@ -385,7 +384,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           if (RiyaState.live?.isReady() != true) {
             RiyaVoiceManager.speakUrgent(
               context,
-              "হয়েছে, বস! ইমোতে ইমোজি বাটন এড়িয়ে সঠিক সেন্ড বাটনে উত্তর পাঠানো হয়েছে।",
+              "বস, ইমোতে ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
             )
           }
           return true
@@ -396,10 +395,12 @@ class RiyaNotificationListenerService : NotificationListenerService() {
       if (eventKey.startsWith("sim_")) {
         RiyaRuntimeBridge.markSenderReplied("${event.packageName}:${event.senderName}")
         RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.SENT)
-        RiyaVoiceManager.speakUrgent(
-          context,
-          "হয়েছে, বস! কাজ শেষ। ${event.appLabel}-এ ${event.senderName}-কে রিপ্লাই পাঠানো হয়েছে।",
-        )
+        if (RiyaState.live?.isReady() != true) {
+          RiyaVoiceManager.speakUrgent(
+            context,
+            "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
+          )
+        }
         return true
       }
 

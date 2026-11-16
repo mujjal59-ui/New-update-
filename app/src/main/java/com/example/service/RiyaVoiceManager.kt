@@ -267,7 +267,8 @@ object RiyaVoiceManager {
           currentRate >= 1.12f -> "Deliver briskly yet clearly."
           else -> "Deliver in a balanced, warm cadence."
         }
-      val promptText = "$styleInstruction $paceHint Speak in natural Bengali (Bangladesh, bn-BD): $cleanText"
+      val promptText =
+        "$styleInstruction $paceHint Match the emotional tone of the content naturally (warm joy and light smile for happy topics, tender softness for sad stories, expressive rhythm for poems or songs). Speak in natural Bengali (Bangladesh, bn-BD): $cleanText"
       val payload =
         JSONObject()
           .put(

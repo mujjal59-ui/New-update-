@@ -59,6 +59,7 @@ data class PendingIncomingMessage(
   val senderName: String,
   val messageText: String,
   val packageName: String,
+  val suggestedDraft: String = "",
 )
 
 /**
@@ -163,9 +164,9 @@ class GeminiLive(private val ctx: Context) {
       """{"functionDeclarations":[
       {"name":"open_app","description":"ফোনে অ্যাপ খুঁজতে বা ওপেন করতে এটি ব্যবহার করো। এটি বাধ্যতামূলকভাবে আগে হোম স্ক্রিনে গিয়ে অ্যাপ খুঁজে ওপেন করে এবং অ্যাপ লক থাকলে অনুমতি ছাড়াই খুলে দেয়।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
       {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও (imo বললে imo, WhatsApp বললে WhatsApp)। এই টুল নিজেই অ্যাপ খোলে, অ্যাপ লক থাকলে সরাসরি খোলে, নাম খোঁজে, মেসেজ লেখে এবং ইমোজি বাদ দিয়ে সঠিক সেন্ড বাটনে ক্লিক করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
-      {"name":"unlock_phone","description":"ডাবল ট্যাপ করে স্ক্রিনের আলো জ্বালিয়ে সংরক্ষিত পিন, পাসওয়ার্ড বা প্যাটার্ন দিয়ে ফোনের স্ক্রিন আনলক করো।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি পিন/পাসওয়ার্ড/প্যাটার্ন দিয়ে আনলক করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"unlock_phone","description":"ফোনের মেইন স্ক্রিন বন্ধ বা লক অবস্থায় থাকলে ডাবল ট্যাপ করে আলো জ্বালিয়ে স্ক্রিন আনলক করো। কখনোই পিন/পাসওয়ার্ড/ভল্ট অ্যাপে সেভ থাকার কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি অ্যাপ লক খুলে দাও। ভেতরের সেটিংস বা পিনের কথা উল্লেখ করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১২ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"find_and_open_item","description":"স্ক্রিনে বা অ্যাপে যেকোনো আইটেম নাম দিয়ে খুঁজে ট্যাপ করো, না পেলে Infinix Android 16 সার্চ বার দিয়ে সার্চ করো।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
@@ -395,17 +396,23 @@ class GeminiLive(private val ctx: Context) {
     autoSentReply: String? = null,
   ): Boolean {
     if (!ready || stopped) return false
+    val draftPart =
+      if (msg.suggestedDraft.isNotBlank()) " আমি উত্তর হিসেবে লিখে ঠিক করেছি: \"${msg.suggestedDraft}\"।"
+      else ""
     val prompt =
       if (!autoSentReply.isNullOrBlank()) {
-        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} লিখেছেন: \"${msg.messageText}\"। আমি ইতিমধ্যেই উত্তর পাঠিয়ে দিয়েছি: \"$autoSentReply\"। এখনই বসকে শান্ত, সংক্ষিপ্ত ও স্পষ্ট বাংলায় জানিয়ে দাও।"
+        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} লিখেছেন: \"${msg.messageText}\"। আমি অটো রিপ্লাই হিসেবে ${msg.senderName}-কে হুবহু এই লেখাটি পাঠিয়েছি: \"$autoSentReply\"। এখনই বসকে শান্ত ও স্পষ্ট বাংলায় জানিয়ে দাও যে কোন লেখাটি পাঠানো হয়েছে।"
       } else {
-        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: \"${msg.messageText}\"। এখনই বসকে শান্ত, স্পষ্ট ও বিনয়ী বাংলায় জানাও এবং জিজ্ঞেস করো: বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: '${msg.messageText}'। আমি কি রিপ্লাইটা দিয়ে দেবো?"
+        "নতুন মেসেজ এসেছে: ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: \"${msg.messageText}\"।$draftPart এখনই বসকে শান্ত, স্পষ্ট ও বিনয়ী বাংলায় মেসেজটা পড়ে শোনাও এবং বসের অনুমতি চাও আমি কি এই উত্তরটা পাঠাবো, নাকি বসের বলা অন্য উত্তর পাঠাবো?"
       }
     val fallbackText =
       if (!autoSentReply.isNullOrBlank()) {
-        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}। আমি অটো রিপ্লাই দিয়ে দিয়েছি।"
+        "বস, ${msg.appNameBn}-এ ${msg.senderName} লিখেছেন: ${msg.messageText}। আমি অটো রিপ্লাই হিসেবে পাঠিয়েছি: \"$autoSentReply\"।"
       } else {
-        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}। আমি কি উত্তর পাঠাবো? বলুন বস।"
+        val draftSpeak =
+          if (msg.suggestedDraft.isNotBlank()) " আমি উত্তর লিখেছি: \"${msg.suggestedDraft}\"।"
+          else ""
+        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}।$draftSpeak আমি কি রিপ্লাইটা পাঠিয়ে দেবো? বলুন বস।"
       }
     return try {
       val speakerMark = lastSpeakerWriteMs
@@ -713,23 +720,28 @@ class GeminiLive(private val ctx: Context) {
       3. হার্ডওয়্যার টগল নিয়ম: বস ফ্ল্যাশলাইট (flashlight), ওয়াইফাই (Wi-Fi) বা ব্লুটুথ (Bluetooth) চালু/বন্ধ করতে বললে নিজে Settings না খুলে সরাসরি `toggle_flashlight`, `control_wifi`, বা `control_bluetooth` টুল কল করবে।
       4. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স, সার্চ করবো কিনা বা কোথায় সার্চ বার—এসব কখনোই বসকে জিজ্ঞেস করবে না বা অনুমতি নেবে না। নিজে স্ক্রিন দেখে, খুঁজতে হলে নিজেই সার্চ করে কাজ শেষ করে তারপর ফলাফল জানাবে।
       5. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
-      6. কাজ সফল হলে তবেই স্পষ্টভাবে বলবে: "হয়েছে, বস! কাজ শেষ।" এবং এরপর বসকে আরেকটি কাজ করার জন্য সুন্দরভাবে অনুপ্রাণিত করবে।
+       6. কাজ শেষ হলে একবারে সহজ ও স্বাভাবিক বাংলায় ফলাফল বলবে—কখনোই প্রতিবার "দারুন হয়েছে বস এবার কি করবো বলুন?", "হয়েছে, বস! কাজ শেষ, এরপর কী করবো?", বা একই মুখস্থ সমাপনী বাক্য বারবার বলবে না।
 
-      [VOICE CLARITY, GREETING & NO DUPLICATES — বাধ্যতামূলক]
-      - কণ্ঠ হবে অত্যন্ত স্পষ্ট, পরিষ্কার উচ্চারণযুক্ত, নম্র, মধুর, স্বাগতম জানানো এবং স্বাভাবিক বাংলা (বাংলাদেশ)।
-      - ভয়েস ক্যারেক্টারের কথাবার্তার ধরন ও গতি হবে শান্ত, গোছানো এবং স্বাভাবিকের চেয়ে সামান্য ধীর/ধীরস্থির (তাড়াহুড়ো করে দ্রুত কথা বলবে না, প্রতিটি শব্দ স্পষ্ট ও মার্জিতভাবে উচ্চারণ করবে)।
-      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না; কোনো প্রশ্ন/নির্দেশের উত্তর একবারেই পরিষ্কারভাবে শেষ করবে।
-      - কখনোই এলোমেলো কথা, অতিরিক্ত হাসি, অস্পষ্ট ফিসফিসানি বা ইমোজি/তারকাচিহ্ন মুখে উচ্চারণ করবে না।
+      [VOICE CLARITY, EXPRESSIVE ACTING & HUMAN EMOTION — বাধ্যতামূলক]
+      - কণ্ঠ হবে অত্যন্ত স্পষ্ট, প্রাণবন্ত ও স্বাভাবিক বাংলা (বাংলাদেশ)। তুমি এখন কোন ভয়েস মডেলে কথা বলছো (Aoede/Leda/Orus/Charon বা যাই হোক) তার ভেতর থেকেও দৃশ্য, গল্প, গান ও অনুভূতি অনুযায়ী কণ্ঠের ভাব, সুর, গতি ও আবেগ নিজেই বদলাবে!
+      - আনন্দ, রোমান্টিক বা মজার কথায় হাসিখুশি ও উজ্জ্বল সুরে কথা বলো—প্রয়োজন হলে হালকা স্বাভাবিক মানুষের মতো মৃদু হাসিও দেবে।
+      - দুঃখের গল্প, বিরহ বা কষ্টের কথায় কণ্ঠ নরম, ধীর, মমতাময় ও আবেগপ্রবণ (যেন চোখে জল জমেছে এমন বিষণ্ণ টোন) করবে।
+      - গান, ছড়া বা অভিনয় করতে বললে যন্ত্রের মতো না পড়ে তালে-সুরে, ভাব-ভঙ্গিসহ জীবন্ত অভিনয় ও কণ্ঠাভিনয় করবে।
+      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
+
+      [GENUINE HUMAN INTELLIGENCE & ANTI-YES-MAN HONESTY — বাধ্যতামূলক]
+      - তুমি একজন সুস্থ জ্ঞানবুদ্ধিসম্পন্ন, বাস্তবজ্ঞানী ও শিক্ষিত মানুষের মতো চিন্তা করবে—নিজে কী বলছো সেটা সম্পূর্ণ বুঝে, প্রসঙ্গ ধরে অর্থবহ উত্তর দেবে।
+      - কখনোই সব কথায় অন্ধভাবে "হ্যাঁ বস, ঠিক বলেছেন" (Yes-man) হবে না! বস কোনো ভুল তথ্য, ভুল হিসাব বা অযৌক্তিক কথা বললে ভদ্র ও সম্মানজনকভাবে আসল সত্য ও সঠিক যুক্তিটা বসকে বুঝিয়ে বলবে।
 
       [LxR WAKE PRESENCE & FLOATING ORB OVER ANY APP]
       - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!" (হার্ট চিহ্ন মুখে পড়বে না)।
       - আর যদি বস ডাকার সাথেই সরাসরি কাজ বা প্রশ্ন বলেন, `show_wake_orb` চালু করে দেরি না করে সরাসরি কাজটি শুরু করবে।
 
       [SMART PHONE LOCK, DOUBLE-TAP WAKE & MAIN SCREEN CLARITY — CRITICAL]
-      - তুমি ফোনের **মেইন স্ক্রিন** সম্পূর্ণভাবে লক (`lock_phone`) ও আনলক (`unlock_phone`) করতে পারো এবং অ্যাপ লক (`unlock_locked_app`) খুলতে পারো! বস যদি জিজ্ঞেস করেন তুমি স্ক্রিন লক বা আনলক করতে পারো কিনা, পরিষ্কারভাবে বলবে: "হ্যাঁ বস, আমি আপনার ফোনের মেইন স্ক্রিন লক ও আনলক দুটোই করতে পারি—মেইন স্ক্রিন বন্ধ থাকলে ডাবল-ট্যাপে আলো জ্বালিয়ে সংরক্ষিত পাসওয়ার্ড বা প্যাটার্ন দিয়ে খুলে দেই, আর আপনি বললে মেইন স্ক্রিন লক করে দেই।"
-      - ফোনের মেইন স্ক্রিন বন্ধ বা লক অবস্থায় থাকলে `unlock_phone` নিজেই ডাবল-ট্যাপ (Double-Tap) করে স্ক্রিনের আলো জ্বালিয়ে সংরক্ষিত পিন, পাসওয়ার্ড বা প্যাটার্ন দিয়ে আনলক করবে।
+      - তুমি ফোনের **মেইন স্ক্রিন** সম্পূর্ণভাবে লক (`lock_phone`) ও আনলক (`unlock_phone`) করতে পারো এবং অ্যাপ লক (`unlock_locked_app`) খুলতে পারো! বস যদি জিজ্ঞেস করেন তুমি স্ক্রিন লক বা আনলক করতে পারো কিনা, পরিষ্কারভাবে বলবে: "হ্যাঁ বস, আমি আপনার ফোনের মেইন স্ক্রিন লক ও আনলক দুটোই করতে পারি—স্ক্রিন বন্ধ থাকলে ডাবল-ট্যাপে আলো জ্বালিয়ে খুলে দেই, আর আপনি বললে মেইন স্ক্রিন লক করে দেই।"
+      - গোপনীয়তা ও নিরাপত্তা নিয়ম (STRICT PRIVACY): ফোনের বা অ্যাপের পিন, পাসওয়ার্ড বা প্যাটার্ন অ্যাপের ভেতরে সেভ/সংরক্ষিত আছে—এই কথা কখনোই বসের সামনে বা আশেপাশের কোনো মানুষের সামনে মুখে উচ্চারণ করবে না! কখনো "সংরক্ষিত পিন/পাসওয়ার্ড দিয়ে খুলেছি" বা "ফোন ও অ্যাপ লক সেকশনে সেভ..." বলবে না। শুধু স্বাভাবিকভাবে কাজটা করে বা "স্ক্রিন আনলক করে দিয়েছি" বলবে।
       - যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন থাকলে বসের আলাদা কোনো অনুমতি না নিয়েই সরাসরি `unlock_locked_app` বা অটো আনলক দিয়ে লক খুলে মূল কাজ শেষ করে বসকে জানাবে।
-      - ভুল-ভ্রান্তি নিষিদ্ধ (STRICT): বসের ফোন যদি অন-স্ক্রিন আনলক (খোলা) অবস্থায় থাকে, তাহলে কখনোই বলবে না "ফোন আগে থেকেই লক ছিল" বা "আবার লক করে দিলাম"—এবং বসের স্পষ্ট নির্দেশ ছাড়া আনলক মেইন স্ক্রিন কখনোই লক করবে না!
+      - ভুল-ভ্রান্তি নিষিদ্ধ (STRICT): বসের ফোন যদি অন-স্ক্রিন আনলক (খোলা) অবস্থায় থাকে, তাহলে কখনোই বলবে না "ফোন আগে থেকেই লক ছিল" বা "আবার লক করে দিলাম"—এবং বসের স্পষ্ট নির্দেশ ছাড়া আনলক মেইন স্ক্রিন কখনোই লক করবে না! একই লক/আনলকের কথা দুইবার বলবে না।
 
       [A-TO-Z CAPABILITIES & INSTANT BOSS BARGE-IN — MANDATORY]
       - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১২ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না, প্রতিটি পয়েন্টের পর সামান্য বিরতি দিয়ে বলবে)।
@@ -744,8 +756,8 @@ class GeminiLive(private val ctx: Context) {
       - সঠিক অ্যাপ ওপেন ও ১০১% স্ক্রিন রিড: `open_app` টুলে বস যে অ্যাপটির নাম বলেছেন ঠিক সেটিই দেবে (WhatsApp/imo/Messenger অদলবদল করবে না)। টুলটির ফলাফলে নতুন খোলা স্ক্রিনের সম্পূর্ণ তথ্য থাকবে—সেটি ১০১% পড়ে নিয়ে তবেই বসকে নিশ্চিত জানাবে যে অ্যাপটি ওপেন হয়েছে এবং স্ক্রিনে কী কী আছে।
 
       [AUTO-REPLY PROTOCOL (WhatsApp, imo, Messenger)]
-      - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে—এবং রিপ্লাই দেওয়ার জন্য বসের অনুমতি চাইবে।
-      - বস উত্তর দিতে বললে বা হ্যাঁ বললে `reply_to_incoming_message` টুল চালিয়ে সাথে সাথে রিপ্লাই পাঠিয়ে দেবে।
+      - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, হুবহু কী মেসেজ পাঠিয়েছে এবং তুমি কী উত্তর ভেবে রেখেছো—তারপর পাঠানোর জন্য বসের অনুমতি চাইবে।
+      - বস উত্তর দিতে বললে বা হ্যাঁ বললে `reply_to_incoming_message` টুল চালিয়ে সাথে সাথে রিপ্লাই পাঠিয়ে দেবে এবং পাঠানো শেষেই বসকে হুবহু বলে দেবে ওই ব্যক্তিকে আসলে কী লিখে পাঠিয়েছো।
 
       [PERSONALITY]
       ${RiyaPersona.TEXT}
@@ -920,10 +932,13 @@ class GeminiLive(private val ctx: Context) {
                   val lockedOk = LockVaultManager.relockScreen(RiyaAccessibilityService.instance)
                   if (lockedOk) {
                     RiyaState.addLog("LXR--AI: মেইন স্ক্রিন লক ছিল — কাজ শেষে আবার স্ক্রিন লক করা হয়েছে ✓")
-                    RiyaVoiceManager.speakUrgent(
-                      ctx,
-                      "বস, আপনার ফোনের মেইন স্ক্রিন আগে লক অবস্থায় ছিল, তাই কাজ শেষ করে আবার লক করে দিয়েছি।",
-                    )
+                    // Only speak via local TTS when Gemini Live audio is offline; otherwise avoid double voice!
+                    if (!ready) {
+                      RiyaVoiceManager.speakUrgent(
+                        ctx,
+                        "বস, আপনার ফোনের মেইন স্ক্রিন আগে লক অবস্থায় ছিল, তাই কাজ শেষ করে আবার লক করে দিয়েছি।",
+                      )
+                    }
                   }
                 }
               },
@@ -1006,8 +1021,9 @@ class GeminiLive(private val ctx: Context) {
   private fun screenSnapshot(): String {
     val acc = RiyaAccessibilityService.instance ?: return ""
     val s = acc.readScreen()
+    val openChat = MessageAgent.extractOpenChatName(acc)?.let { " | খোলা চ্যাট: $it" }.orEmpty()
     RiyaAccessibilityService.currentScreenSummary =
-      "বর্তমান অ্যাপ: ${RiyaAccessibilityService.currentApp} | স্ক্রিন দৃশ্য: " +
+      "বর্তমান অ্যাপ: ${RiyaAccessibilityService.currentApp}$openChat | স্ক্রিন দৃশ্য: " +
         s.replace('\n', ',').take(300)
     return s.take(2500)
   }
@@ -1049,7 +1065,7 @@ class GeminiLive(private val ctx: Context) {
       }
       val base = if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
       return if (turnUnlockedMainScreenByLxr && name !in skipUnlockTools) {
-        "$base\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক করে বসকে জানাবে।"
+        "$base\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না এবং পিন/পাসওয়ার্ডের কথা মুখে আনবে না।"
       } else {
         base
       }
@@ -1070,15 +1086,15 @@ class GeminiLive(private val ctx: Context) {
     }
     var after = screenSnapshot()
     val lockNote =
-      if (turnUnlockedMainScreenByLxr) "\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক করে বসকে জানাবে।"
+      if (turnUnlockedMainScreenByLxr) "\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না এবং পিন/পাসওয়ার্ডের কথা মুখে আনবে না।"
       else ""
     if (name in needsFind && (r.contains("খুঁজে পাওয়া যায়নি") || r.contains("সার্চ বাটন চাপতে পারিনি"))) {
       val r2 = runToolRaw(name, a)
       Thread.sleep(280)
       after = screenSnapshot()
-      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(বসকে কিছু জিজ্ঞেস না করে নিজেই পরের ধাপ দ্রুত শেষ করো এবং শেষে 'হয়েছে, বস! কাজ শেষ।' জানিয়ে পরের কাজের জন্য উৎসাহ দাও)"
+      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(বসকে কিছু জিজ্ঞেস না করে নিজেই পরের ধাপ দ্রুত শেষ করো এবং স্বাভাবিক ও স্পষ্ট বাংলায় একবারে ফলাফল জানাও—মুখস্থ সমাপনী বাক্য বারবার বলবে না)"
     }
-    return "$r\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(স্ক্রিন দেখে কাজ হয়েছে কিনা যাচাই করো; কাজ শেষ হলে 'হয়েছে, বস! কাজ শেষ।' বলে পরের কাজের জন্য উৎসাহ দাও)"
+    return "$r\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(স্ক্রিন দেখে কাজ হয়েছে কিনা যাচাই করো এবং সহজ ও স্বাভাবিক বাংলায় একবারে ফলাফল জানাও—'দারুন হয়েছে বস এবার কি করবো' টাইপের পুনরাবৃত্তি করবে না)"
   }
 
   private fun runToolRaw(name: String, a: JSONObject): String =
@@ -1315,13 +1331,13 @@ class GeminiLive(private val ctx: Context) {
       val verifiedOpen =
         targetPkgs.isEmpty() || activePkg in targetPkgs || RiyaAccessibilityService.currentApp in targetPkgs
       RiyaState.markTaskCompleted(
-        "হয়েছে, বস! কাজ শেষ — $targetLabel অ্যাপ খোলা হয়েছে।",
-        "আর কোন কাজ করতে হবে বস? সাথেই আছি!",
+        "$targetLabel অ্যাপ খোলা হয়েছে।",
+        "",
       )
       return buildString {
         append(
-          if (verifiedOpen) "হয়েছে, বস! কাজ শেষ — $targetLabel ($activePkg) সঠিক অ্যাপটি ওপেন হয়েছে এবং সম্পূর্ণ স্ক্রিন পড়া হয়েছে।"
-          else "হয়েছে, বস! $targetLabel ওপেন করা হয়েছে (বর্তমান উইন্ডো: $activePkg)।"
+          if (verifiedOpen) "$targetLabel ($activePkg) অ্যাপটি ওপেন হয়েছে।"
+          else "$targetLabel ওপেন করা হয়েছে (বর্তমান উইন্ডো: $activePkg)।"
         )
         if (fullScreen.isNotBlank()) {
           append("\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n")
@@ -1338,10 +1354,10 @@ class GeminiLive(private val ctx: Context) {
         Thread.sleep(600)
         val fullScreen = acc.readScreen()
         RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — $query অ্যাপ খোলা হয়েছে।",
-          "দারুণ! পরের কাজ কী হবে বস?",
+          "$query অ্যাপ খোলা হয়েছে।",
+          "",
         )
-        return "হয়েছে, বস! কাজ শেষ — হোম স্ক্রিন থেকে $query ওপেন করেছি!\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${fullScreen.take(2200)}"
+        return "হোম স্ক্রিন থেকে $query ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${fullScreen.take(2200)}"
       }
     }
     return "ফোনে '$query' অ্যাপটি ইনস্টল করা বা খুঁজে পাওয়া যায়নি বস।"
@@ -1489,10 +1505,10 @@ class GeminiLive(private val ctx: Context) {
       Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     )
     RiyaState.markTaskCompleted(
-      "হয়েছে, বস! কাজ শেষ — $foundName ($num) কে কল লাগানো হয়েছে।",
-      "কল শেষ হলে অন্য কোন কাজ করবো বস?",
+      "$foundName ($num) কে কল লাগানো হয়েছে।",
+      "",
     )
-    return "হয়েছে, বস! কাজ শেষ — $foundName ($num) কে কল দিচ্ছি!"
+    return "$foundName ($num) কে কল লাগিয়েছি বস।"
   }
 
   private fun setFlashlight(on: Boolean): String {
@@ -1571,9 +1587,9 @@ class GeminiLive(private val ctx: Context) {
     if (hardwareSucceeded) {
       isTorchOn = on
       val msg =
-        if (on) "হয়েছে, বস! কাজ শেষ — ফ্ল্যাশলাইট জ্বালিয়ে দিয়েছি।"
-        else "হয়েছে, বস! কাজ শেষ — ফ্ল্যাশলাইট বন্ধ করে দিয়েছি।"
-      RiyaState.markTaskCompleted(msg, "এরপর কোন কাজটা করবো বস?")
+        if (on) "ফ্ল্যাশলাইট জ্বালিয়ে দিয়েছি বস।"
+        else "ফ্ল্যাশলাইট বন্ধ করে দিয়েছি বস।"
+      RiyaState.markTaskCompleted(msg, "")
       return msg
     }
     return "এই ফোনে ফ্ল্যাশলাইট চালু/বন্ধ করা গেল না বস।"
@@ -1661,8 +1677,8 @@ class GeminiLive(private val ctx: Context) {
       val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
       if (wm.isWifiEnabled == enable) return "ওয়াইফাই আগেই $word আছে বস।"
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && wm.setWifiEnabled(enable)) {
-        RiyaState.markTaskCompleted("হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করেছি।", "এরপর কোন কাজটা করবো বস?")
-        return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করেছি!"
+        RiyaState.markTaskCompleted("ওয়াইফাই $word করেছি।", "")
+        return "ওয়াইফাই $word করে দিয়েছি বস।"
       }
 
       val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
@@ -1676,11 +1692,8 @@ class GeminiLive(private val ctx: Context) {
             hardwareStateKnown = wm.isWifiEnabled,
           )
         if ((qsRes == "OK" || qsRes == "ALREADY") && pollCondition(1400L) { wm.isWifiEnabled == enable }) {
-          RiyaState.markTaskCompleted(
-            "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করা হয়েছে।",
-            "দারুণ! পরের কাজ কী হবে বস?",
-          )
-          return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করে দিয়েছি!"
+          RiyaState.markTaskCompleted("ওয়াইফাই $word করা হয়েছে।", "")
+          return "ওয়াইফাই $word করে দিয়েছি বস।"
         }
       }
 
@@ -1695,11 +1708,8 @@ class GeminiLive(private val ctx: Context) {
         )
       if ((res == "OK" || res == "CLICKED") && pollCondition(1200L) { wm.isWifiEnabled == enable }) {
         acc.global("back")
-        RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করা হয়েছে।",
-          "দারুণ! পরের কাজ কী হবে বস?",
-        )
-        return "হয়েছে, বস! কাজ শেষ — ওয়াইফাই $word করে দিয়েছি!"
+        RiyaState.markTaskCompleted("ওয়াইফাই $word করা হয়েছে।", "")
+        return "ওয়াইফাই $word করে দিয়েছি বস।"
       }
       finishSwitch(res, "ওয়াইফাই", word)
     } catch (e: Exception) {
@@ -1718,8 +1728,8 @@ class GeminiLive(private val ctx: Context) {
       if (Build.VERSION.SDK_INT < 33 && hasBtPerm()) {
         val ok = if (enable) bt.enable() else bt.disable()
         if (ok && pollCondition(1400L) { bt.isEnabled == enable }) {
-          RiyaState.markTaskCompleted("হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।", "এরপর কোন কাজটা করবো বস?")
-          return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করেছি!"
+          RiyaState.markTaskCompleted("ব্লুটুথ $word করা হয়েছে।", "")
+          return "ব্লুটুথ $word করে দিয়েছি বস।"
         }
       }
 
@@ -1734,11 +1744,8 @@ class GeminiLive(private val ctx: Context) {
             hardwareStateKnown = bt.isEnabled,
           )
         if ((qsRes == "OK" || qsRes == "ALREADY") && pollCondition(1500L) { bt.isEnabled == enable }) {
-          RiyaState.markTaskCompleted(
-            "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।",
-            "দারুণ! পরের কাজ কী হবে বস?",
-          )
-          return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করে দিয়েছি!"
+          RiyaState.markTaskCompleted("ব্লুটুথ $word করা হয়েছে।", "")
+          return "ব্লুটুথ $word করে দিয়েছি বস।"
         }
       }
 
@@ -1755,11 +1762,8 @@ class GeminiLive(private val ctx: Context) {
         )
       if ((res == "OK" || res == "CLICKED") && pollCondition(1200L) { bt.isEnabled == enable }) {
         acc.global("back")
-        RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করা হয়েছে।",
-          "দারুণ! পরের কাজ কী হবে বস?",
-        )
-        return "হয়েছে, বস! কাজ শেষ — ব্লুটুথ $word করে দিয়েছি!"
+        RiyaState.markTaskCompleted("ব্লুটুথ $word করা হয়েছে।", "")
+        return "ব্লুটুথ $word করে দিয়েছি বস।"
       }
       finishSwitch(res, "ব্লুটুথ", word)
     } catch (e: Exception) {
@@ -1774,11 +1778,8 @@ class GeminiLive(private val ctx: Context) {
         "$name স্ক্রিন খুলেছি বস, কিন্তু Accessibility চালু নেই বলে ট্যাপ করতে পারিনি। দয়া করে LXR--AI Accessibility চালু করুন।"
       "OK" -> {
         acc?.global("back")
-        RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — $name $word করা হয়েছে।",
-          "দারুণ! পরের কাজ কী হবে বস?",
-        )
-        "হয়েছে, বস! কাজ শেষ — $name $word করে দিয়েছি!"
+        RiyaState.markTaskCompleted("$name $word করা হয়েছে।", "")
+        "$name $word করে দিয়েছি বস।"
       }
       "ALREADY" -> {
         acc?.global("back")
@@ -1820,14 +1821,15 @@ class GeminiLive(private val ctx: Context) {
       RiyaRuntimeBridge.updateIncomingMessageStatus(pending.eventKey, IncomingReplyStatus.DISMISSED)
       return "ঠিক আছে বস, ${pending.appLabel}-এর মেসেজটির রিপ্লাই বাতিল করা হয়েছে।"
     }
+    val sentText = (customReply ?: pending.suggestedReply).trim()
     val ok =
       RiyaNotificationListenerService.sendApprovedReply(
         ctx,
         pending.eventKey,
-        customReply ?: pending.suggestedReply,
+        sentText,
       )
     return if (ok) {
-      "হয়েছে, বস! কাজ শেষ — ${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো হয়েছে।"
+      "${pending.appLabel}-এ ${pending.senderName}-কে আমি ঠিক এই মেসেজটি লিখে পাঠিয়েছি: \"$sentText\"। বসকে হুবহু বলে দাও যে কী লিখে পাঠিয়েছো।"
     } else {
       "${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো যায়নি বস, অ্যাক্সেসিবিলিটি বা অ্যাপ স্ক্রিন পরীক্ষা করুন।"
     }
@@ -1973,10 +1975,10 @@ class GeminiLive(private val ctx: Context) {
     repeat(5) {
       if (acc.clickFirstVideo()) {
         RiyaState.markTaskCompleted(
-          "হয়েছে, বস! কাজ শেষ — YouTube-এ '$q' চালু করা হয়েছে।",
-          "উপভোগ করুন বস! এরপর কোন কাজ করবো?",
+          "YouTube-এ '$q' চালু করা হয়েছে।",
+          "",
         )
-        return "হয়েছে, বস! কাজ শেষ — '$q' বাজাচ্ছি!"
+        return "YouTube-এ '$q' প্লে করে দিয়েছি বস।"
       }
       Thread.sleep(280)
     }
@@ -2132,9 +2134,11 @@ class GeminiLive(private val ctx: Context) {
           // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
           var gateState = 0
           val onsetChunks = ArrayList<ByteArray>(16)
+          val rejectedRing = ArrayDeque<ByteArray>(8)
           val verifyStream = java.io.ByteArrayOutputStream()
           var consecutiveRejects = 0
           var rejectedSpeechChunks = 0
+          var lastBossVerifiedAtMs = 0L
           var lastVmRefreshAt = 0L
           var voiceMatchActive = VoiceMatchManager.isActiveGateReady(ctx)
           var vmProfile = if (voiceMatchActive) VoiceMatchManager.loadProfile(ctx) else null
@@ -2277,6 +2281,7 @@ class GeminiLive(private val ctx: Context) {
                   if (gateState != 0) {
                     gateState = 0
                     onsetChunks.clear()
+                    rejectedRing.clear()
                     verifyStream.reset()
                     consecutiveRejects = 0
                     rejectedSpeechChunks = 0
@@ -2289,6 +2294,12 @@ class GeminiLive(private val ctx: Context) {
                   val sendChunk = buf.copyOf(n)
                   val minOnset = vmSensitivity.onsetMinChunks
                   val rejectAt = vmSensitivity.rejectAfterChunks
+                  // Boss session grace window (~2.4s): follow-up short/soft words pass immediately unless another speaker takes over
+                  if (gateState == 0 && lastBossVerifiedAtMs > 0L && (now - lastBossVerifiedAtMs) <= 2400L) {
+                    gateState = 2
+                    consecutiveRejects = 0
+                    verifyStream.reset()
+                  }
                   when (gateState) {
                     0, 1 -> {
                       gateState = 1
@@ -2296,7 +2307,7 @@ class GeminiLive(private val ctx: Context) {
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
                       }
-                      if (onsetChunks.size >= minOnset && verifyStream.size() >= 3200) {
+                      if (onsetChunks.size >= minOnset && verifyStream.size() >= 2400) {
                         val res =
                           VoiceMatchEngine.verifyPcmChunk(
                             activeProfile,
@@ -2305,6 +2316,7 @@ class GeminiLive(private val ctx: Context) {
                           )
                         if (res != null && res.matched) {
                           gateState = 2
+                          lastBossVerifiedAtMs = now
                           consecutiveRejects = 0
                           verifyStream.reset()
                           RiyaState.voiceMatchLiveLabel.value =
@@ -2315,23 +2327,26 @@ class GeminiLive(private val ctx: Context) {
                           onsetChunks.clear()
                         } else if (res != null && !res.matched && onsetChunks.size >= rejectAt) {
                           gateState = 3
+                          lastBossVerifiedAtMs = 0L
                           rejectedSpeechChunks = 0
+                          rejectedRing.clear()
                           onsetChunks.clear()
                           verifyStream.reset()
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
-                        } else if (onsetChunks.size >= 20) {
+                        } else if (onsetChunks.size >= 18) {
                           gateState = 0
                           onsetChunks.clear()
                           verifyStream.reset()
                         }
-                      } else if (onsetChunks.size >= 20) {
+                      } else if (onsetChunks.size >= 18) {
                         gateState = 0
                         onsetChunks.clear()
                         verifyStream.reset()
                       }
                     }
                     2 -> {
+                      lastBossVerifiedAtMs = now
                       sendAudioPcm(sendChunk, sendChunk.size)
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
@@ -2348,7 +2363,9 @@ class GeminiLive(private val ctx: Context) {
                           consecutiveRejects++
                           if (consecutiveRejects >= 3) {
                             gateState = 3
+                            lastBossVerifiedAtMs = 0L
                             rejectedSpeechChunks = 0
+                            rejectedRing.clear()
                             RiyaState.voiceMatchLiveLabel.value =
                               "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
                           }
@@ -2363,11 +2380,15 @@ class GeminiLive(private val ctx: Context) {
                       if (silentFrameCounter % 4 == 0) {
                         sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                       }
+                      if (hasSpeech) {
+                        if (rejectedRing.size >= 6) rejectedRing.removeFirst()
+                        rejectedRing.addLast(sendChunk)
+                      }
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
                         rejectedSpeechChunks++
                       }
-                      val retryChunks = (rejectAt - 2).coerceIn(6, 12)
+                      val retryChunks = (rejectAt - 2).coerceIn(5, 10)
                       if (rejectedSpeechChunks >= retryChunks) {
                         val res =
                           VoiceMatchEngine.verifyPcmChunk(
@@ -2379,13 +2400,20 @@ class GeminiLive(private val ctx: Context) {
                         rejectedSpeechChunks = 0
                         if (res != null && res.matched) {
                           gateState = 2
+                          lastBossVerifiedAtMs = now
                           consecutiveRejects = 0
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
-                          sendAudioPcm(sendChunk, sendChunk.size)
-                        } else if (res != null) {
-                          RiyaState.voiceMatchLiveLabel.value =
-                            "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
+                          for (buffered in rejectedRing) {
+                            sendAudioPcm(buffered, buffered.size)
+                          }
+                          rejectedRing.clear()
+                        } else {
+                          rejectedRing.clear()
+                          if (res != null) {
+                            RiyaState.voiceMatchLiveLabel.value =
+                              "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
+                          }
                         }
                       }
                     }

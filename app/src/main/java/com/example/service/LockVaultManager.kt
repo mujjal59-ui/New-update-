@@ -141,6 +141,40 @@ object LockVaultManager {
       textDump.contains("emergency")
   }
 
+  fun isScreenUnlockedNow(
+    ctx: Context,
+    acc: RiyaAccessibilityService?,
+    lockType: ScreenLockType = Store.phoneLockType(ctx),
+  ): Boolean {
+    return try {
+      val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      val interactive = pm?.isInteractive ?: true
+      if (!interactive) return false
+      if (km != null && !km.isKeyguardLocked) return true
+      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()?.trim()?.lowercase().orEmpty()
+      val keyguardUi = isSystemKeyguardUiShowing(acc) || hasBouncerUiShowing(acc, lockType)
+      if (!evaluateMainScreenLocked(
+          screenInteractive = interactive,
+          keyguardLocked = km?.isKeyguardLocked == true,
+          deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else (km?.isKeyguardLocked == true),
+          activeWindowPkg = activePkg,
+          lockScreenVisibleInUi = keyguardUi,
+        )
+      ) {
+        return true
+      }
+      // On Android 16 / XOS launcher transition, KeyguardManager flag can lag behind real Home/App screen
+      activePkg.isNotEmpty() &&
+        activePkg != "com.android.systemui" &&
+        !activePkg.contains("keyguard") &&
+        !activePkg.contains("lockscreen") &&
+        !keyguardUi
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
   fun isDeviceLocked(ctx: Context): Boolean {
     return try {
       val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
@@ -311,33 +345,32 @@ object LockVaultManager {
     val w = widthPx.coerceAtLeast(720f)
     val h = heightPx.coerceAtLeast(1400f)
     return listOf(
-      // 1. Primary swipe starting comfortably above bottom Infinix "Use Fingerprint or Swipe Up to Unlock" caption
-      LockSwipeVector(w * 0.50f, h * 0.78f, w * 0.50f, h * 0.18f, 220L),
-      // 2. Fast full-throw swipe from lower area
-      LockSwipeVector(w * 0.50f, h * 0.85f, w * 0.50f, h * 0.14f, 175L),
-      // 3. Mid-screen sweep fallback if notification stack sits near bottom
-      LockSwipeVector(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.14f, 250L),
+      // 1. Primary Infinix swipe matching bottom "Use Fingerprint or Swipe Up to Unlock" straight up to center-top
+      LockSwipeVector(w * 0.50f, h * 0.88f, w * 0.50f, h * 0.30f, 240L),
+      // 2. Brisk full-throw swipe from lower edge
+      LockSwipeVector(w * 0.50f, h * 0.82f, w * 0.50f, h * 0.16f, 185L),
+      // 3. Mid-screen sweep fallback when notifications cover lower area
+      LockSwipeVector(w * 0.50f, h * 0.70f, w * 0.50f, h * 0.14f, 250L),
     )
   }
 
   fun unlockDeviceIfLocked(ctx: Context, acc: RiyaAccessibilityService?): UnlockAttemptResult {
-    val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
-    val initiallyLocked = (pm != null && !pm.isInteractive) || (km?.isKeyguardLocked == true)
+    val lockType = Store.phoneLockType(ctx)
+    val initiallyLocked = (pm != null && !pm.isInteractive) || !isScreenUnlockedNow(ctx, acc, lockType)
     if (!initiallyLocked) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     if (!Store.autoUnlockEnabled(ctx)) {
       return UnlockAttemptResult(
         UnlockStatus.AUTO_UNLOCK_DISABLED,
-        "ফোন লক অবস্থায় আছে এবং অটো-আনলক বন্ধ করা আছে বস।",
+        "ফোন লক অবস্থায় আছে বস।",
       )
     }
-    val lockType = Store.phoneLockType(ctx)
     if (!Store.hasAnyPhoneLockSaved(ctx) || lockType == ScreenLockType.NONE) {
       return UnlockAttemptResult(
         UnlockStatus.NO_CREDENTIALS_SAVED,
-        "ফোন লক আছে বস, কিন্তু LXR--AI অ্যাপের 'ফোন ও অ্যাপ লক' সেকশনে আপনার পাসওয়ার্ড/প্যাটার্ন সেভ করা নেই।",
+        "ফোন লক অবস্থায় আছে বস, এই মুহূর্তে সরাসরি আনলক করা যাচ্ছে না।",
       )
     }
     if (acc == null) {
@@ -349,13 +382,13 @@ object LockVaultManager {
 
     wakeScreenIfNeeded(ctx, acc)
     // Wait until display is interactive and lockscreen keyguard animations settle on Android 16
-    val wakeWaitDeadline = System.currentTimeMillis() + 800L
+    val wakeWaitDeadline = System.currentTimeMillis() + 850L
     while (pm?.isInteractive == false && System.currentTimeMillis() < wakeWaitDeadline) {
       Thread.sleep(60L)
     }
     Thread.sleep(280L)
 
-    if (km?.isKeyguardLocked == false) {
+    if (isScreenUnlockedNow(ctx, acc, lockType)) {
       return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
     }
 
@@ -365,10 +398,10 @@ object LockVaultManager {
       for (swipe in strategies) {
         acc.swipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY, durationMs = swipe.durationMs)
         val bouncerReady =
-          pollUnlocked(920L) {
-            km?.isKeyguardLocked == false || hasBouncerUiShowing(acc, lockType)
+          pollUnlocked(950L) {
+            isScreenUnlockedNow(ctx, acc, lockType) || hasBouncerUiShowing(acc, lockType)
           }
-        if (km?.isKeyguardLocked == false) {
+        if (isScreenUnlockedNow(ctx, acc, lockType)) {
           return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "ডাবল-ট্যাপ ও সোয়াইপে স্ক্রিন আনলক হয়েছে ✓")
         }
         if (bouncerReady) break
@@ -376,20 +409,33 @@ object LockVaultManager {
       Thread.sleep(160L)
     }
 
-    val unlocked =
+    var unlocked =
       when (lockType) {
-        ScreenLockType.PIN -> enterPinOnCurrentScreen(acc, Store.phonePin(ctx)) { km?.isKeyguardLocked == false }
-        ScreenLockType.PATTERN -> drawPatternOnCurrentScreen(acc, Store.phonePattern(ctx)) { km?.isKeyguardLocked == false }
+        ScreenLockType.PIN -> enterPinOnCurrentScreen(acc, Store.phonePin(ctx)) { isScreenUnlockedNow(ctx, acc, lockType) }
+        ScreenLockType.PATTERN -> drawPatternOnCurrentScreen(acc, Store.phonePattern(ctx)) { isScreenUnlockedNow(ctx, acc, lockType) }
         ScreenLockType.NONE -> false
       }
 
-    return if (unlocked || km?.isKeyguardLocked == false) {
-      Thread.sleep(320L)
-      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "ডাবল-ট্যাপে স্ক্রিনের আলো জ্বালিয়ে স্বয়ংক্রিয়ভাবে আনলক করা হয়েছে ✓")
+    // Brief retry if bouncer is still visible after 1st attempt
+    if (!unlocked && !isScreenUnlockedNow(ctx, acc, lockType) && hasBouncerUiShowing(acc, lockType)) {
+      Thread.sleep(220L)
+      unlocked =
+        when (lockType) {
+          ScreenLockType.PIN -> enterPinOnCurrentScreen(acc, Store.phonePin(ctx)) { isScreenUnlockedNow(ctx, acc, lockType) }
+          ScreenLockType.PATTERN -> drawPatternOnCurrentScreen(acc, Store.phonePattern(ctx)) { isScreenUnlockedNow(ctx, acc, lockType) }
+          ScreenLockType.NONE -> false
+        }
+    }
+
+    val finalUnlocked =
+      unlocked || pollUnlocked(550L) { isScreenUnlockedNow(ctx, acc, lockType) }
+    return if (finalUnlocked) {
+      Thread.sleep(260L)
+      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "ডাবল-ট্যাপে স্ক্রিনের আলো জ্বালিয়ে মেইন স্ক্রিন আনলক করা হয়েছে ✓")
     } else {
       UnlockAttemptResult(
         UnlockStatus.FAILED_TO_UNLOCK,
-        "লক স্ক্রিনে পাসওয়ার্ড/প্যাটার্ন মেলানো যায়নি বস — সেভ করা লকটি সঠিক কিনা যাচাই করুন।",
+        "এই মুহূর্তে স্ক্রিন আনলক করা যায়নি বস।",
       )
     }
   }
@@ -415,7 +461,7 @@ object LockVaultManager {
     if (!Store.hasAnyAppLockSaved(ctx)) {
       return UnlockAttemptResult(
         UnlockStatus.NO_CREDENTIALS_SAVED,
-        "অ্যাপ লক স্ক্রিন দেখা যাচ্ছে বস, কিন্তু 'ফোন ও অ্যাপ লক' ভল্টে পাসওয়ার্ড বা প্যাটার্ন সেভ করা নেই।",
+        "অ্যাপটি লক অবস্থায় আছে বস, এই মুহূর্তে সরাসরি খোলা যাচ্ছে না।",
       )
     }
 
@@ -433,9 +479,9 @@ object LockVaultManager {
       }
     return if (ok) {
       Thread.sleep(280L)
-      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "অ্যাপ লক সরাসরি আনলক করা হয়েছে ✓")
+      UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "অ্যাপ লক সরাসরি খোলা হয়েছে ✓")
     } else {
-      UnlockAttemptResult(UnlockStatus.FAILED_TO_UNLOCK, "অ্যাপ লক স্ক্রিনে সেভ করা পাসওয়ার্ড/প্যাটার্ন মেলানো যায়নি।")
+      UnlockAttemptResult(UnlockStatus.FAILED_TO_UNLOCK, "অ্যাপের লক স্ক্রিন এই মুহূর্তে খোলা যায়নি বস।")
     }
   }
 
