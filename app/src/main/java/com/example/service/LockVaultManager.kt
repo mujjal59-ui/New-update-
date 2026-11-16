@@ -26,6 +26,14 @@ data class UnlockAttemptResult(
   val messageBn: String,
 )
 
+data class LockSwipeVector(
+  val startX: Float,
+  val startY: Float,
+  val endX: Float,
+  val endY: Float,
+  val durationMs: Long,
+)
+
 /**
  * Manages stored Phone Screen Lock & App Lock credentials (up to 8-digit PIN/Password or 3x3 Pattern)
  * across Infinix, Xiaomi, Redmi, Realme, Tecno, itel & Android devices.
@@ -240,6 +248,78 @@ object LockVaultManager {
     } catch (_: Throwable) {}
   }
 
+  fun isBouncerInputUiVisible(nodeTextsAndIds: String, lockType: ScreenLockType): Boolean {
+    val lower = nodeTextsAndIds.lowercase()
+    val hasGeneral =
+      lower.contains("pinentry") ||
+        lower.contains("keyguard_pin") ||
+        lower.contains("keyguard_password") ||
+        lower.contains("keyguard_pattern") ||
+        lower.contains("lockpattern") ||
+        lower.contains("delete_button") ||
+        lower.contains("key_enter") ||
+        lower.contains("numpad")
+    if (hasGeneral) return true
+    return when (lockType) {
+      ScreenLockType.PIN ->
+        lower.contains("enter pin") ||
+          lower.contains("enter password") ||
+          lower.contains("passwordentry") ||
+          lower.contains("key1") ||
+          lower.contains("digit_1") ||
+          lower.contains("pin_1") ||
+          (lower.contains("1") && lower.contains("5") && lower.contains("9") && lower.contains("emergency"))
+      ScreenLockType.PATTERN ->
+        lower.contains("draw unlock pattern") ||
+          lower.contains("draw pattern") ||
+          lower.contains("pattern") && lower.contains("emergency")
+      ScreenLockType.NONE -> false
+    }
+  }
+
+  fun hasBouncerUiShowing(acc: RiyaAccessibilityService?, lockType: ScreenLockType): Boolean {
+    if (acc == null) return false
+    val roots = collectAllRoots(acc)
+    val allNodes = mutableListOf<AccessibilityNodeInfo>()
+    fun collect(n: AccessibilityNodeInfo?, depth: Int) {
+      if (n == null || depth > 28) return
+      allNodes.add(n)
+      for (i in 0 until n.childCount) collect(n.getChild(i), depth + 1)
+    }
+    roots.forEach { collect(it, 0) }
+    if (lockType == ScreenLockType.PIN) {
+      if (allNodes.any { it.isEditable }) return true
+    }
+    if (lockType == ScreenLockType.PATTERN) {
+      val dm = acc.resources.displayMetrics
+      val hasPatternNode =
+        allNodes.any { n ->
+          val cls = n.className?.toString()?.lowercase().orEmpty()
+          val id = n.viewIdResourceName?.lowercase().orEmpty()
+          val r = Rect()
+          n.getBoundsInScreen(r)
+          r.width() > dm.widthPixels * 0.35f &&
+            (cls.contains("pattern") || id.contains("lockpattern") || id.contains("pattern"))
+        }
+      if (hasPatternNode) return true
+    }
+    val dump = collectCompactScreenText(roots)
+    return isBouncerInputUiVisible(dump, lockType)
+  }
+
+  fun buildLockscreenSwipeStrategies(widthPx: Float, heightPx: Float): List<LockSwipeVector> {
+    val w = widthPx.coerceAtLeast(720f)
+    val h = heightPx.coerceAtLeast(1400f)
+    return listOf(
+      // 1. Primary swipe starting comfortably above bottom Infinix "Use Fingerprint or Swipe Up to Unlock" caption
+      LockSwipeVector(w * 0.50f, h * 0.78f, w * 0.50f, h * 0.18f, 220L),
+      // 2. Fast full-throw swipe from lower area
+      LockSwipeVector(w * 0.50f, h * 0.85f, w * 0.50f, h * 0.14f, 175L),
+      // 3. Mid-screen sweep fallback if notification stack sits near bottom
+      LockSwipeVector(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.14f, 250L),
+    )
+  }
+
   fun unlockDeviceIfLocked(ctx: Context, acc: RiyaAccessibilityService?): UnlockAttemptResult {
     val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -268,17 +348,32 @@ object LockVaultManager {
     }
 
     wakeScreenIfNeeded(ctx, acc)
-    val dm = acc.resources.displayMetrics
-    val w = dm.widthPixels.toFloat().coerceAtLeast(720f)
-    val h = dm.heightPixels.toFloat().coerceAtLeast(1400f)
+    // Wait until display is interactive and lockscreen keyguard animations settle on Android 16
+    val wakeWaitDeadline = System.currentTimeMillis() + 800L
+    while (pm?.isInteractive == false && System.currentTimeMillis() < wakeWaitDeadline) {
+      Thread.sleep(60L)
+    }
+    Thread.sleep(280L)
 
-    // Swipe up from bottom lockscreen clock to open PIN / Pattern prompt
-    acc.swipe(w * 0.50f, h * 0.80f, w * 0.50f, h * 0.24f, durationMs = 300L)
-    Thread.sleep(520L)
-
-    // Swipe-only unlock (if keyguard dismissed just by swiping)
     if (km?.isKeyguardLocked == false) {
       return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
+    }
+
+    val dm = acc.resources.displayMetrics
+    val strategies = buildLockscreenSwipeStrategies(dm.widthPixels.toFloat(), dm.heightPixels.toFloat())
+    if (!hasBouncerUiShowing(acc, lockType)) {
+      for (swipe in strategies) {
+        acc.swipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY, durationMs = swipe.durationMs)
+        val bouncerReady =
+          pollUnlocked(920L) {
+            km?.isKeyguardLocked == false || hasBouncerUiShowing(acc, lockType)
+          }
+        if (km?.isKeyguardLocked == false) {
+          return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "ডাবল-ট্যাপ ও সোয়াইপে স্ক্রিন আনলক হয়েছে ✓")
+        }
+        if (bouncerReady) break
+      }
+      Thread.sleep(160L)
     }
 
     val unlocked =
@@ -432,7 +527,7 @@ object LockVaultManager {
       val firstLine = text.lineSequence().firstOrNull()?.trim().orEmpty()
       if (text == digitStr || firstLine == digitStr || desc == digitStr) return true
       val aliases = digitWords[digit].orEmpty()
-      if (aliases.any { a -> id.endsWith("/$a") || id.contains("_$a") || desc.startsWith("$a ") }) {
+      if (aliases.any { a -> id.endsWith("/$a") || id.contains("_$a") || desc == a || desc.startsWith("$a ") }) {
         return true
       }
       return false

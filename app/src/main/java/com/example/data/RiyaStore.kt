@@ -34,8 +34,8 @@ enum class VoiceMatchSensitivity(
     pitchSigma = 0.55f,
     centroidWeight = 0.03f,
     minStepFloor = 0.25f,
-    onsetMinChunks = 5,
-    rejectAfterChunks = 13,
+    onsetMinChunks = 3,
+    rejectAfterChunks = 10,
     descriptionBn = "আস্তে, ফিসফিস বা যেকোনো ভঙ্গিতে বসের কণ্ঠ দ্রুত ধরবে",
   ),
   BALANCED(
@@ -46,8 +46,8 @@ enum class VoiceMatchSensitivity(
     pitchSigma = 0.30f,
     centroidWeight = 0.08f,
     minStepFloor = 0.38f,
-    onsetMinChunks = 7,
-    rejectAfterChunks = 10,
+    onsetMinChunks = 4,
+    rejectAfterChunks = 8,
     descriptionBn = "স্মার্ট ভারসাম্য — আস্তে ও জোরে উভয় কণ্ঠে বসের ভয়েস চিনবে",
   ),
   STRICT(
@@ -58,8 +58,8 @@ enum class VoiceMatchSensitivity(
     pitchSigma = 0.20f,
     centroidWeight = 0.12f,
     minStepFloor = 0.50f,
-    onsetMinChunks = 9,
-    rejectAfterChunks = 8,
+    onsetMinChunks = 6,
+    rejectAfterChunks = 7,
     descriptionBn = "কঠোর বায়োমেট্রিক — শুধু ৩ ধাপের বসের কণ্ঠের সাথে হুবহু মিললে চলবে",
   ),
 }
