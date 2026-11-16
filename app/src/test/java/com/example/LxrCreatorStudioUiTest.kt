@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import com.example.ui.AppBuilderScreen
 import com.example.ui.CYBER_BLUE
@@ -113,7 +114,7 @@ class LxrCreatorStudioUiTest {
     // 1. Navigate to App Builder Screen and back
     composeTestRule.onNodeWithTag("section_btn_app_builder").performClick()
     composeTestRule.onNodeWithTag("app_builder_screen").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("app_builder_screen_back_btn").performClick()
+    composeTestRule.onNodeWithTag("app_builder_screen_back_btn").performScrollTo().performClick()
     composeTestRule.onNodeWithTag("section_btn_video_creator").assertIsDisplayed()
 
     // 2. Navigate to Video Creator Screen and back

@@ -522,36 +522,7 @@ fun HomeBottomNeonDivider(modifier: Modifier = Modifier) {
 
 @Composable
 fun AppBuilderScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
-  BackHandler(onBack = back)
-  StudioScaffoldScreen(
-    screenTag = "app_builder_screen",
-    title = stringResource(R.string.app_builder_screen_title),
-    subtitle = stringResource(R.string.app_builder_screen_subtitle),
-    statusNote = stringResource(R.string.app_builder_status_note),
-    topBarIcon = Icons.Filled.Apps,
-    accentPrimary = Color(0xFFA855F7),
-    accentSecondary = CYBER_BLUE,
-    modules =
-      listOf(
-        StudioModulePreview(
-          icon = Icons.Filled.DashboardCustomize,
-          title = "UI Layout & Screens",
-          subtitle = "মডার্ন ম্যাটেরিয়াল ডিজাইন ও অ্যানিমেটেড স্ক্রিন স্ট্রাকচার",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.Widgets,
-          title = "Component Library",
-          subtitle = "কার্ড, ডক, বাটন এবং রেসপন্সিভ কম্পোনেন্ট প্রিভিউ",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.Layers,
-          title = "Theme & Navigation",
-          subtitle = "স্মুথ রাউটিং, কাস্টম থিম এবং মাল্টি-ডিভাইস সাপোর্ট",
-        ),
-      ),
-    back = back,
-    onNavigate = onNavigate,
-  )
+  LxrAppBuilderWorkspace(back = back, onNavigate = onNavigate)
 }
 
 @Composable
