@@ -27,6 +27,9 @@ object RiyaRuntimeBridge {
   private val _lastAutomationBanner = MutableStateFlow<String?>(null)
   val lastAutomationBanner: StateFlow<String?> = _lastAutomationBanner.asStateFlow()
 
+  private val _requestedUiPage = MutableStateFlow<String?>(null)
+  val requestedUiPage: StateFlow<String?> = _requestedUiPage.asStateFlow()
+
   private val replyPayloads = ConcurrentHashMap<String, PendingReplyPayload>()
   private val lastSenderReplyTime = ConcurrentHashMap<String, Long>()
   private val recentNotificationHashes = ConcurrentHashMap<String, Long>()
@@ -49,6 +52,10 @@ object RiyaRuntimeBridge {
 
   fun postAutomationBanner(message: String?) {
     _lastAutomationBanner.value = message
+  }
+
+  fun requestUiPage(pageKey: String?) {
+    _requestedUiPage.value = pageKey
   }
 
   fun isDuplicateNotification(signature: String, windowMs: Long = 8_000L): Boolean {

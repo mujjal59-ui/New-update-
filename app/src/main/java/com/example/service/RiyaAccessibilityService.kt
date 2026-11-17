@@ -271,10 +271,14 @@ class RiyaAccessibilityService : AccessibilityService() {
     return snapshot
   }
 
-  // স্ক্রিন পড়া: উপর থেকে নিচে, বাঁ থেকে ডানে সাজানো। বাটন, লেখার বক্স, সুইচ আলাদা করে চিহ্নিত।
+  // স্ক্রিন পড়া: উপর থেকে নিচে, বাঁ থেকে ডানে সাজানো। বাটন, লেখার বক্স (Title বনাম মূল Body আলাদাভাবে), সুইচ চিহ্নিত।
   fun readScreen(): String {
     readEntireScreenTree()
     val root = rootInActiveWindow ?: return "স্ক্রিন পাওয়া যায়নি"
+    val editablePairs = collectEditableNodes(root)
+    val editableCandidates = editablePairs.mapIndexed { idx, node -> toCandidate(idx, node) }
+    val nodeRoleByHash = IdentityHashMapCompat(editablePairs, editableCandidates)
+
     val rows = mutableListOf<Triple<Int, Int, String>>()
     fun walk(n: AccessibilityNodeInfo?, depth: Int) {
       if (n == null || rows.size > 180 || depth > 40) return
@@ -286,7 +290,12 @@ class RiyaAccessibilityService : AccessibilityService() {
       n.getBoundsInScreen(r)
       val tag =
         when {
-          n.isEditable -> " [লেখার বক্স]"
+          n.isEditable ->
+            when (nodeRoleByHash.roleOf(n)) {
+              EditableFieldRole.TITLE -> " [নোট টাইটেল বক্স / Title — এখানে মূল নোট লিখবে না]"
+              EditableFieldRole.BODY -> " [মূল নোট লেখার বক্স / Body — নোট এখানে লিখবে]"
+              else -> " [লেখার বক্স]"
+            }
           n.isCheckable -> if (n.isChecked) " [সুইচ: চালু]" else " [সুইচ: বন্ধ]"
           n.isClickable -> " [বাটন]"
           else -> ""
@@ -456,14 +465,57 @@ class RiyaAccessibilityService : AccessibilityService() {
       }
   }
 
-  fun findEditableNode(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-    if (n == null) return null
-    if (n.isEditable) return n
+  private fun collectEditableNodes(n: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo> = mutableListOf()): List<AccessibilityNodeInfo> {
+    if (n == null || out.size >= 24) return out
+    if (n.isEditable) out.add(n)
     for (i in 0 until n.childCount) {
-      val r = findEditableNode(n.getChild(i))
-      if (r != null) return r
+      collectEditableNodes(n.getChild(i), out)
     }
-    return null
+    return out
+  }
+
+  private fun toCandidate(index: Int, node: AccessibilityNodeInfo): EditableFieldCandidate {
+    val rect = Rect()
+    node.getBoundsInScreen(rect)
+    val hint = if (Build.VERSION.SDK_INT >= 26) node.hintText?.toString()?.trim().orEmpty() else ""
+    val isMulti =
+      (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) node.isMultiLine else false) ||
+        (node.inputType != 0 && (node.inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0) ||
+        rect.height() > 210
+    val isSingleLine = !isMulti
+    return EditableFieldCandidate(
+      index = index,
+      text = node.text?.toString()?.trim().orEmpty(),
+      hint = hint,
+      contentDescription = node.contentDescription?.toString()?.trim().orEmpty(),
+      viewId = node.viewIdResourceName.orEmpty(),
+      top = rect.top,
+      bottom = rect.bottom,
+      left = rect.left,
+      right = rect.right,
+      isSingleLine = isSingleLine,
+    )
+  }
+
+  private class IdentityHashMapCompat(
+    private val nodes: List<AccessibilityNodeInfo>,
+    private val candidates: List<EditableFieldCandidate>,
+  ) {
+    fun roleOf(node: AccessibilityNodeInfo): EditableFieldRole {
+      val idx = nodes.indexOfFirst { it == node }
+      if (idx < 0 || idx >= candidates.size) return EditableFieldRole.GENERIC
+      return EditableFieldMatcher.classifyRole(candidates[idx], candidates)
+    }
+  }
+
+  fun findEditableNode(n: AccessibilityNodeInfo?, target: String = "auto"): AccessibilityNodeInfo? {
+    if (n == null) return null
+    val allNodes = collectEditableNodes(n)
+    if (allNodes.isEmpty()) return null
+    if (allNodes.size == 1) return allNodes.first()
+    val candidates = allNodes.mapIndexed { idx, node -> toCandidate(idx, node) }
+    val pickedIndex = EditableFieldMatcher.selectBestCandidateIndex(candidates, target)
+    return if (pickedIndex != null && pickedIndex in allNodes.indices) allNodes[pickedIndex] else allNodes.first()
   }
 
   fun hasText(t: String): Boolean {
@@ -784,12 +836,46 @@ class RiyaAccessibilityService : AccessibilityService() {
     return "NOTFOUND"
   }
 
-  fun typeText(t: String): String {
+  fun typeText(t: String, target: String = "auto"): String {
+    readEntireScreenTree()
     val root = rootInActiveWindow ?: return "স্ক্রিন নেই"
-    val box = findEditableNode(root) ?: return "কোনো লেখার বক্স পাওয়া যায়নি"
+    val allNodes = collectEditableNodes(root)
+    if (allNodes.isEmpty()) return "কোনো লেখার বক্স পাওয়া যায়নি"
+
+    val candidates = allNodes.mapIndexed { idx, node -> toCandidate(idx, node) }
+    val selectedIdx = EditableFieldMatcher.selectBestCandidateIndex(candidates, target) ?: 0
+    val box = allNodes.getOrElse(selectedIdx) { allNodes.first() }
+    val pickedRole = EditableFieldMatcher.classifyRole(candidates[selectedIdx], candidates)
+
+    val boxRect = Rect()
+    box.getBoundsInScreen(boxRect)
+    if (boxRect.width() > 0 && boxRect.height() > 0) {
+      tapAt(boxRect.exactCenterX(), boxRect.exactCenterY())
+      Thread.sleep(90)
+    }
+    box.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    box.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+    Thread.sleep(70)
+
     val b = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t) }
-    return if (box.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)) "টাইপ সম্পন্ন"
-    else "টাইপ করা যায়নি"
+    var ok = box.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
+    if (!ok) {
+      val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+      if (focused != null && focused.isEditable) {
+        ok = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
+      }
+    }
+    Thread.sleep(160)
+    readEntireScreenTree()
+
+    if (!ok) return "লেখার বক্সে টাইপ করা যায়নি"
+    val fieldLabelBn =
+      when (pickedRole) {
+        EditableFieldRole.TITLE -> "টাইটেল (Title) বক্সে"
+        EditableFieldRole.BODY -> "মূল নোট (Note Body) বক্সে"
+        EditableFieldRole.GENERIC -> "লেখার বক্সে"
+      }
+    return "হয়েছে, বস! $fieldLabelBn লেখা সম্পন্ন হয়েছে।"
   }
 
   fun global(a: String): String {

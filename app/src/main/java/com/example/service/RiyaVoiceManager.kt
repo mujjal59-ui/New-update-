@@ -44,14 +44,27 @@ object RiyaVoiceManager {
 
   private val ttsHttpClient =
     OkHttpClient.Builder()
-      .connectTimeout(4, TimeUnit.SECONDS)
-      .readTimeout(7, TimeUnit.SECONDS)
-      .writeTimeout(5, TimeUnit.SECONDS)
+      .connectTimeout(2500, TimeUnit.MILLISECONDS)
+      .readTimeout(4500, TimeUnit.MILLISECONDS)
+      .writeTimeout(3000, TimeUnit.MILLISECONDS)
+      .callTimeout(7000, TimeUnit.MILLISECONDS)
       .retryOnConnectionFailure(true)
       .build()
 
+  @Volatile private var speakingStartedAtMs = 0L
+
   private val _isSpeaking = MutableStateFlow(false)
   val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
+
+  fun isActivelySpeaking(): Boolean {
+    if (!_isSpeaking.value) return false
+    val elapsed = System.currentTimeMillis() - speakingStartedAtMs
+    if (speakingStartedAtMs > 0L && elapsed > 18_000L) {
+      _isSpeaking.value = false
+      return false
+    }
+    return true
+  }
 
   private val _lastSpoken = MutableStateFlow("")
   val lastSpoken: StateFlow<String> = _lastSpoken.asStateFlow()
@@ -139,6 +152,7 @@ object RiyaVoiceManager {
       engine.setOnUtteranceProgressListener(
         object : UtteranceProgressListener() {
           override fun onStart(utteranceId: String?) {
+            speakingStartedAtMs = System.currentTimeMillis()
             _isSpeaking.value = true
           }
 
@@ -343,6 +357,7 @@ object RiyaVoiceManager {
 
   private fun playPcmAudio(pcm: ByteArray, sampleRate: Int, seq: Int) {
     if (seq != speechSeq.get()) return
+    speakingStartedAtMs = System.currentTimeMillis()
     _isSpeaking.value = true
     var track: AudioTrack? = null
     try {

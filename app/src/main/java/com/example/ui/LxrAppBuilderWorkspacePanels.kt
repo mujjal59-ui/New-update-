@@ -72,6 +72,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.builder.AppBuilderFileRepository
 import com.example.builder.AppBuilderUiState
 import com.example.builder.AppBuilderViewModel
 import com.example.builder.BuildStatus
@@ -270,6 +271,10 @@ fun IdeBuildAndTermuxTab(
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
       vm.refreshHistoryAndTermux()
     }
+  val safTreeLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      vm.onSafTreeGranted(uri)
+    }
 
   // 1. Progress Bar & Stage Status Card
   Column(
@@ -315,7 +320,24 @@ fun IdeBuildAndTermuxTab(
         fontWeight = FontWeight.SemiBold,
       )
     }
+    if (state.termuxStepLabel.isNotBlank()) {
+      Text(
+        text = "Termux লাইভ অবস্থা: ${state.termuxStepLabel}",
+        color = Color(0xFF93C5FD),
+        fontSize = 11.5.sp,
+      )
+    }
   }
+
+  // 1.5 Interactive Live Preview Card visible right inside Build tab too
+  LxrLiveAppPreviewCard(
+    appName = state.activeProject?.name ?: state.projectName,
+    description = state.activeProject?.description ?: state.appDescription,
+    category = state.activeProject?.category ?: state.category,
+    designTheme = state.activeProject?.designTheme ?: state.designTheme,
+    isBuilding = state.isBuilding || state.isGenerating,
+    stepLabel = state.termuxStepLabel,
+  )
 
   // 2. Termux Free Build Integration Card
   val termux = state.termuxStatus
@@ -342,9 +364,10 @@ fun IdeBuildAndTermuxTab(
     Text(
       text =
         "Termux: ${if (termux.termuxInstalled) "ইনস্টল আছে ✓" else "পাওয়া যায়নি ✗"} • " +
-          "RUN_COMMAND: ${if (termux.runCommandPermissionGranted) "চালু ✓" else "বন্ধ ⚠"}",
+          "RUN_COMMAND: ${if (termux.runCommandPermissionGranted) "চালু ✓" else "বন্ধ ⚠"} • " +
+          "Download এক্সেস: ${termux.safFolderLabel.ifBlank { "চেকিং..." }}",
       color = if (termux.termuxInstalled && termux.runCommandPermissionGranted) CYBER_GREEN else CYBER_AMBER,
-      fontSize = 12.sp,
+      fontSize = 11.5.sp,
       fontWeight = FontWeight.SemiBold,
     )
     Text(termux.setupSummaryBn, color = Color(0xFFCBD5E1), fontSize = 11.5.sp)
@@ -366,6 +389,26 @@ fun IdeBuildAndTermuxTab(
           Text("Termux অনুমতি দিন", color = CYBER_AMBER, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
         }
       }
+      if (!termux.hasSafAccess) {
+        OutlinedButton(
+          onClick = {
+            runCatching {
+              val initialUri =
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                  android.net.Uri.parse(
+                    "content://com.android.externalstorage.documents/document/primary%3ADownload"
+                  )
+                } else {
+                  null
+                }
+              safTreeLauncher.launch(initialUri)
+            }
+          },
+          modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("builder_grant_saf_btn"),
+        ) {
+          Text("Download এক্সেস", color = CYBER_CYAN, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+        }
+      }
       OutlinedButton(
         onClick = {
           val slug = state.activeProject?.slug ?: "amar_calculator"
@@ -379,7 +422,7 @@ fun IdeBuildAndTermuxTab(
       ) {
         Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(5.dp))
-        Text("কমান্ড কপি ও Termux খুলুন", color = Color.White, fontSize = 11.sp)
+        Text("কমান্ড কপি ও Termux", color = Color.White, fontSize = 11.sp)
       }
     }
 
@@ -481,7 +524,12 @@ fun IdeBuildAndTermuxTab(
       Spacer(Modifier.width(8.dp))
       Text("APK Result Card", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
       Text(
-        text = if (apk?.exists == true) "Verified APK ✓" else "অপেক্ষমান",
+        text =
+          when {
+            apk?.exists == true -> "Verified APK ✓"
+            state.isBuilding -> "বিল্ড চলছে..."
+            else -> "প্রস্তুত / অপেক্ষমান"
+          },
         color = if (apk?.exists == true) CYBER_GREEN else CYBER_AMBER,
         fontWeight = FontWeight.Bold,
         fontSize = 12.sp,
@@ -520,8 +568,11 @@ fun IdeBuildAndTermuxTab(
         }
       }
     } else {
+      val activeSlug = state.activeProject?.slug ?: "myapp"
       Text(
-        text = "Termux-এ বিল্ড সম্পন্ন হলে এখানে APK ফাইলের অস্তিত্ব, সাইজ, ডাউনলোড এবং ইনস্টল বাটন সক্রিয় হবে।",
+        text =
+          if (state.isBuilding) "Termux-এ এখন APK কম্পাইল হচ্ছে... বিল্ড শেষ হওয়ামাত্র এখানে APK সাইজ, Download ও Install বাটন সক্রিয় হয়ে যাবে।"
+          else "ফোল্ডার: Downloads/LXR-AppBuilder/$activeSlug/\nTermux-এ 'Termux-এ APK Build' চালালে বা শেষ হলে 'APK ও লগ যাচাই' চাপলে এখানে Download ও Install বাটন সক্রিয় হবে।",
         color = Color(0xFFAAB4D0),
         fontSize = 11.5.sp,
       )
@@ -540,7 +591,24 @@ fun IdeBuildAndTermuxTab(
         .padding(12.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    Text("🖥 Build Console (${state.consoleLogs.size} lines)", color = CYBER_CYAN, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+      Text(
+        text = "🖥 Build Console (${state.consoleLogs.size} lines)",
+        color = CYBER_CYAN,
+        fontWeight = FontWeight.Bold,
+        fontSize = 12.5.sp,
+        modifier = Modifier.weight(1f),
+      )
+      TextButton(
+        onClick = { vm.verifyAndFinalizeSharedBuild() },
+        enabled = state.activeProject != null,
+      ) {
+        Text("Refresh Log", color = CYBER_GREEN, fontSize = 11.sp)
+      }
+      TextButton(onClick = { vm.clearConsoleLogs() }) {
+        Text("Clear", color = CYBER_AMBER, fontSize = 11.sp)
+      }
+    }
     val logText =
       if (state.consoleLogs.isEmpty()) "প্রস্তুত — কোনো বিল্ড লগ এখনো তৈরি হয়নি।"
       else state.consoleLogs.joinToString("\n")

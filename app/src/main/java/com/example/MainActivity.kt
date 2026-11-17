@@ -116,15 +116,20 @@ import com.example.ui.hasPerm
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
 class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     RiyaState.resume.value++
-    try {
-      Keep.ensureAccessibility(this)
-    } catch (_: Exception) {}
-    AccessibilityStatusMonitor.refreshNow(this, speakIfTurnedOff = true)
-    com.example.service.AccessibilityKeepAliveService.sync(this)
+    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+      try {
+        Keep.ensureAccessibility(applicationContext)
+      } catch (_: Exception) {}
+      AccessibilityStatusMonitor.refreshNow(applicationContext, speakIfTurnedOff = true)
+      com.example.service.AccessibilityKeepAliveService.sync(applicationContext)
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,7 +152,9 @@ class MainActivity : ComponentActivity() {
       DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
           if (event == Lifecycle.Event.ON_RESUME) {
-            AccessibilityStatusMonitor.refreshNow(this@MainActivity, speakIfTurnedOff = true)
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+              AccessibilityStatusMonitor.refreshNow(applicationContext, speakIfTurnedOff = true)
+            }
           }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -229,11 +236,21 @@ fun RiyaApp() {
   LaunchedEffect(running) { if (!running) camOn = false }
   LaunchedEffect(camOn) { RiyaState.cameraOn = camOn }
 
-  // Continuous background check so UI NEVER falsely shows Accessibility as ON
+  val requestedPage by RiyaRuntimeBridge.requestedUiPage.collectAsState()
+  LaunchedEffect(requestedPage) {
+    requestedPage?.let { target ->
+      page = target
+      RiyaRuntimeBridge.requestUiPage(null)
+    }
+  }
+
+  // Continuous background check off Main Thread so Binder IPC never causes UI ANRs
   LaunchedEffect(Unit) {
     while (true) {
-      AccessibilityStatusMonitor.refreshNow(ctx, speakIfTurnedOff = true)
-      delay(2200)
+      withContext(Dispatchers.IO) {
+        AccessibilityStatusMonitor.refreshNow(ctx, speakIfTurnedOff = true)
+      }
+      delay(3500)
     }
   }
 

@@ -1,12 +1,12 @@
 package com.example.builder
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +28,7 @@ data class AppBuilderUiState(
   val designTheme: AppDesignTheme = AppDesignTheme.CYBER_NEON,
   val packageName: String = "com.lxr.appbuilder.calculator",
   val minSdk: AndroidApiLevel = AndroidApiLevel.API_26,
-  val language: ProgrammingLanguage = ProgrammingLanguage.KOTLIN,
+  val language: ProgrammingLanguage = ProgrammingLanguage.KOTLIN_COMPOSE,
   val buildMode: ApkBuildMode = ApkBuildMode.DEBUG,
   val activeProject: AppBuilderProject? = null,
   val history: List<AppBuilderProject> = emptyList(),
@@ -37,6 +37,7 @@ data class AppBuilderUiState(
   val editorModified: Boolean = false,
   val pipelineProgress: Float = 0f,
   val currentStage: DevelopmentStage? = null,
+  val termuxStepLabel: String = "",
   val isGenerating: Boolean = false,
   val isBuilding: Boolean = false,
   val consoleLogs: List<String> = emptyList(),
@@ -55,9 +56,69 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
   private val _uiState = MutableStateFlow(AppBuilderUiState())
   val uiState: StateFlow<AppBuilderUiState> = _uiState.asStateFlow()
 
+  private var lastAppliedBridgeSeq = 0L
+
   init {
     refreshHistoryAndTermux()
     observeTermuxCallbacks()
+    observeRuntimeBridge()
+  }
+
+  private fun observeRuntimeBridge() {
+    viewModelScope.launch {
+      AppBuilderRuntimeBridge.snapshot.collect { snap ->
+        if (snap.versionSeq == 0L || snap.versionSeq == lastAppliedBridgeSeq) return@collect
+        lastAppliedBridgeSeq = snap.versionSeq
+        val history = withContext(Dispatchers.IO) { repo.loadProjectHistory() }
+        val proj = snap.activeProject
+        val defaultFile = pickDefaultEditorFile(proj)
+        _uiState.update { state ->
+          val fileKey =
+            if (state.selectedFilePath.isNotBlank() && proj?.files?.containsKey(state.selectedFilePath) == true) {
+              state.selectedFilePath
+            } else {
+              defaultFile
+            }
+          state.copy(
+            projectName = proj?.name ?: state.projectName,
+            appDescription = proj?.description ?: state.appDescription,
+            category = proj?.category ?: state.category,
+            designTheme = proj?.designTheme ?: state.designTheme,
+            packageName = proj?.packageName ?: state.packageName,
+            language = proj?.language ?: state.language,
+            activeProject = proj ?: state.activeProject,
+            history = history,
+            selectedFilePath = fileKey,
+            editorText = if (!state.editorModified && proj != null) proj.files[fileKey].orEmpty() else state.editorText,
+            pipelineProgress = snap.pipelineProgress,
+            currentStage = snap.currentStage ?: state.currentStage,
+            termuxStepLabel = snap.termuxStepLabel,
+            isGenerating = snap.isGenerating,
+            isBuilding = snap.isBuilding,
+            consoleLogs = snap.consoleLogs,
+            errorDiagnosis = snap.errorDiagnosis,
+            lastErrorSignature = snap.lastErrorSignature,
+            autoFixAttempts = snap.autoFixAttempts,
+            statusBanner = snap.statusBanner ?: state.statusBanner,
+          )
+        }
+      }
+    }
+  }
+
+  fun onSafTreeGranted(uri: Uri?) {
+    if (uri == null) return
+    viewModelScope.launch(Dispatchers.IO) {
+      repo.saveSafTreeUri(uri)
+      val active = _uiState.value.activeProject
+      val termux = TermuxBuildBridge.inspectEnvironment(ctx, repo, active)
+      _uiState.update {
+        it.copy(
+          termuxStatus = termux,
+          statusBanner = "Download ফোল্ডার SAF এক্সেস অনুমোদিত হয়েছে ✓ এখন APK ও লগ সরাসরি পড়া যাবে।",
+        )
+      }
+    }
   }
 
   fun refreshHistoryAndTermux() {
@@ -89,6 +150,10 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
       TermuxBuildBridge.liveResults.collect { res ->
         val project = _uiState.value.activeProject ?: return@collect
         if (res.projectId.isNotBlank() && res.projectId != project.id) return@collect
+        if (_uiState.value.isBuilding) {
+          // AppBuilderRuntimeBridge is already handling the active Termux poll/callback cycle
+          return@collect
+        }
         val combinedLog =
           buildString {
             if (res.stdout.isNotBlank()) appendLine(res.stdout)
@@ -109,6 +174,10 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
 
   fun selectTab(tab: IdeWorkspaceTab) {
     _uiState.update { it.copy(activeTab = tab) }
+  }
+
+  fun clearConsoleLogs() {
+    _uiState.update { it.copy(consoleLogs = emptyList(), termuxStepLabel = "লগ পরিষ্কার করা হয়েছে") }
   }
 
   fun updateForm(
@@ -159,17 +228,20 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
   fun requestGenerateProject() {
     val state = _uiState.value
     val targetName = state.projectName.trim().ifBlank { state.category.titleEn }
-    if (repo.hasExistingProjectNamed(targetName, excludingId = state.activeProject?.id)) {
-      _uiState.update {
-        it.copy(
-          pendingConfirmation =
-            BuilderConfirmationRequest.OverwriteExistingProject(targetName) {
-              executeGenerateProject()
-            }
-        )
+    viewModelScope.launch(Dispatchers.IO) {
+      val exists = repo.hasExistingProjectNamed(targetName, excludingId = state.activeProject?.id)
+      if (exists) {
+        _uiState.update {
+          it.copy(
+            pendingConfirmation =
+              BuilderConfirmationRequest.OverwriteExistingProject(targetName) {
+                executeGenerateProject()
+              }
+          )
+        }
+      } else {
+        executeGenerateProject()
       }
-    } else {
-      executeGenerateProject()
     }
   }
 
@@ -195,6 +267,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           isGenerating = true,
           pipelineProgress = 0.05f,
           currentStage = DevelopmentStage.REQUIREMENT_ANALYSIS,
+          termuxStepLabel = "সোর্স কোড ও ডিজাইন তৈরি হচ্ছে...",
           consoleLogs = listOf("▶ স্বয়ংক্রিয় অ্যাপ ডেভেলপমেন্ট পাইপলাইন শুরু হয়েছে..."),
           errorDiagnosis = null,
           lastErrorSignature = null,
@@ -212,7 +285,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
                 cur.copy(
                   currentStage = stage,
                   pipelineProgress = prog,
-                  consoleLogs = (cur.consoleLogs + logLine).takeLast(120),
+                  consoleLogs = (cur.consoleLogs + logLine).takeLast(140),
                 )
               }
             }
@@ -233,13 +306,14 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           cur.copy(
             isGenerating = false,
             pipelineProgress = 1f,
+            termuxStepLabel = "প্রজেক্ট কোড তৈরি সম্পন্ন ✓",
             activeProject = saved,
             history = history,
             termuxStatus = termux,
             selectedFilePath = defaultFile,
             editorText = saved.files[defaultFile].orEmpty(),
             editorModified = false,
-            consoleLogs = (cur.consoleLogs + syncMsg).takeLast(120),
+            consoleLogs = (cur.consoleLogs + syncMsg).takeLast(140),
             statusBanner = "'${saved.name}' এর সম্পূর্ণ সোর্স কোড ও প্রজেক্ট তৈরি সম্পন্ন ✓",
           )
         }
@@ -249,7 +323,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { cur ->
           cur.copy(
             isGenerating = false,
-            consoleLogs = (cur.consoleLogs + "✗ জেনারেশন ত্রুটি: ${e.message}").takeLast(120),
+            consoleLogs = (cur.consoleLogs + "✗ জেনারেশন ত্রুটি: ${e.message}").takeLast(140),
             statusBanner = "প্রজেক্ট জেনারেশনে সমস্যা: ${e.message}",
           )
         }
@@ -278,7 +352,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           editorModified = false,
           consoleLogs = target.buildLogs,
           termuxStatus = termux,
-          errorDiagnosis = null,
+          errorDiagnosis = target.lastDiagnosis,
           activeTab = IdeWorkspaceTab.EDITOR,
           statusBanner = "প্রজেক্ট '${target.name}' খোলা হয়েছে",
         )
@@ -454,77 +528,33 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
 
   fun syncAndBuildViaTermux() {
     val project = _uiState.value.activeProject ?: return
-    viewModelScope.launch {
-      _uiState.update {
-        it.copy(
-          isBuilding = true,
-          errorDiagnosis = null,
-          consoleLogs =
-            (it.consoleLogs + "▶ Download ওয়ার্কস্পেস ও Termux বিল্ড প্রস্তুত হচ্ছে...").takeLast(120),
-          activeTab = IdeWorkspaceTab.BUILD,
-        )
-      }
-
-      val syncRes = withContext(Dispatchers.IO) { TermuxBuildBridge.syncProjectToSharedWorkspace(repo, project) }
-      val termux = withContext(Dispatchers.IO) { TermuxBuildBridge.inspectEnvironment(ctx, repo, project) }
-      _uiState.update { it.copy(termuxStatus = termux) }
-
-      val sharedDir =
-        syncRes.getOrElse { err ->
-          _uiState.update {
-            it.copy(
-              isBuilding = false,
-              statusBanner = "ফোল্ডার সিঙ্ক ব্যর্থ: ${err.message}",
-            )
-          }
-          return@launch
-        }
-
-      val dispatch =
-        TermuxBuildBridge.dispatchBuildToTermux(ctx, project, sharedDir, runInBackground = false)
-      dispatch.fold(
-        onSuccess = { msg ->
-          _uiState.update {
-            it.copy(
-              consoleLogs = (it.consoleLogs + "✓ $msg").takeLast(120),
-              statusBanner = "Termux বিল্ড শুরু হয়েছে — ফলাফলের জন্য অপেক্ষা করা হচ্ছে...",
-            )
-          }
-          // Poll shared folder build_result.json / APK in case broadcast callback is delayed by OEM battery policy
-          repeat(15) {
-            delay(2000)
-            val (_, foundApk) =
-              withContext(Dispatchers.IO) { TermuxBuildBridge.readSharedBuildArtifacts(repo, project) }
-            if (foundApk?.exists == true) {
-              verifyAndFinalizeSharedBuild()
-              return@launch
-            }
-          }
-          _uiState.update { it.copy(isBuilding = false) }
-        },
-        onFailure = { err ->
-          handleBuildFailureLog(err.message ?: "Termux RUN_COMMAND চালু করা যায়নি")
-        },
+    _uiState.update {
+      it.copy(
+        isBuilding = true,
+        errorDiagnosis = null,
+        termuxStepLabel = "Termux বিল্ড শুরু হচ্ছে...",
+        activeTab = IdeWorkspaceTab.BUILD,
       )
     }
+    AppBuilderRuntimeBridge.startUiBuildMonitor(ctx, project, narrateByVoice = true)
   }
 
   fun verifyAndFinalizeSharedBuild(extraLog: String = "") {
     val project = _uiState.value.activeProject ?: return
     viewModelScope.launch(Dispatchers.IO) {
-      val (diskLog, foundApk) = TermuxBuildBridge.readSharedBuildArtifacts(repo, project)
+      val (diskLog, parsedJson, foundApk) = TermuxBuildBridge.readSharedBuildArtifacts(repo, project)
       val mergedLogs = buildList {
         addAll(_uiState.value.consoleLogs)
         if (!diskLog.isNullOrBlank()) {
-          addAll(diskLog.lines().takeLast(25))
+          addAll(diskLog.lines().filter { it.isNotBlank() }.takeLast(25))
         } else if (extraLog.isNotBlank()) {
-          addAll(extraLog.lines().takeLast(20))
+          addAll(extraLog.lines().filter { it.isNotBlank() }.takeLast(20))
         }
-      }.takeLast(120)
+      }.distinct().takeLast(140)
 
       if (foundApk != null && foundApk.exists) {
         val exportName = "${project.slug}-${project.buildMode.name.lowercase()}.apk"
-        val savedDownload = repo.saveApkToDownloads(File(foundApk.apkFilePath), exportName).getOrDefault(foundApk.apkFilePath)
+        val savedDownload = repo.saveApkToDownloads(File(foundApk.apkFilePath), exportName).getOrDefault(foundApk.downloadExportPath)
         val verified = foundApk.copy(downloadExportPath = savedDownload)
         val updated =
           repo.saveProject(
@@ -532,6 +562,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
               buildStatus = BuildStatus.SUCCESS,
               buildLogs = mergedLogs,
               apkResult = verified,
+              lastDiagnosis = null,
             )
           )
         val history = repo.loadProjectHistory()
@@ -542,20 +573,23 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
             history = history,
             consoleLogs = mergedLogs,
             errorDiagnosis = null,
+            termuxStepLabel = "APK তৈরি ও যাচাই সম্পন্ন ✓",
             statusBanner = "APK সফলভাবে যাচাই হয়েছে (${verified.sizeBytes / 1024} KB) ✓",
           )
         }
       } else {
-        if (!diskLog.isNullOrBlank() &&
-          (diskLog.contains("ERROR", ignoreCase = true) || diskLog.contains("FAILED", ignoreCase = true))
-        ) {
-          handleBuildFailureLog(diskLog)
+        val isFailed =
+          parsedJson?.status.equals("failed", ignoreCase = true) ||
+            (!diskLog.isNullOrBlank() &&
+              (diskLog.contains("BUILD FAILED") || diskLog.contains("ERROR:", ignoreCase = true)))
+        if (isFailed) {
+          handleBuildFailureLog(diskLog ?: "Termux বিল্ড ব্যর্থ হয়েছে (Exit ${parsedJson?.exitCode ?: -1})")
         } else {
           _uiState.update {
             it.copy(
               isBuilding = false,
               consoleLogs = mergedLogs,
-              statusBanner = "Termux বিল্ড শেষ হলে 'APK ও লগ যাচাই করুন' বাটনে চাপুন।",
+              statusBanner = "Termux বিল্ড শেষ হলে অথবা Download ফোল্ডার SAF অনুমোদন দিয়ে পুনরায় যাচাই করুন।",
             )
           }
         }
@@ -581,7 +615,8 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           project.copy(
             files = repairedFiles,
             buildStatus = if (diagnosis.autoFixApplied && !diagnosis.isRepeatedSameError) BuildStatus.AUTO_FIXING else BuildStatus.FAILED,
-            buildLogs = (_uiState.value.consoleLogs + errorLog.lines().takeLast(20)).takeLast(120),
+            buildLogs = (_uiState.value.consoleLogs + errorLog.lines().takeLast(20)).takeLast(140),
+            lastDiagnosis = diagnosis,
           )
         )
       TermuxBuildBridge.syncProjectToSharedWorkspace(repo, updatedProject)
@@ -682,3 +717,4 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
       ?: project.files.keys.first()
   }
 }
+

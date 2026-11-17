@@ -51,7 +51,7 @@ object TermuxBuildBridge {
   private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
   private const val TERMUX_ACTION_RUN = "com.termux.RUN_COMMAND"
 
-  private val _liveResults = MutableSharedFlow<TermuxCommandResult>(extraBufferCapacity = 8)
+  private val _liveResults = MutableSharedFlow<TermuxCommandResult>(extraBufferCapacity = 16)
   val liveResults: SharedFlow<TermuxCommandResult> = _liveResults
 
   fun emitResult(result: TermuxCommandResult) {
@@ -81,6 +81,7 @@ object TermuxBuildBridge {
     val installed = isPackageInstalled(context, TERMUX_PACKAGE)
     val apiInstalled = isPackageInstalled(context, TERMUX_API_PACKAGE)
     val permGranted = hasRunCommandPermission(context)
+    val safOk = repo.hasSafTreeAccess()
     val slug = project?.slug ?: "sample_app"
     val sharedDir = repo.sharedWorkspaceDir(slug)
     val scriptExists = File(sharedDir, "lxr_termux_build.sh").exists()
@@ -90,9 +91,11 @@ object TermuxBuildBridge {
         !installed ->
           "ফোনে Termux (com.termux) ইনস্টল করা নেই। F-Droid বা GitHub থেকে ফ্রি Termux ইনস্টল করুন।"
         !permGranted ->
-          "Termux ইনস্টল আছে ✓ — এখন LXR--AI App info / Permissions থেকে 'RUN_COMMAND' অনুমতি দিন।"
+          "Termux ইনস্টল আছে ✓ — এখন 'Termux অনুমতি দিন' বাটনে চাপুন।"
+        !safOk ->
+          "Termux প্রস্তুত ✓ — পূর্ণাঙ্গ APK ও লগ পড়ার জন্য নিচে 'Download ফোল্ডার এক্সেস' অনুমোদন করলে আরও নির্ভুল হবে।"
         else ->
-          "Termux ও RUN_COMMAND প্রস্তুত ✓ — সরাসরি ফ্রি ওপেন-সোর্স Gradle/AAPT2 বিল্ড চালানো যাবে।"
+          "Termux, RUN_COMMAND ও Download ফোল্ডার সম্পূর্ণ প্রস্তুত ✓ — সরাসরি APK বিল্ড ও যাচাই চলবে।"
       }
 
     return TermuxEnvironmentStatus(
@@ -101,12 +104,14 @@ object TermuxBuildBridge {
       runCommandPermissionGranted = permGranted,
       sharedDownloadDirPath = sharedDir.absolutePath,
       scriptExported = scriptExists,
+      hasSafAccess = safOk,
+      safFolderLabel = if (safOk) "Downloads/LXR-AppBuilder ✓" else "অনুমোদিত নয়",
       setupSummaryBn = summary,
     )
   }
 
   fun firstTimeTermuxSetupCommand(projectSlug: String): String =
-    "termux-setup-storage && mkdir -p ~/.termux && grep -q 'allow-external-apps' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps=true' >> ~/.termux/termux.properties && termux-reload-settings && bash /sdcard/Download/LXR-AppBuilder/$projectSlug/lxr_termux_build.sh"
+    "[ -d ~/storage/downloads ] || yes | termux-setup-storage; mkdir -p ~/.termux && (grep -q 'allow-external-apps' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps=true' >> ~/.termux/termux.properties) && termux-reload-settings; bash /sdcard/Download/LXR-AppBuilder/$projectSlug/lxr_termux_build.sh"
 
   fun generateTermuxBuildScript(project: AppBuilderProject): String {
     val slug = project.slug
@@ -117,20 +122,23 @@ object TermuxBuildBridge {
     set -o pipefail
 
     SHARED_ROOT="/sdcard/Download/LXR-AppBuilder"
+    DL_PUBLIC="/sdcard/Download"
     SRC_DIR="${'$'}SHARED_ROOT/$slug"
     WORK_DIR="${'$'}HOME/LXR-AppBuilder/$slug"
     TOOLCHAIN_DIR="${'$'}SHARED_ROOT/toolchain"
     LOG_FILE="${'$'}SRC_DIR/build.log"
     RESULT_JSON="${'$'}SRC_DIR/build_result.json"
 
-    mkdir -p "${'$'}SRC_DIR" "${'$'}WORK_DIR" "${'$'}TOOLCHAIN_DIR"
-    exec > >(tee "${'$'}LOG_FILE") 2>&1
+    mkdir -p "${'$'}SRC_DIR" "${'$'}TOOLCHAIN_DIR"
+    : > "${'$'}LOG_FILE"
+    : > "${'$'}RESULT_JSON"
+    exec > >(tee -a "${'$'}LOG_FILE") 2>&1
 
     echo "=== LXR--AI Free Termux Build Engine ==="
     echo "Project: ${project.name} (${project.packageName})"
-    echo "Checking Termux environment..."
+    echo "LXR_PROGRESS:STEP=1:ENV_CHECK"
 
-    # 1. Install free open-source build packages if missing
+    # 1. Install free open-source build packages from Termux repos if missing
     NEED_PKG=0
     for cmd in java gradle aapt2 wget unzip; do
       if ! command -v "${'$'}cmd" >/dev/null 2>&1; then
@@ -143,15 +151,17 @@ object TermuxBuildBridge {
       pkg update -y && pkg install -y openjdk-17 gradle aapt2 wget unzip
     fi
 
-    # 2. Prepare Android SDK from local Download toolchain or free Google repo
+    # 2. Prepare Android SDK from Download/LXR-AppBuilder/toolchain or free Google repository
+    echo "LXR_PROGRESS:STEP=2:SDK_CHECK"
     export ANDROID_HOME="${'$'}HOME/android-sdk"
+    export ANDROID_SDK_ROOT="${'$'}HOME/android-sdk"
     if [ ! -d "${'$'}ANDROID_HOME/platforms/android-36" ]; then
       mkdir -p "${'$'}ANDROID_HOME/cmdline-tools"
-      if [ -f "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" ]; then
-        echo "Using local toolchain zip from Download folder..."
+      if [ -f "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" ] && [ -s "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" ]; then
+        echo "Using cached Android cmdline-tools from Download folder..."
         unzip -qo "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" -d "${'$'}ANDROID_HOME/cmdline-tools/"
       elif [ ! -d "${'$'}ANDROID_HOME/cmdline-tools/latest" ]; then
-        echo "Downloading free Android cmdline-tools from dl.google.com..."
+        echo "Downloading free Android cmdline-tools into Download toolchain..."
         wget -q -O "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
         unzip -qo "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" -d "${'$'}ANDROID_HOME/cmdline-tools/"
       fi
@@ -163,32 +173,51 @@ object TermuxBuildBridge {
       sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools"
     fi
 
-    # 3. Sync source files to Termux workspace
-    cp -r "${'$'}SRC_DIR"/* "${'$'}WORK_DIR"/
+    # 3. Sync clean source files to Termux internal workspace
+    echo "LXR_PROGRESS:STEP=3:SYNC_SOURCE"
+    rm -rf "${'$'}WORK_DIR"
+    mkdir -p "${'$'}WORK_DIR"
+    cp -r "${'$'}SRC_DIR"/. "${'$'}WORK_DIR"/
     cd "${'$'}WORK_DIR" || exit 1
 
     AAPT2_BIN="${'$'}(command -v aapt2)"
+    if [ -f "gradle.properties" ]; then
+      grep -q 'kotlin.compiler.execution.strategy' gradle.properties || echo "kotlin.compiler.execution.strategy=in-process" >> gradle.properties
+      grep -q 'org.gradle.daemon' gradle.properties || echo "org.gradle.daemon=false" >> gradle.properties
+      if [ -n "${'$'}AAPT2_BIN" ]; then
+        grep -q 'android.aapt2FromMavenOverride' gradle.properties || echo "android.aapt2FromMavenOverride=${'$'}AAPT2_BIN" >> gradle.properties
+      fi
+    fi
+
     echo "Using Termux AAPT2: ${'$'}AAPT2_BIN"
+    echo "LXR_PROGRESS:STEP=4:GRADLE_BUILD"
     echo "Running Gradle task: $task..."
 
+    export GRADLE_OPTS="-Dorg.gradle.daemon=false -Xmx1024m"
     if [ -n "${'$'}AAPT2_BIN" ]; then
-      gradle $task --no-daemon -Pandroid.aapt2FromMavenOverride="${'$'}AAPT2_BIN"
+      gradle $task --no-daemon --console=plain -Pandroid.aapt2FromMavenOverride="${'$'}AAPT2_BIN"
     else
-      gradle $task --no-daemon
+      gradle $task --no-daemon --console=plain
     fi
     BUILD_EXIT=${'$'}?
 
+    echo "LXR_PROGRESS:STEP=5:VERIFY_APK"
     OUT_APK="${'$'}(find app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
     if [ "${'$'}BUILD_EXIT" -eq 0 ] && [ -n "${'$'}OUT_APK" ] && [ -f "${'$'}OUT_APK" ]; then
       cp -f "${'$'}OUT_APK" "${'$'}SRC_DIR/$apkOutName"
       cp -f "${'$'}OUT_APK" "${'$'}SHARED_ROOT/$apkOutName"
+      cp -f "${'$'}OUT_APK" "${'$'}DL_PUBLIC/$apkOutName"
       APK_SIZE=${'$'}(wc -c < "${'$'}SRC_DIR/$apkOutName")
-      echo "SUCCESS: Built $apkOutName (${'$'}APK_SIZE bytes)"
-      printf '{"status":"success","exitCode":0,"apkPath":"%s","sizeBytes":%s}\n' "${'$'}SRC_DIR/$apkOutName" "${'$'}APK_SIZE" > "${'$'}RESULT_JSON"
+      echo "SUCCESS: Built $apkOutName (${'$'}APK_SIZE bytes) -> ${'$'}SRC_DIR/$apkOutName"
+      JSON_LINE=${'$'}(printf '{"status":"success","exitCode":0,"apkPath":"%s","sizeBytes":%s}' "${'$'}SRC_DIR/$apkOutName" "${'$'}APK_SIZE")
+      printf '%s\n' "${'$'}JSON_LINE" > "${'$'}RESULT_JSON"
+      echo "LXR_RESULT_JSON=${'$'}JSON_LINE"
       exit 0
     else
       echo "ERROR: Build failed with exit code ${'$'}BUILD_EXIT"
-      printf '{"status":"failed","exitCode":%s,"apkPath":"","sizeBytes":0}\n' "${'$'}BUILD_EXIT" > "${'$'}RESULT_JSON"
+      JSON_LINE=${'$'}(printf '{"status":"failed","exitCode":%s,"apkPath":"","sizeBytes":0}' "${'$'}BUILD_EXIT")
+      printf '%s\n' "${'$'}JSON_LINE" > "${'$'}RESULT_JSON"
+      echo "LXR_RESULT_JSON=${'$'}JSON_LINE"
       exit "${'$'}BUILD_EXIT"
     fi
     """.trimIndent()
@@ -196,7 +225,7 @@ object TermuxBuildBridge {
 
   /**
    * Syncs all project files + `lxr_termux_build.sh` into Downloads/LXR-AppBuilder/<slug>/
-   * so both Termux and LXR--AI can access the exact same workspace.
+   * and pre-creates `build.log` & `build_result.json` owned by LXR so both Termux & LXR read them cleanly.
    */
   fun syncProjectToSharedWorkspace(
     repo: AppBuilderFileRepository,
@@ -215,12 +244,19 @@ object TermuxBuildBridge {
       val scriptFile = File(dir, "lxr_termux_build.sh")
       scriptFile.writeText(generateTermuxBuildScript(project), Charsets.UTF_8)
       scriptFile.setExecutable(true, false)
+
+      // Pre-create writable output files owned by LXR UID so in-place redirection stays readable
+      val logFile = File(dir, "build.log")
+      logFile.writeText("", Charsets.UTF_8)
+      val resFile = File(dir, "build_result.json")
+      resFile.writeText("""{"status":"pending","exitCode":-1}""", Charsets.UTF_8)
       dir
     }
   }
 
   /**
-   * Fires a real Termux RUN_COMMAND service intent to execute `lxr_termux_build.sh` inside Termux.
+   * Fires a safe Termux RUN_COMMAND service intent WITHOUT calling startForegroundService on
+   * an interactive Termux terminal launch (fixes ForegroundServiceDidNotStartInTimeException crash).
    */
   fun dispatchBuildToTermux(
     context: Context,
@@ -246,7 +282,8 @@ object TermuxBuildBridge {
       } else {
         PendingIntent.FLAG_UPDATE_CURRENT
       }
-    val pending = PendingIntent.getBroadcast(context, project.id.hashCode(), callbackIntent, pendingFlags)
+    val reqCode = (project.id.hashCode() and 0x7FFFFFFF)
+    val pending = PendingIntent.getBroadcast(context, reqCode, callbackIntent, pendingFlags)
 
     val intent =
       Intent(TERMUX_ACTION_RUN).apply {
@@ -260,35 +297,49 @@ object TermuxBuildBridge {
       }
 
     return runCatching {
-      ContextCompat.startForegroundService(context, intent)
-      "Termux-এ বিল্ড কমান্ড পাঠানো হয়েছে: bash $scriptPath"
-    }.recoverCatching { firstErr ->
       context.startService(intent)
-      "Termux-এ বিল্ড সার্ভিস চালু হয়েছে (fallback): ${firstErr.message.orEmpty()}"
+      "Termux-এ লাইভ বিল্ড শুরু হয়েছে: bash $scriptPath"
+    }.recoverCatching { firstErr ->
+      if (runInBackground) {
+        ContextCompat.startForegroundService(context, intent)
+        "Termux ব্যাকগ্রাউন্ড সার্ভিস চালু হয়েছে: bash $scriptPath"
+      } else {
+        // Fallback if OS blocked background service start while Activity was switching
+        openTermuxApp(context)
+        "Termux খোলা হয়েছে — সেটআপ/বিল্ড কমান্ড Termux-এ চালান (${firstErr.message?.take(40).orEmpty()})"
+      }
     }
+  }
+
+  fun parseBuildResultStatus(jsonRaw: String?): TermuxResultJson? {
+    if (jsonRaw.isNullOrBlank()) return null
+    return runCatching {
+      val clean = jsonRaw.substringAfter("LXR_RESULT_JSON=").trim()
+      val obj = JSONObject(clean)
+      TermuxResultJson(
+        status = obj.optString("status"),
+        exitCode = obj.optInt("exitCode", -1),
+        apkPath = obj.optString("apkPath"),
+        sizeBytes = obj.optLong("sizeBytes", 0L),
+      )
+    }.getOrNull()
   }
 
   fun readSharedBuildArtifacts(
     repo: AppBuilderFileRepository,
     project: AppBuilderProject,
-  ): Pair<String?, ApkVerificationResult?> {
-    val dir = repo.sharedWorkspaceDir(project.slug)
-    val logFile = File(dir, "build.log")
-    val logText = if (logFile.exists()) logFile.readText(Charsets.UTF_8) else null
+  ): Triple<String?, TermuxResultJson?, ApkVerificationResult?> {
+    val logText = repo.readSharedTextCapped(project.slug, "build.log", maxBytes = 65536)
+    val resultJsonText = repo.readSharedTextCapped(project.slug, "build_result.json", maxBytes = 8192)
+    val parsedJson = parseBuildResultStatus(resultJsonText)
 
-    val resultFile = File(dir, "build_result.json")
-    if (resultFile.exists()) {
-      runCatching {
-        val json = JSONObject(resultFile.readText(Charsets.UTF_8))
-        val apkPath = json.optString("apkPath")
-        if (apkPath.isNotBlank() && File(apkPath).exists()) {
-          return logText to repo.verifyApkFile(File(apkPath), project.buildMode)
-        }
+    val foundApk =
+      if (parsedJson != null && parsedJson.apkPath.isNotBlank() && File(parsedJson.apkPath).let { it.exists() && it.canRead() }) {
+        repo.verifyApkFile(File(parsedJson.apkPath), project.buildMode, "Downloads/LXR-AppBuilder/${project.slug}")
+      } else {
+        repo.findBuiltApkForProject(project)
       }
-    }
-
-    val foundApk = repo.findBuiltApkForProject(project)
-    return logText to foundApk
+    return Triple(logText, parsedJson, foundApk)
   }
 
   fun openTermuxApp(context: Context): Boolean {
@@ -305,3 +356,10 @@ object TermuxBuildBridge {
     }
   }
 }
+
+data class TermuxResultJson(
+  val status: String,
+  val exitCode: Int,
+  val apkPath: String,
+  val sizeBytes: Long,
+)

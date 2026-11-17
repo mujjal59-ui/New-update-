@@ -313,7 +313,7 @@ private fun IdeDashboardTab(
       colors = fieldColors,
     )
 
-    Text("App Category (১৫ ধরনের অ্যাপ)", color = CYBER_CYAN, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+    Text("App Category (${AppCategory.entries.size} ধরনের অ্যাপ)", color = CYBER_CYAN, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
     Row(
       modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -417,6 +417,16 @@ private fun IdeDashboardTab(
       )
     }
   }
+
+  // Live Interactive App Preview / Demo
+  LxrLiveAppPreviewCard(
+    appName = state.projectName,
+    description = state.appDescription,
+    category = state.category,
+    designTheme = state.designTheme,
+    isBuilding = state.isGenerating || state.isBuilding,
+    stepLabel = state.termuxStepLabel,
+  )
 
   // Project History Card
   Column(

@@ -1,11 +1,13 @@
 package com.example.builder
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -21,11 +23,18 @@ import org.json.JSONObject
 
 class AppBuilderFileRepository(private val context: Context) {
 
+  private val prefs by lazy {
+    context.getSharedPreferences("lxr_app_builder_prefs", Context.MODE_PRIVATE)
+  }
+
   private fun projectsRootDir(): File =
     File(context.filesDir, "lxr_app_builder_projects").apply { mkdirs() }
 
   private fun exportsRootDir(): File =
     File(context.filesDir, "lxr_app_builder_exports").apply { mkdirs() }
+
+  private fun verifiedApkCacheDir(): File =
+    File(context.cacheDir, "verified_apks").apply { mkdirs() }
 
   fun sharedWorkspaceDir(projectSlug: String): File {
     val base =
@@ -43,12 +52,43 @@ class AppBuilderFileRepository(private val context: Context) {
 
   fun publicDownloadsFolderLabel(): String = "Downloads/LXR-AppBuilder"
 
+  fun saveSafTreeUri(uri: Uri) {
+    runCatching {
+      val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      context.contentResolver.takePersistableUriPermission(uri, flags)
+    }
+    prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
+  }
+
+  fun getSafTreeUri(): Uri? {
+    val raw = prefs.getString("saf_tree_uri", null)?.takeIf { it.isNotBlank() } ?: return null
+    val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+    val persisted = context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+    return if (persisted) uri else null
+  }
+
+  fun hasSafTreeAccess(): Boolean = getSafTreeUri() != null
+
+  fun createOpenDownloadsTreeIntent(): Intent {
+    return Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+      )
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val initial =
+          Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
+      }
+    }
+  }
+
   fun saveProject(project: AppBuilderProject): AppBuilderProject {
     val updated = project.copy(updatedAtMs = System.currentTimeMillis())
     val dir = File(projectsRootDir(), updated.id).apply { mkdirs() }
     val sourceRoot = File(dir, "source").apply { mkdirs() }
 
-    // Write individual project source files so they mirror real directory structure
     sourceRoot.deleteRecursively()
     sourceRoot.mkdirs()
     updated.files.forEach { (relPath, content) ->
@@ -76,10 +116,11 @@ class AppBuilderFileRepository(private val context: Context) {
       put("architecturePlan", updated.architecturePlan)
       put("buildStatus", updated.buildStatus.name)
       put("dependenciesSummary", JSONArray(updated.dependenciesSummary))
-      put("buildLogs", JSONArray(updated.buildLogs.takeLast(80)))
+      put("buildLogs", JSONArray(updated.buildLogs.takeLast(120)))
       put("apkFilePath", updated.apkResult.apkFilePath)
       put("apkFileName", updated.apkResult.apkFileName)
       put("apkSizeBytes", updated.apkResult.sizeBytes)
+      put("hasValidApkArchive", updated.apkResult.hasValidApkArchive)
       put("downloadExportPath", updated.apkResult.downloadExportPath)
 
       val filesObj = JSONObject()
@@ -168,6 +209,39 @@ class AppBuilderFileRepository(private val context: Context) {
     return dest.absolutePath
   }
 
+  fun readSharedTextCapped(projectSlug: String, fileName: String, maxBytes: Int = 65536): String? {
+    // 1. Direct File check (works when owned by our UID / pre-created via LXR--AI)
+    val directFile = File(sharedWorkspaceDir(projectSlug), fileName)
+    if (directFile.exists() && directFile.canRead() && directFile.length() > 0L) {
+      runCatching {
+        val len = directFile.length()
+        if (len <= maxBytes) {
+          return directFile.readText(Charsets.UTF_8)
+        }
+        java.io.RandomAccessFile(directFile, "r").use { raf ->
+          raf.seek(len - maxBytes)
+          val buf = ByteArray(maxBytes)
+          val read = raf.read(buf)
+          if (read > 0) return String(buf, 0, read, Charsets.UTF_8)
+        }
+      }
+    }
+
+    // 2. SAF tree check (reads files created by Termux UID on Android 11-16)
+    findSafFileUri(projectSlug, fileName)?.let { uri ->
+      runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+          val bytes = input.readBytes()
+          if (bytes.isNotEmpty()) {
+            val slice = if (bytes.size > maxBytes) bytes.copyOfRange(bytes.size - maxBytes, bytes.size) else bytes
+            return String(slice, Charsets.UTF_8)
+          }
+        }
+      }
+    }
+    return null
+  }
+
   fun verifyApkFile(apkFile: File, mode: ApkBuildMode, downloadExportPath: String = ""): ApkVerificationResult {
     if (!apkFile.exists() || !apkFile.isFile) {
       return ApkVerificationResult(apkFilePath = apkFile.absolutePath, apkFileName = apkFile.name, exists = false, buildMode = mode)
@@ -191,7 +265,7 @@ class AppBuilderFileRepository(private val context: Context) {
     return ApkVerificationResult(
       apkFilePath = apkFile.absolutePath,
       apkFileName = apkFile.name,
-      exists = true,
+      exists = size > 1024L && hasManifest,
       sizeBytes = size,
       hasValidApkArchive = hasManifest,
       buildMode = mode,
@@ -200,21 +274,164 @@ class AppBuilderFileRepository(private val context: Context) {
   }
 
   fun findBuiltApkForProject(project: AppBuilderProject): ApkVerificationResult? {
+    val slug = project.slug
+    val expectedDebug = "${slug}-debug.apk"
+    val expectedRelease = "${slug}-release.apk"
+
+    // 1. Direct accessible file paths
     val candidates = buildList {
       if (project.apkResult.apkFilePath.isNotBlank()) {
         add(File(project.apkResult.apkFilePath))
       }
-      val sharedDir = sharedWorkspaceDir(project.slug)
-      add(File(sharedDir, "${project.slug}-debug.apk"))
-      add(File(sharedDir, "${project.slug}-release.apk"))
+      val sharedDir = sharedWorkspaceDir(slug)
+      add(File(sharedDir, expectedDebug))
+      add(File(sharedDir, expectedRelease))
       add(File(sharedDir, "app-debug.apk"))
       add(File(sharedDir, "app-release.apk"))
       add(File(sharedDir, "app/build/outputs/apk/debug/app-debug.apk"))
       add(File(sharedDir, "app/build/outputs/apk/release/app-release.apk"))
-      add(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LXR-AppBuilder/${project.slug}-debug.apk"))
+      val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+      add(File(dl, "LXR-AppBuilder/$expectedDebug"))
+      add(File(dl, "LXR-AppBuilder/$expectedRelease"))
+      add(File(dl, expectedDebug))
+      add(File(dl, expectedRelease))
     }
-    val found = candidates.firstOrNull { it.exists() && it.length() > 0L } ?: return null
-    return verifyApkFile(found, project.buildMode)
+    val directFound = candidates.firstOrNull { it.exists() && it.canRead() && it.length() > 1024L }
+    if (directFound != null) {
+      val cached = copyToInstallableCache(directFound, directFound.name) ?: directFound
+      val res = verifyApkFile(cached, project.buildMode, "Downloads/LXR-AppBuilder/${directFound.name}")
+      if (res.exists) return res
+    }
+
+    // 2. SAF tree discovery (works across Termux UID on Android 11–16)
+    val safNames = listOf(expectedDebug, expectedRelease, "app-debug.apk", "app-release.apk")
+    for (fname in safNames) {
+      val uri = findSafFileUri(slug, fname) ?: findSafFileUri(null, fname)
+      if (uri != null) {
+        val cached = copyUriToInstallableCache(uri, "${slug}-${project.buildMode.name.lowercase()}.apk")
+        if (cached != null) {
+          val res = verifyApkFile(cached, project.buildMode, "Downloads/LXR-AppBuilder/$slug/$fname")
+          if (res.exists) return res
+        }
+      }
+    }
+
+    // 3. MediaStore Downloads scan (finds public Downloads/*.apk saved by Termux or LXR)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      findApkViaMediaStore(slug)?.let { uri ->
+        val outName = "${slug}-${project.buildMode.name.lowercase()}.apk"
+        val cached = copyUriToInstallableCache(uri, outName)
+        if (cached != null) {
+          val res = verifyApkFile(cached, project.buildMode, "Downloads/LXR-AppBuilder/$outName")
+          if (res.exists) return res
+        }
+      }
+    }
+
+    return null
+  }
+
+  private fun copyToInstallableCache(src: File, targetName: String): File? {
+    return runCatching {
+      val dest = File(verifiedApkCacheDir(), targetName)
+      if (src.absolutePath != dest.absolutePath) {
+        src.copyTo(dest, overwrite = true)
+      }
+      dest
+    }.getOrNull()
+  }
+
+  private fun copyUriToInstallableCache(uri: Uri, targetName: String): File? {
+    return runCatching {
+      val dest = File(verifiedApkCacheDir(), targetName)
+      context.contentResolver.openInputStream(uri)?.use { input ->
+        FileOutputStream(dest).use { out -> input.copyTo(out) }
+      } ?: return null
+      if (dest.length() > 1024L) dest else null
+    }.getOrNull()
+  }
+
+  private fun findApkViaMediaStore(slug: String): Uri? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    return runCatching {
+      val resolver = context.contentResolver
+      val projection = arrayOf(
+        MediaStore.Downloads._ID,
+        MediaStore.Downloads.DISPLAY_NAME,
+        MediaStore.Downloads.SIZE,
+        MediaStore.Downloads.DATE_MODIFIED,
+      )
+      val selection = "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
+      val args = arrayOf("%$slug%.apk")
+      resolver.query(
+        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+        projection,
+        selection,
+        args,
+        "${MediaStore.Downloads.DATE_MODIFIED} DESC",
+      )?.use { cursor ->
+        if (cursor.moveToFirst()) {
+          val id = cursor.getLong(0)
+          val size = cursor.getLong(2)
+          if (size > 1024L) {
+            return@runCatching ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+          }
+        }
+      }
+      null
+    }.getOrNull()
+  }
+
+  private fun findSafFileUri(projectSlug: String?, targetFileName: String): Uri? {
+    val treeUri = getSafTreeUri() ?: return null
+    return runCatching {
+      val resolver = context.contentResolver
+      val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+      var searchDocId = treeDocId
+
+      // Step into LXR-AppBuilder if user granted Download/ directly
+      findChildDocId(resolver, treeUri, searchDocId, "LXR-AppBuilder", wantDirectory = true)?.let {
+        searchDocId = it
+      }
+      if (!projectSlug.isNullOrBlank()) {
+        findChildDocId(resolver, treeUri, searchDocId, projectSlug, wantDirectory = true)?.let { slugDocId ->
+          findChildDocId(resolver, treeUri, slugDocId, targetFileName, wantDirectory = false)?.let { fileDocId ->
+            return@runCatching DocumentsContract.buildDocumentUriUsingTree(treeUri, fileDocId)
+          }
+        }
+      }
+      findChildDocId(resolver, treeUri, searchDocId, targetFileName, wantDirectory = false)?.let { fileDocId ->
+        return@runCatching DocumentsContract.buildDocumentUriUsingTree(treeUri, fileDocId)
+      }
+      null
+    }.getOrNull()
+  }
+
+  private fun findChildDocId(
+    resolver: android.content.ContentResolver,
+    treeUri: Uri,
+    parentDocId: String,
+    name: String,
+    wantDirectory: Boolean,
+  ): String? {
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+    val proj = arrayOf(
+      DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+      DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+      DocumentsContract.Document.COLUMN_MIME_TYPE,
+    )
+    resolver.query(childrenUri, proj, null, null, null)?.use { c ->
+      while (c.moveToNext()) {
+        val docId = c.getString(0) ?: continue
+        val disp = c.getString(1) ?: continue
+        val mime = c.getString(2).orEmpty()
+        val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
+        if (disp.equals(name, ignoreCase = true) && isDir == wantDirectory) {
+          return docId
+        }
+      }
+    }
+    return null
   }
 
   fun shareableUriForFile(file: File): Uri? {
@@ -224,7 +441,10 @@ class AppBuilderFileRepository(private val context: Context) {
   }
 
   fun createInstallApkIntent(apkFile: File): Intent? {
-    val uri = shareableUriForFile(apkFile) ?: return null
+    val installable =
+      if (apkFile.absolutePath.startsWith(context.cacheDir.absolutePath)) apkFile
+      else copyToInstallableCache(apkFile, apkFile.name) ?: apkFile
+    val uri = shareableUriForFile(installable) ?: return null
     return Intent(Intent.ACTION_VIEW).apply {
       setDataAndType(uri, "application/vnd.android.package-archive")
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -273,15 +493,17 @@ class AppBuilderFileRepository(private val context: Context) {
     }
     val mode = runCatching { ApkBuildMode.valueOf(o.optString("buildMode")) }.getOrDefault(ApkBuildMode.DEBUG)
     val apkPath = o.optString("apkFilePath")
+    val apkFile = File(apkPath)
     val apkResult =
-      if (apkPath.isNotBlank() && File(apkPath).exists()) {
-        verifyApkFile(File(apkPath), mode, o.optString("downloadExportPath"))
+      if (apkPath.isNotBlank() && apkFile.exists()) {
+        verifyApkFile(apkFile, mode, o.optString("downloadExportPath"))
       } else {
         ApkVerificationResult(
           apkFilePath = apkPath,
           apkFileName = o.optString("apkFileName"),
-          exists = apkPath.isNotBlank() && File(apkPath).exists(),
+          exists = apkPath.isNotBlank() && apkFile.exists(),
           sizeBytes = o.optLong("apkSizeBytes", 0L),
+          hasValidApkArchive = o.optBoolean("hasValidApkArchive", false),
           buildMode = mode,
           downloadExportPath = o.optString("downloadExportPath"),
         )

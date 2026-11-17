@@ -13,6 +13,46 @@ import org.json.JSONObject
 object AppProjectGenerator {
   private const val TAG = "LxrAppGenerator"
 
+  fun inferCategoryAndNameFromPrompt(
+    rawPrompt: String,
+    requestedName: String? = null,
+    requestedCategory: String? = null,
+  ): Triple<String, AppCategory, ProgrammingLanguage> {
+    val combined = "${requestedName.orEmpty()} ${requestedCategory.orEmpty()} $rawPrompt".lowercase()
+    val category =
+      when {
+        combined.contains("calc") || combined.contains("ক্যালকুলেটর") || combined.contains("হিসাব") -> AppCategory.CALCULATOR
+        combined.contains("game") || combined.contains("গেম") || combined.contains("tic") || combined.contains("puzzle") -> AppCategory.MINI_GAME
+        combined.contains("ai") || combined.contains("assistant") || combined.contains("অ্যাসিস্ট্যান্ট") -> AppCategory.AI_ASSISTANT
+        combined.contains("chat") || combined.contains("চ্যাট") -> AppCategory.CHATTING
+        combined.contains("voice") || combined.contains("ভয়েস") -> AppCategory.VOICE_ASSISTANT
+        combined.contains("note") || combined.contains("নোট") || combined.contains("diary") -> AppCategory.NOTES
+        combined.contains("todo") || combined.contains("task") || combined.contains("টাস্ক") -> AppCategory.PRODUCTIVITY
+        combined.contains("quiz") || combined.contains("কুইজ") || combined.contains("edu") || combined.contains("শিক্ষা") -> AppCategory.EDUCATION
+        combined.contains("music") || combined.contains("মিউজিক") -> AppCategory.MUSIC_PLAYER
+        combined.contains("video") || combined.contains("ভিডিও") -> AppCategory.VIDEO_PLAYER
+        combined.contains("shop") || combined.contains("ecommerce") || combined.contains("ই-কমার্স") -> AppCategory.ECOMMERCE
+        combined.contains("business") || combined.contains("বিজনেস") -> AppCategory.BUSINESS
+        else -> AppCategory.CUSTOM
+      }
+
+    val defaultName =
+      when (category) {
+        AppCategory.CALCULATOR -> "LXR Smart Calculator"
+        AppCategory.MINI_GAME -> "LXR Tic-Tac-Toe Arena"
+        AppCategory.AI_ASSISTANT -> "LXR Pocket AI Assistant"
+        AppCategory.NOTES -> "LXR Smart Notes"
+        AppCategory.PRODUCTIVITY -> "LXR Task Planner"
+        else -> "LXR Custom App"
+      }
+    val chosenName = requestedName?.trim()?.takeIf { it.isNotBlank() } ?: defaultName
+    val lang =
+      if (combined.contains("java")) ProgrammingLanguage.JAVA
+      else if (combined.contains("xml")) ProgrammingLanguage.KOTLIN
+      else ProgrammingLanguage.KOTLIN_COMPOSE
+    return Triple(chosenName, category, lang)
+  }
+
   private val planSchema by lazy {
     Schema.obj(
       properties = mapOf(
@@ -173,12 +213,26 @@ object AppProjectGenerator {
     project: AppBuilderProject,
     files: MutableMap<String, String>,
   ): String? {
+    val effective = AppRichScreenTemplates.resolveEffectiveCategory(project.category, project.description)
+    if (
+      effective == AppCategory.CALCULATOR ||
+        effective == AppCategory.MINI_GAME ||
+        effective == AppCategory.AI_ASSISTANT ||
+        effective == AppCategory.CHATTING ||
+        effective == AppCategory.VOICE_ASSISTANT
+    ) {
+      return null
+    }
     val pkgPath = project.packageName.replace('.', '/')
     val mainFilePath =
       if (project.language == ProgrammingLanguage.JAVA) "app/src/main/java/$pkgPath/MainActivity.java"
       else "app/src/main/java/$pkgPath/MainActivity.kt"
     val currentSource = files[mainFilePath] ?: return null
     val layoutXml = files["app/src/main/res/layout/activity_main.xml"]
+    val extractedIds =
+      if (layoutXml != null) {
+        Regex("@\\+id/([A-Za-z0-9_]+)").findAll(layoutXml).map { it.groupValues[1] }.distinct().joinToString(", ")
+      } else ""
 
     return try {
       val prompt =
@@ -187,7 +241,7 @@ object AppProjectGenerator {
         Package: ${project.packageName}
         App Name: ${project.name}
         User Description: ${project.description}
-        ${if (layoutXml != null) "Existing activity_main.xml IDs MUST stay identical (tvAppTitle, tvAppSubtitle, etPrimaryInput, btnPrimaryAction, tvOutputList)." else ""}
+        ${if (extractedIds.isNotBlank()) "Existing activity_main.xml IDs MUST stay identical ($extractedIds)." else ""}
         Current working file:
         ```
         $currentSource
@@ -261,6 +315,34 @@ object AutoErrorFixer {
 
     val repeated = previousSignature != null && previousSignature == signature && attemptCount > 1
     val updatedFiles = project.files.toMutableMap()
+
+    // Rule 0: Gradle OOM / Daemon / Kotlin compiler daemon crash in Termux -> force low-memory in-process build
+    if (lower.contains("outofmemory") || lower.contains("daemon disappeared") || lower.contains("metaspace") || lower.contains("heap space")) {
+      val gp = updatedFiles["gradle.properties"].orEmpty()
+      val patched = buildString {
+        appendLine("org.gradle.jvmargs=-Xmx768m -Dfile.encoding=UTF-8")
+        appendLine("org.gradle.daemon=false")
+        appendLine("kotlin.compiler.execution.strategy=in-process")
+        appendLine("android.useAndroidX=true")
+        appendLine("android.nonTransitiveRClass=true")
+        if (gp.contains("android.aapt2FromMavenOverride=")) {
+          val line = gp.lineSequence().firstOrNull { it.startsWith("android.aapt2FromMavenOverride=") }
+          if (line != null) appendLine(line)
+        }
+      }.trimEnd()
+      if (!repeated) {
+        updatedFiles["gradle.properties"] = patched
+        return BuildErrorDiagnosis(
+          rawLogSnippet = errorLog.takeLast(600),
+          rootCauseBn = "Termux র‍্যাম সীমাবদ্ধতার কারণে Gradle/Kotlin Daemon ক্র্যাশ করেছে।",
+          suggestedFixBn = "gradle.properties-এ কম মেমোরি (-Xmx768m) ও in-process কম্পাইলার সেট করা হয়েছে।",
+          affectedFile = "gradle.properties",
+          autoFixApplied = true,
+          attemptCount = attemptCount,
+          isRepeatedSameError = false,
+        ) to updatedFiles
+      }
+    }
 
     // Rule 1: Termux ARM64 aapt2 binary Exec format error
     if (lower.contains("aapt2") && (lower.contains("exec format") || lower.contains("daemon") || lower.contains("cannot run program"))) {

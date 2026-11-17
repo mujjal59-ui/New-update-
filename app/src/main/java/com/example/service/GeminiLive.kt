@@ -22,18 +22,23 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.net.ConnectivityManager
+import android.net.ConnectivityManager.NetworkCallback
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.util.Base64
 import com.example.MainActivity
 import com.example.ai.RiyaPersona
+import com.example.builder.AppBuilderRuntimeBridge
 import com.example.data.RiyaState
 import com.example.data.Store
 import java.util.concurrent.CountDownLatch
@@ -168,12 +173,14 @@ class GeminiLive(private val ctx: Context) {
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি অ্যাপ লক খুলে দাও। ভেতরের সেটিংস বা পিনের কথা উল্লেখ করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১২ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১৩ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ (রিয়েল ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, মিনি গেম, নোট অ্যাপ বা কাস্টম অ্যাপ) বানাতে বললে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে, LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Termux-এ APK বিল্ড ও ফলাফল যাচাই শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
+      {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং ফাইল কোন ফোল্ডারে আছে তা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"find_and_open_item","description":"স্ক্রিনে বা অ্যাপে যেকোনো আইটেম নাম দিয়ে খুঁজে ট্যাপ করো, না পেলে Infinix Android 16 সার্চ বার দিয়ে সার্চ করো।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
       {"name":"current_screen","description":"বস এখন কোন অ্যাপ বা স্ক্রিনে আছেন তা জানো"},
       {"name":"read_screen","description":"এখন সম্পূর্ণ স্ক্রিনে কী কী লেখা, বাটন, সুইচ ও লেখার বক্স আছে তা পড়ো"},
       {"name":"click_text","description":"স্ক্রিনের এই টেক্সট/বাটনে ট্যাপ করো","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"}},"required":["text"]}},
-      {"name":"type_text","description":"ফোকাসড লেখার বক্সে টাইপ করো","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"}},"required":["text"]}},
+      {"name":"type_text","description":"স্ক্রিনের লেখার বক্সে টাইপ করো। নোটপ্যাড বা Notes অ্যাপে মূল নোট লিখতে target='body' দাও যাতে উপরের Title বক্সে না লিখে নিচের Note something down বক্সে লেখে। শুধু শিরোনামের জন্য target='title'।","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"},"target":{"type":"STRING","enum":["auto","body","title"],"description":"auto (ডিফল্ট body অগ্রাধিকার), body (নোট বা মূল লেখা), title (কেবল শিরোনাম)"}},"required":["text"]}},
       {"name":"global_action","description":"home, back, recents, notifications বা lock","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING"}},"required":["action"]}},
       {"name":"scroll","description":"স্ক্রিন স্ক্রল করো","parameters":{"type":"OBJECT","properties":{"direction":{"type":"STRING","description":"up বা down"}},"required":["direction"]}},
       {"name":"call_contact","description":"ফোনের কন্টাক্ট লিস্ট চেক করে কল দাও","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
@@ -221,6 +228,12 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var lastWakeOrMicPopupMs = 0L
   @Volatile private var turnUnlockedMainScreenByLxr = false
   @Volatile private var playbackSpeed: Float = Store.voiceSpeed(ctx)
+  private var audioRouteThread: HandlerThread? = null
+  private var audioRouteHandler: Handler? = null
+  @Volatile private var netCallback: NetworkCallback? = null
+  @Volatile private var lastServerActivityMs = 0L
+  @Volatile private var lastBossTurnAtMs = 0L
+  @Volatile private var waitingServerReply = false
 
   fun updatePlaybackSpeed(speed: Float) {
     val clamped = speed.coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
@@ -383,8 +396,33 @@ class GeminiLive(private val ctx: Context) {
         try {
           watchScreen()
         } catch (_: Exception) {}
-        val intervalMs = if (Store.lowNetFastMode(ctx) && isSlowNetwork()) 5000L else 3000L
+        val intervalMs = if (isSlowNetwork() || Store.lowNetFastMode(ctx)) 7500L else 3800L
         main.postDelayed(this, intervalMs)
+      }
+    }
+
+  private val watchdogLoop =
+    object : Runnable {
+      override fun run() {
+        if (stopped) return
+        try {
+          val now = System.currentTimeMillis()
+          val qBytes = ws?.queueSize() ?: 0L
+          if (ready && !isExecutingTool) {
+            if (qBytes > 360_000L) {
+              fail("নেটওয়ার্ক বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
+            } else if (
+              waitingServerReply &&
+                lastBossTurnAtMs > 0L &&
+                (now - lastBossTurnAtMs) > 14_000L &&
+                (now - lastServerActivityMs) > 14_000L
+            ) {
+              waitingServerReply = false
+              fail("সার্ভারের উত্তর বিলম্বিত — পুনরায় সংযোগ হচ্ছে…")
+            }
+          }
+        } catch (_: Throwable) {}
+        if (!stopped) main.postDelayed(this, 2500L)
       }
     }
 
@@ -456,10 +494,11 @@ class GeminiLive(private val ctx: Context) {
 
   private fun sendScreenNow() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently()) return
+    if ((ws?.queueSize() ?: 0L) > 12_000L) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 480 else 720, quality = if (lowNet) 38 else 55) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 420 else 680, quality = if (lowNet) 35 else 52) { jpg ->
       if (jpg != null) {
         lastShot = jpg.contentHashCode()
         sendImage(jpg)
@@ -469,12 +508,13 @@ class GeminiLive(private val ctx: Context) {
 
   private fun watchScreen() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently()) return
+    if ((ws?.queueSize() ?: 0L) > 12_000L) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 480 else 720, quality = if (lowNet) 38 else 55) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 420 else 680, quality = if (lowNet) 35 else 52) { jpg ->
       if (jpg != null) {
         val h = jpg.contentHashCode()
         if (h != lastShot) {
@@ -503,22 +543,75 @@ class GeminiLive(private val ctx: Context) {
     hadCommandOrToolThisTurn = false
     summonedOrbToolOnly = false
     lastWakeOrMicPopupMs = System.currentTimeMillis()
+    lastServerActivityMs = System.currentTimeMillis()
+    lastBossTurnAtMs = 0L
+    waitingServerReply = false
     turnUnlockedMainScreenByLxr = false
     stopped = false
     LxrFloatingOverlayManager.onInterruptSpeakRequest = { interruptSpeakerForBoss() }
+    try {
+      audioRouteThread?.quitSafely()
+    } catch (_: Throwable) {}
+    val routeThread = HandlerThread("LxrAudioRoute").apply { start() }
+    audioRouteThread = routeThread
+    val routeHandler = Handler(routeThread.looper)
+    audioRouteHandler = routeHandler
     routeAudio(allowRestart = false)
-    am.registerAudioDeviceCallback(devCb, main)
+    am.registerAudioDeviceCallback(devCb, routeHandler)
+    registerNetworkCallbackSafe()
     initTrack()
     startMic()
     connect()
     main.post(screenLoop)
+    main.postDelayed(watchdogLoop, 2500L)
+  }
+
+  private fun registerNetworkCallbackSafe() {
+    try {
+      val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      netCallback?.let { old -> runCatching { cm.unregisterNetworkCallback(old) } }
+      val cb =
+        object : NetworkCallback() {
+          override fun onAvailable(network: Network) {
+            if (stopped) return
+            main.post {
+              if (!stopped && !ready && !pending) {
+                connect()
+              }
+            }
+          }
+
+          override fun onLost(network: Network) {
+            if (stopped) return
+            main.post {
+              if (!stopped && ready) {
+                fail("ইন্টারনেট সংযোগ বিচ্ছিন্ন হয়েছে — পুনরায় সংযোগ হচ্ছে...")
+              }
+            }
+          }
+        }
+      netCallback = cb
+      val req =
+        NetworkRequest.Builder()
+          .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+          .build()
+      cm.registerNetworkCallback(req, cb)
+    } catch (_: Throwable) {}
   }
 
   fun stop() {
     stopped = true
     ready = false
+    waitingServerReply = false
     try {
       main.removeCallbacksAndMessages(null)
+    } catch (_: Throwable) {}
+    try {
+      netCallback?.let { cb ->
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.unregisterNetworkCallback(cb)
+      }
+      netCallback = null
     } catch (_: Throwable) {}
     try {
       ws?.close(1000, "bye")
@@ -572,6 +665,11 @@ class GeminiLive(private val ctx: Context) {
     try {
       am.unregisterAudioDeviceCallback(devCb)
     } catch (_: Throwable) {}
+    try {
+      audioRouteThread?.quitSafely()
+    } catch (_: Throwable) {}
+    audioRouteThread = null
+    audioRouteHandler = null
     try {
       if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
       else {
@@ -744,9 +842,13 @@ class GeminiLive(private val ctx: Context) {
       - ভুল-ভ্রান্তি নিষিদ্ধ (STRICT): বসের ফোন যদি অন-স্ক্রিন আনলক (খোলা) অবস্থায় থাকে, তাহলে কখনোই বলবে না "ফোন আগে থেকেই লক ছিল" বা "আবার লক করে দিলাম"—এবং বসের স্পষ্ট নির্দেশ ছাড়া আনলক মেইন স্ক্রিন কখনোই লক করবে না! একই লক/আনলকের কথা দুইবার বলবে না।
 
       [A-TO-Z CAPABILITIES & INSTANT BOSS BARGE-IN — MANDATORY]
-      - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১২ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না, প্রতিটি পয়েন্টের পর সামান্য বিরতি দিয়ে বলবে)।
+      - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১৩ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না, প্রতিটি পয়েন্টের পর সামান্য বিরতি দিয়ে বলবে)।
       - বস মাঝখানে কথা বললে সাথে সাথে থামো (CRITICAL BARGE-IN RULE): এ টু জেড তালিকা বা যেকোনো লম্বা উত্তর বলার মাঝখানে বস যদি কোনো নতুন কথা বা নির্দেশ বলেন, সাথে সাথেই তালিকা বলা বন্ধ করবে, ওই তালিকা প্রসঙ্গ পুরোপুরি বাদ দেবে এবং বসের নতুন কথা শুনে সেই অনুযায়ী কাজ করবে!
       ${RiyaPersona.CAPABILITIES_A_TO_Z_BN}
+
+      [NOTEPAD BODY VS TITLE & TERMUX APP BUILDER — CRITICAL]
+      - নোটপ্যাড/Notes অ্যাপে বস যখন কোনো নোট লিখতে বলবেন, `read_screen` দেখে উপরের "Title" বক্সে (`[নোট টাইটেল বক্স]`) নয়—সবসময় `type_text` টুলে `target="body"` দিয়ে নিচের "Note something down" (`[মূল নোট লেখার বক্স]`) ঘরে নোট লিখবে (যদি না বস আলাদাভাবে শিরোনাম/Title লিখতে বলেন)।
+      - বস যদি যেকোনো অ্যান্ড্রয়েড অ্যাপ (ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, ছোটখাটো গেম বা কাস্টম অ্যাপ) বানাতে বলেন, সাথে সাথে `build_android_app` টুল চালাবে—এতে LXR UI-এ সরাসরি প্রিভিউ দেখা যাবে এবং Termux-এ ডাউনলোড/কম্পাইল হয়ে `Downloads/LXR-AppBuilder` ফোল্ডারে APK তৈরি হবে। বিল্ড চলাকালীন অবস্থা দেখতে `check_termux_build_status` চালাবে।
 
       [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
       - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
@@ -797,6 +899,7 @@ class GeminiLive(private val ctx: Context) {
 
   private fun handle(msg: String) {
     try {
+      lastServerActivityMs = System.currentTimeMillis()
       val j = JSONObject(msg)
       j.optJSONObject("error")?.let {
         fail("সার্ভার ত্রুটি: " + it.optString("message", it.toString()).take(100))
@@ -849,6 +952,7 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         sc.optJSONObject("modelTurn")?.optJSONArray("parts")?.let { ps ->
+          waitingServerReply = false
           for (i in 0 until ps.length()) {
             ps.getJSONObject(i).optJSONObject("inlineData")?.let {
               val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
@@ -963,6 +1067,7 @@ class GeminiLive(private val ctx: Context) {
             }
           }
 
+          waitingServerReply = false
           hadCommandOrToolThisTurn = false
           summonedOrbToolOnly = false
           turnUnlockedMainScreenByLxr = false
@@ -973,6 +1078,7 @@ class GeminiLive(private val ctx: Context) {
       }
       j.optJSONObject("toolCall")?.optJSONArray("functionCalls")?.let { fc ->
         hadCommandOrToolThisTurn = true
+        waitingServerReply = false
         summonedOrbToolOnly =
           fc.length() == 1 && fc.getJSONObject(0).optString("name") == "show_wake_orb"
         LxrFloatingOverlayManager.cancelPendingHide()
@@ -982,20 +1088,27 @@ class GeminiLive(private val ctx: Context) {
             val out = JSONArray()
             for (i in 0 until fc.length()) {
               val c = fc.getJSONObject(i)
-              val nm = c.getString("name")
-              val r = runTool(nm, c.optJSONObject("args") ?: JSONObject())
+              val callId = c.optString("id")
+              val nm = c.optString("name")
+              val r =
+                try {
+                  runTool(nm, c.optJSONObject("args") ?: JSONObject())
+                } catch (e: Throwable) {
+                  "টুল ত্রুটি: ${e.message ?: "unknown error"}"
+                }
               out.put(
                 JSONObject()
-                  .put("id", c.getString("id"))
-                  .put("name", c.getString("name"))
+                  .put("id", callId)
+                  .put("name", nm)
                   .put("response", JSONObject().put("result", r))
               )
             }
             ws?.send(
               JSONObject().put("toolResponse", JSONObject().put("functionResponses", out)).toString()
             )
-            isExecutingTool = false
-          } catch (_: Exception) {
+            lastServerActivityMs = System.currentTimeMillis()
+          } catch (_: Throwable) {
+          } finally {
             isExecutingTool = false
           }
         }
@@ -1037,6 +1150,8 @@ class GeminiLive(private val ctx: Context) {
         "web_search",
         "get_battery_level",
         "get_capabilities_a_to_z",
+        "build_android_app",
+        "check_termux_build_status",
         "show_wake_orb",
         "lock_phone",
         "unlock_phone",
@@ -1141,6 +1256,15 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         "get_capabilities_a_to_z" -> RiyaPersona.CAPABILITIES_A_TO_Z_BN
+        "build_android_app" ->
+          AppBuilderRuntimeBridge.startVoiceAppBuild(
+            context = ctx,
+            prompt = a.optString("prompt").ifBlank { "Smart Android App" },
+            requestedName = a.optString("app_name").ifBlank { null },
+            requestedCategory = a.optString("category").ifBlank { null },
+            shouldAutoBuildTermux = a.optBoolean("auto_build_termux", true),
+          )
+        "check_termux_build_status" -> AppBuilderRuntimeBridge.readLiveStatusSummaryForAi(ctx)
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
         "current_screen" ->
           if (RiyaState.cameraOn) {
@@ -1155,7 +1279,11 @@ class GeminiLive(private val ctx: Context) {
             acc?.readScreen() ?: noAcc
           }
         "click_text" -> acc?.clickText(a.optString("text")) ?: noAcc
-        "type_text" -> acc?.typeText(a.optString("text")) ?: noAcc
+        "type_text" ->
+          acc?.typeText(
+            t = a.optString("text"),
+            target = a.optString("target", "auto").ifBlank { "auto" },
+          ) ?: noAcc
         "global_action" -> acc?.global(a.optString("action")) ?: noAcc
         "scroll" -> acc?.scroll(a.optString("direction")) ?: noAcc
         "call_contact" -> callContact(a.optString("name"))
@@ -2164,7 +2292,7 @@ class GeminiLive(private val ctx: Context) {
                 -1
               }
             if (n < 0) break
-            if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0) < 80_000) {
+            if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0L) < 260_000L) {
               val now = System.currentTimeMillis()
               if (now - lastVmRefreshAt > 400L) {
                 lastVmRefreshAt = now
@@ -2196,12 +2324,14 @@ class GeminiLive(private val ctx: Context) {
                 synchronized(trackLock) {
                   val activeTrack = track
                   val head = (activeTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+                  val recentlyWrote = lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) <= 950L
                   activeTrack != null &&
                     activeTrack.state == AudioTrack.STATE_INITIALIZED &&
                     activeTrack.playState == AudioTrack.PLAYSTATE_PLAYING &&
+                    recentlyWrote &&
                     head < lastAudibleEndFrame
                 }
-              val ttsSpeakingNow = RiyaVoiceManager.isSpeaking.value
+              val ttsSpeakingNow = RiyaVoiceManager.isActivelySpeaking()
               if (isSpeakerAudiblyPlayingNow || ttsSpeakingNow) {
                 lastAudibleStopMs = now
               } else if (rawRms < 6000.0) {
@@ -2262,10 +2392,15 @@ class GeminiLive(private val ctx: Context) {
               val hasSpeech = !isSoftMuted && rawRms >= speechGate
               if (hasSpeech) {
                 lastVoiceMs = now
+                lastBossTurnAtMs = now
               }
 
               // Keep 1.4s hangover for smooth Bengali word endings without losing quiet words
+              val prevHangover = lastVoiceMs > 0L
               val withinHangover = !isSoftMuted && (now - lastVoiceMs) <= 1400L
+              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in 1400L..2200L) {
+                waitingServerReply = true
+              }
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
               val shouldSend =
                 if (isSoftMuted) (silentFrameCounter % 4 == 0)
@@ -2505,7 +2640,7 @@ class GeminiLive(private val ctx: Context) {
 
   fun sendImage(jpeg: ByteArray) {
     if (!ready || stopped) return
-    if ((ws?.queueSize() ?: 0) > 120_000) return
+    if ((ws?.queueSize() ?: 0L) > 12_000L) return
     try {
       val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
       ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")

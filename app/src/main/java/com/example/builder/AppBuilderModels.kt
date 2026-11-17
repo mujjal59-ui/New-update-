@@ -92,6 +92,12 @@ enum class AppCategory(
     "টাস্ক লিস্ট, ফোকাস টাইমার এবং দৈনিক কাজের অগ্রগতি",
     listOf("androidx.core:core-ktx:1.15.0", "androidx.appcompat:appcompat:1.7.0", "com.google.android.material:material:1.12.0"),
   ),
+  MINI_GAME(
+    "Mini Game App",
+    "গেম ও পাজল অ্যাপ",
+    "ইন্টারেক্টিভ টিক-ট্যাক-টো (X-O) অ্যারেনা গেম, এআই প্রতিপক্ষ, স্কোরবোর্ড ও রিসেট",
+    listOf("androidx.core:core-ktx:1.15.0", "androidx.appcompat:appcompat:1.7.0", "com.google.android.material:material:1.12.0"),
+  ),
   CUSTOM(
     "Custom Android Application",
     "কাস্টম অ্যান্ড্রয়েড অ্যাপ",
@@ -183,6 +189,8 @@ data class TermuxEnvironmentStatus(
   val runCommandPermissionGranted: Boolean = false,
   val sharedDownloadDirPath: String = "",
   val scriptExported: Boolean = false,
+  val hasSafAccess: Boolean = false,
+  val safFolderLabel: String = "",
   val setupSummaryBn: String = "",
 )
 
