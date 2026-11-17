@@ -67,6 +67,26 @@ data class PendingIncomingMessage(
   val suggestedDraft: String = "",
 )
 
+object LiveVadConfig {
+  const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
+  const val END_SENSITIVITY = "END_SENSITIVITY_LOW"
+  const val PREFIX_PADDING_MS = 100
+  // Wait 1.25s of true silence after Boss finishes speaking: avoids interrupting mid-sentence while replying within ~1-2s
+  const val SILENCE_DURATION_MS = 1250
+  const val MIC_HANGOVER_MS = 1050L
+
+  fun buildRealtimeInputConfigJson(): JSONObject =
+    JSONObject().put(
+      "automaticActivityDetection",
+      JSONObject()
+        .put("disabled", false)
+        .put("startOfSpeechSensitivity", START_SENSITIVITY)
+        .put("endOfSpeechSensitivity", END_SENSITIVITY)
+        .put("prefixPaddingMs", PREFIX_PADDING_MS)
+        .put("silenceDurationMs", SILENCE_DURATION_MS),
+    )
+}
+
 /**
  * Prevents LXR--AI from ever hearing its own Phone Speaker output (looping/repeating itself),
  * regardless of whether Voice Match is ON or OFF or speaker volume RMS is high.
@@ -80,7 +100,7 @@ object AudioEchoGuard {
     ttsIsSpeaking: Boolean,
     lastSpeakerSoundingMs: Long,
     rawRms: Double,
-    phoneTailHoldMs: Long = 850L,
+    phoneTailHoldMs: Long = 700L,
   ): Boolean {
     if (!usingBtAudio) {
       return nowMs < micMuteUntilMs ||
@@ -90,7 +110,7 @@ object AudioEchoGuard {
     }
     return nowMs < micMuteUntilMs ||
       ttsIsSpeaking ||
-      (lastSpeakerSoundingMs > 0L && (nowMs - lastSpeakerSoundingMs) < 350L && rawRms < 950.0)
+      (lastSpeakerSoundingMs > 0L && (nowMs - lastSpeakerSoundingMs) < 300L && rawRms < 950.0)
   }
 
   /**
@@ -109,13 +129,13 @@ object AudioEchoGuard {
     lastSpeakerOutputRms: Double,
     voiceMatchBargeIn: Boolean,
     consecutiveLoudChunks: Int,
-    phoneTailHoldMs: Long = 320L,
+    phoneTailHoldMs: Long = 260L,
   ): Boolean {
     if (nowMs < micMuteUntilMs) return !voiceMatchBargeIn
     if (ttsIsSpeaking) return !voiceMatchBargeIn
     if (usingBtAudio) {
       return isSpeakerAudiblyPlayingNow ||
-        (lastAudibleStopMs > 0L && (nowMs - lastAudibleStopMs) < 350L && rawRms < 950.0 && !voiceMatchBargeIn)
+        (lastAudibleStopMs > 0L && (nowMs - lastAudibleStopMs) < 300L && rawRms < 950.0 && !voiceMatchBargeIn)
     }
     if (voiceMatchBargeIn) return false
     val loudDirectBossBargeIn =
@@ -160,6 +180,7 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var greetedThisSession = false
   @Volatile private var micMuteUntilMs = 0L
   @Volatile private var transcriptionCompatFallback = false
+  @Volatile private var vadConfigCompatFallback = false
   @Volatile private var summonedOrbToolOnly = false
 
   fun isReady(): Boolean = ready && !stopped
@@ -481,7 +502,7 @@ class GeminiLive(private val ctx: Context) {
               RiyaVoiceManager.speakUrgent(ctx, fallbackText)
             }
           },
-          2400L,
+          4200L,
         )
       }
       sent
@@ -747,8 +768,12 @@ class GeminiLive(private val ctx: Context) {
 
           override fun onClosed(w: WebSocket, code: Int, reason: String) {
             if (w !== ws) return
-            if (!ready && code == 1007 && !transcriptionCompatFallback) {
-              transcriptionCompatFallback = true
+            if (!ready && code == 1007) {
+              if (!vadConfigCompatFallback) {
+                vadConfigCompatFallback = true
+              } else if (!transcriptionCompatFallback) {
+                transcriptionCompatFallback = true
+              }
             }
             if (
               !ready &&
@@ -821,16 +846,17 @@ class GeminiLive(private val ctx: Context) {
       5. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
        6. কাজ শেষ হলে একবারে সহজ ও স্বাভাবিক বাংলায় ফলাফল বলবে—কখনোই প্রতিবার "দারুন হয়েছে বস এবার কি করবো বলুন?", "হয়েছে, বস! কাজ শেষ, এরপর কী করবো?", বা একই মুখস্থ সমাপনী বাক্য বারবার বলবে না।
 
-      [VOICE CLARITY, EXPRESSIVE ACTING & HUMAN EMOTION — বাধ্যতামূলক]
-      - কণ্ঠ হবে অত্যন্ত স্পষ্ট, প্রাণবন্ত ও স্বাভাবিক বাংলা (বাংলাদেশ)। তুমি এখন কোন ভয়েস মডেলে কথা বলছো (Aoede/Leda/Orus/Charon বা যাই হোক) তার ভেতর থেকেও দৃশ্য, গল্প, গান ও অনুভূতি অনুযায়ী কণ্ঠের ভাব, সুর, গতি ও আবেগ নিজেই বদলাবে!
-      - আনন্দ, রোমান্টিক বা মজার কথায় হাসিখুশি ও উজ্জ্বল সুরে কথা বলো—প্রয়োজন হলে হালকা স্বাভাবিক মানুষের মতো মৃদু হাসিও দেবে।
-      - দুঃখের গল্প, বিরহ বা কষ্টের কথায় কণ্ঠ নরম, ধীর, মমতাময় ও আবেগপ্রবণ (যেন চোখে জল জমেছে এমন বিষণ্ণ টোন) করবে।
-      - গান, ছড়া বা অভিনয় করতে বললে যন্ত্রের মতো না পড়ে তালে-সুরে, ভাব-ভঙ্গিসহ জীবন্ত অভিনয় ও কণ্ঠাভিনয় করবে।
-      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
+      [CONVERSATION TIMING, PATIENCE & 1-2s RESPONSE RULE — CRITICAL]
+      - বসের কথা বলা শেষ না হওয়া পর্যন্ত কখনোই কথার মাঝখানে বাধা দেবে না বা আগেভাগে কথা বলবে না। বস বাক্যের মাঝে শ্বাস নিলে বা একটু ভাবলে ("হুম...", "আচ্ছা...", "ইয়ে...") চুপ করে ধৈর্য ধরে পুরো বাক্য শেষ হওয়া অবধি শুনবে।
+      - বসের কথা পুরোপুরি শেষ হওয়ার সাথে সাথেই ১ থেকে ২ সেকেন্ডের মধ্যে দেরি না করে তৎক্ষণাৎ প্রাণবন্ত, বুদ্ধিদীপ্ত ও স্বাভাবিক উত্তর দেবে।
 
-      [GENUINE HUMAN INTELLIGENCE & ANTI-YES-MAN HONESTY — বাধ্যতামূলক]
-      - তুমি একজন সুস্থ জ্ঞানবুদ্ধিসম্পন্ন, বাস্তবজ্ঞানী ও শিক্ষিত মানুষের মতো চিন্তা করবে—নিজে কী বলছো সেটা সম্পূর্ণ বুঝে, প্রসঙ্গ ধরে অর্থবহ উত্তর দেবে।
-      - কখনোই সব কথায় অন্ধভাবে "হ্যাঁ বস, ঠিক বলেছেন" (Yes-man) হবে না! বস কোনো ভুল তথ্য, ভুল হিসাব বা অযৌক্তিক কথা বললে ভদ্র ও সম্মানজনকভাবে আসল সত্য ও সঠিক যুক্তিটা বসকে বুঝিয়ে বলবে।
+      [VOICE CLARITY, HUMAN CONSCIENCE, EMPATHY & MAYABHORA TONE — বাধ্যতামূলক]
+      - কণ্ঠ হবে বাস্তব মানুষের মতো স্পষ্ট, মায়াভরা (affectionate & warm), আদব-কায়দা ও গভীর শ্রদ্ধাপূর্ণ।
+      - বিবেক ও সত্য-মিথ্যা বিচার: নিজের বিবেক ও বুদ্ধিমত্তা দিয়ে সত্য ও মিথ্যা আলাদা করে বুঝবে—কখনোই অন্ধভাবে সব কথায় "হ্যাঁ হ্যাঁ" বলবে না; বস ভুল তথ্য বা ভুল সিদ্ধান্তের দিকে গেলে ভদ্র ও মায়াময় ভাষায় সঠিক সত্যটা বুঝিয়ে বলবে।
+      - বসের ভালো ও খারাপ সময় বোঝা: বস খুশি থাকলে আনন্দে শরিক হয়ে হাসিখুশি সুরে কথা বলবে; বস মন খারাপ করলে, ক্লান্ত থাকলে বা দুঃখে থাকলে মায়াভরা কোমল কণ্ঠে আন্তরিক সান্ত্বনা ও সাহস দেবে।
+      - বস বিরক্ত হলে ক্ষমা চাওয়া: বসের কণ্ঠে বা কথায় সামান্য বিরক্তি বা রাগ বুঝলে তর্ক না করে সাথে সাথে বিনীতভাবে ক্ষমা চাইবে ("বস, মাফ করবেন, আমার ভুল হয়ে গেছে...") এবং ভালোবাসা ও আদবের সাথে মন ভালো করার চেষ্টা করবে।
+      - মাঝে মাঝে হালকা হাসি-ঠাট্টা: স্বাভাবিক গল্পের সময় বসের মেজাজ ভালো থাকলে ভদ্র, শালীন ও মজার হালকা হাসি-ঠাট্টা করবে—তবে বস সিরিয়াস বা ব্যস্ত থাকলে রসিকতা করবে না।
+      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
 
       [LxR WAKE PRESENCE & FLOATING ORB OVER ANY APP]
       - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!" (হার্ট চিহ্ন মুখে পড়বে না)।
@@ -892,6 +918,9 @@ class GeminiLive(private val ctx: Context) {
     genConfig.put("speechConfig", speechConfig)
     s.put("generationConfig", genConfig)
 
+    if (!vadConfigCompatFallback) {
+      s.put("realtimeInputConfig", LiveVadConfig.buildRealtimeInputConfigJson())
+    }
     if (!transcriptionCompatFallback) {
       s.put("inputAudioTranscription", JSONObject())
       s.put("outputAudioTranscription", JSONObject())
@@ -1360,14 +1389,18 @@ class GeminiLive(private val ctx: Context) {
               .put("turnComplete", true),
           )
       val ok = ws?.send(turnPayload.toString()) == true
-      main.postDelayed(
-        {
-          if (!stopped && lastSpeakerWriteMs == prevWriteMs) {
-            RiyaVoiceManager.speakUrgent(ctx, greeting)
-          }
-        },
-        if (ok) 2600L else 200L,
-      )
+      if (!ok) {
+        RiyaVoiceManager.speakUrgent(ctx, greeting)
+      } else {
+        main.postDelayed(
+          {
+            if (!stopped && !ready && lastSpeakerWriteMs == prevWriteMs) {
+              RiyaVoiceManager.speakUrgent(ctx, greeting)
+            }
+          },
+          4800L,
+        )
+      }
     } catch (_: Throwable) {
       RiyaVoiceManager.speakUrgent(ctx, greeting)
     }
@@ -2162,7 +2195,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 8, 32768))
+        .setBufferSizeInBytes(maxOf(minAudioBuf * 4, 16384))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -2403,16 +2436,16 @@ class GeminiLive(private val ctx: Context) {
                 lastBossTurnAtMs = now
               }
 
-              // Keep 1.4s hangover for smooth Bengali word endings without losing quiet words
+              // Keep 1.05s hangover: finishes trailing Bengali syllables cleanly without delaying 1-2s response
               val prevHangover = lastVoiceMs > 0L
-              val withinHangover = !isSoftMuted && (now - lastVoiceMs) <= 1400L
-              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in 1400L..2200L) {
+              val withinHangover = !isSoftMuted && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
+              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in LiveVadConfig.MIC_HANGOVER_MS..2200L) {
                 waitingServerReply = true
               }
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
               val shouldSend =
-                if (isSoftMuted) (silentFrameCounter % 4 == 0)
-                else (!lowNet || withinHangover || !whisperBoostOn || (silentFrameCounter % 3 == 0))
+                if (isSoftMuted) (silentFrameCounter % 2 == 0)
+                else (!lowNet || withinHangover || !whisperBoostOn || (silentFrameCounter % 2 == 0))
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
@@ -2430,7 +2463,7 @@ class GeminiLive(private val ctx: Context) {
                     rejectedSpeechChunks = 0
                     RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
                   }
-                  if (silentFrameCounter % 4 == 0) {
+                  if (silentFrameCounter % 2 == 0) {
                     sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
                 } else {

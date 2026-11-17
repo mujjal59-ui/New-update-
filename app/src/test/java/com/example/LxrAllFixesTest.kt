@@ -20,6 +20,8 @@ import com.example.builder.TermuxBuildBridge
 import com.example.service.AudioEchoGuard
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
+import com.example.service.LiveVadConfig
+import com.example.service.RiyaVoiceManager
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
 import com.example.ui.CYBER_BLUE
@@ -231,5 +233,22 @@ class LxrAllFixesTest {
     val (fbX, fbY) = TermuxUiAutomation.computeGboardBlueEnterFallbackPoint(1080, 2400, imeTop = 1480, imeRight = 1080, imeBottom = 2400)
     assertTrue("Fallback X should hit bottom-right corner", fbX > 900f && fbX < 1050f)
     assertTrue("Fallback Y should hit blue Enter above bottom nav strip", fbY > 2050f && fbY < 2280f)
+  }
+
+  @Test
+  fun liveVadAndLxrVoiceOnly_guaranteeFastTurnTakingWithoutSystemTts() {
+    assertFalse(
+      "Phone-default Android system TextToSpeech fallback must NEVER be used",
+      RiyaVoiceManager.ALLOW_ANDROID_SYSTEM_TTS_FALLBACK,
+    )
+    assertEquals("START_SENSITIVITY_HIGH", LiveVadConfig.START_SENSITIVITY)
+    assertEquals("END_SENSITIVITY_LOW", LiveVadConfig.END_SENSITIVITY)
+    assertTrue(
+      "Silence window should respond within 1-2 seconds without cutting off Boss mid-sentence",
+      LiveVadConfig.SILENCE_DURATION_MS in 1050..1500,
+    )
+    val cfg = LiveVadConfig.buildRealtimeInputConfigJson().getJSONObject("automaticActivityDetection")
+    assertFalse(cfg.getBoolean("disabled"))
+    assertEquals(LiveVadConfig.SILENCE_DURATION_MS, cfg.getInt("silenceDurationMs"))
   }
 }
