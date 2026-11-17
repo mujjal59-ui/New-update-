@@ -20,6 +20,8 @@ import com.example.builder.TermuxBuildBridge
 import com.example.service.AudioEchoGuard
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
+import com.example.service.TermuxUiAutomation
+import com.example.service.TermuxWindowNodeInfo
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.LxrAppBuilderWorkspace
@@ -197,5 +199,37 @@ class LxrAllFixesTest {
     composeTestRule.onNodeWithTag("preview_calc_key_5").performScrollTo().performClick()
     composeTestRule.onNodeWithTag("preview_calc_key_=").performScrollTo().performClick()
     composeTestRule.onNodeWithTag("preview_calc_display").assertTextEquals("12")
+  }
+
+  @Test
+  fun termuxUiAutomation_matches3sHold2sWaitPastePopupAndGboardBlueEnter() {
+    assertEquals(3000L, TermuxUiAutomation.LONG_PRESS_DURATION_MS)
+    assertEquals(2000L, TermuxUiAutomation.POPUP_WAIT_AFTER_RELEASE_MS)
+
+    val (lpX, lpY) = TermuxUiAutomation.computeLongPressPoint(screenW = 1080, screenH = 2400, imeTopOrNull = 1480)
+    assertTrue("Long press X should be near horizontal center", lpX in 400f..650f)
+    assertTrue("Long press Y must stay in Termux viewport above Extra Keys + Gboard", lpY in 420f..1180f)
+
+    val popupNodes =
+      listOf(
+        TermuxWindowNodeInfo("Copy", "Copy", "", "android.widget.TextView", "com.termux", true, 60, 520, 210, 620),
+        TermuxWindowNodeInfo("Paste", "Paste", "", "android.widget.TextView", "com.termux", true, 220, 520, 380, 620),
+        TermuxWindowNodeInfo("More...", "More...", "", "android.widget.TextView", "com.termux", true, 390, 520, 560, 620),
+      )
+    val pickedPaste = TermuxUiAutomation.findPastePopupCandidate(popupNodes)
+    assertEquals("Paste", pickedPaste?.text)
+
+    val imeNodes =
+      listOf(
+        TermuxWindowNodeInfo("q", "q", "key_pos_0_0", "android.view.View", "com.google.android.inputmethod.latin", true, 0, 1750, 108, 1900),
+        TermuxWindowNodeInfo("QWERTY", "Space", "key_pos_space", "android.view.View", "com.google.android.inputmethod.latin", true, 360, 2120, 740, 2280),
+        TermuxWindowNodeInfo("", "Enter", "key_pos_ime_action", "android.widget.FrameLayout", "com.google.android.inputmethod.latin", true, 895, 2100, 1065, 2275),
+      )
+    val pickedEnter = TermuxUiAutomation.findGboardEnterKeyCandidate(imeNodes, 0, 1480, 1080, 2400)
+    assertEquals("key_pos_ime_action", pickedEnter?.viewId)
+
+    val (fbX, fbY) = TermuxUiAutomation.computeGboardBlueEnterFallbackPoint(1080, 2400, imeTop = 1480, imeRight = 1080, imeBottom = 2400)
+    assertTrue("Fallback X should hit bottom-right corner", fbX > 900f && fbX < 1050f)
+    assertTrue("Fallback Y should hit blue Enter above bottom nav strip", fbY > 2050f && fbY < 2280f)
   }
 }

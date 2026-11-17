@@ -2,6 +2,8 @@ package com.example.builder
 
 import android.content.Context
 import android.util.Log
+import com.example.service.Keep
+import com.example.service.RiyaAccessibilityService
 import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaVoiceManager
 import java.io.File
@@ -240,21 +242,39 @@ object AppBuilderRuntimeBridge {
       )
     }
 
+    var usedUiFallback = false
     val dispatch = TermuxBuildBridge.dispatchBuildToTermux(ctx, currentProject, sharedDir, runInBackground = false)
     if (dispatch.isFailure) {
-      val msg = dispatch.exceptionOrNull()?.message ?: "Termux RUN_COMMAND চালু করা যায়নি"
-      handleTermuxBuildFailure(ctx, repo, currentProject, msg, narrateByVoice, attempt)
-      return
-    }
-
-    _snapshot.update {
-      it.copy(
-        consoleLogs = (it.consoleLogs + "✓ ${dispatch.getOrNull()}").takeLast(140),
-        versionSeq = it.versionSeq + 1,
-      )
-    }
-    if (narrateByVoice && attempt == 0) {
-      safeSpeak(ctx, "বস, Termux-এ বিল্ড কমান্ড চালু করে দিয়েছি। আমি লাইভ লগ পড়ছি।")
+      val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
+      if (acc != null) {
+        usedUiFallback = true
+        val uiCmd = TermuxBuildBridge.firstTimeTermuxSetupCommand(currentProject.slug)
+        val uiRes = acc.executeTermuxCommandViaUi(ctx, uiCmd)
+        _snapshot.update {
+          it.copy(
+            termuxStepLabel = "Termux UI-এ কমান্ড পেস্ট ও রান চলছে...",
+            consoleLogs = (it.consoleLogs + "▶ RUN_COMMAND সরাসরি না চলায় Termux UI (৩সে. ট্যাপ -> Paste -> Blue Enter): $uiRes").takeLast(140),
+            versionSeq = it.versionSeq + 1,
+          )
+        }
+        if (narrateByVoice && attempt == 0) {
+          safeSpeak(ctx, "বস, Termux খুলে ৩ সেকেন্ড চেপে পেস্ট করে Gboard এন্টার দিয়ে বিল্ড শুরু করেছি। এখন লাইভ লগ দেখছি।")
+        }
+      } else {
+        val msg = dispatch.exceptionOrNull()?.message ?: "Termux RUN_COMMAND চালু করা যায়নি"
+        handleTermuxBuildFailure(ctx, repo, currentProject, msg, narrateByVoice, attempt)
+        return
+      }
+    } else {
+      _snapshot.update {
+        it.copy(
+          consoleLogs = (it.consoleLogs + "✓ ${dispatch.getOrNull()}").takeLast(140),
+          versionSeq = it.versionSeq + 1,
+        )
+      }
+      if (narrateByVoice && attempt == 0) {
+        safeSpeak(ctx, "বস, Termux-এ বিল্ড কমান্ড চালু করে দিয়েছি। আমি লাইভ লগ পড়ছি।")
+      }
     }
 
     var lastLogHash = 0
@@ -284,6 +304,26 @@ object AppBuilderRuntimeBridge {
       }
 
       val (diskLog, parsedJson, foundApk) = TermuxBuildBridge.readSharedBuildArtifacts(repo, currentProject)
+
+      // Auto-fallback: if RUN_COMMAND didn't start Termux output within ~8s (e.g. allow-external-apps blocked), execute via Termux UI directly
+      if (cycle == 3 && diskLog.isNullOrBlank() && lastCallbackResult == null && !usedUiFallback) {
+        val acc = if (Keep.accessibilityOn(ctx)) RiyaAccessibilityService.instance else null
+        if (acc != null) {
+          usedUiFallback = true
+          val uiCmd = TermuxBuildBridge.firstTimeTermuxSetupCommand(currentProject.slug)
+          val uiRes = acc.executeTermuxCommandViaUi(ctx, uiCmd)
+          _snapshot.update { cur ->
+            cur.copy(
+              termuxStepLabel = "Termux UI-এ সরাসরি কমান্ড পেস্ট ও এন্টার চাপানো হয়েছে...",
+              consoleLogs = (cur.consoleLogs + "▶ লগ শূন্য থাকায় স্বয়ংক্রিয় Termux UI Paste + Gboard Enter: $uiRes").takeLast(140),
+              versionSeq = cur.versionSeq + 1,
+            )
+          }
+          if (narrateByVoice) {
+            safeSpeak(ctx, "বস, সরাসরি Termux স্ক্রিনে পেস্ট করে নীল এন্টার বাটন চেপে কমান্ড চালু করেছি।")
+          }
+        }
+      }
 
       if (!diskLog.isNullOrBlank()) {
         val newHash = diskLog.hashCode()

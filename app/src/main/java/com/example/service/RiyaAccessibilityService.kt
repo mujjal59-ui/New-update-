@@ -2,6 +2,7 @@ package com.example.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
@@ -1000,6 +1001,253 @@ class RiyaAccessibilityService : AccessibilityService() {
     Thread.sleep(gapMs.coerceIn(50L, 180L))
     val tap2 = tapAt(x, y)
     return tap1 && tap2
+  }
+
+  fun longPressAndWait(x: Float, y: Float, durationMs: Long = TermuxUiAutomation.LONG_PRESS_DURATION_MS): Boolean {
+    val path = Path().apply { moveTo(x, y) }
+    val holdMs = durationMs.coerceIn(600L, 5000L)
+    val latch = java.util.concurrent.CountDownLatch(1)
+    var completed = false
+    val dispatched =
+      dispatchGesture(
+        GestureDescription.Builder()
+          .addStroke(GestureDescription.StrokeDescription(path, 0L, holdMs))
+          .build(),
+        object : GestureResultCallback() {
+          override fun onCompleted(gestureDescription: GestureDescription?) {
+            completed = true
+            latch.countDown()
+          }
+
+          override fun onCancelled(gestureDescription: GestureDescription?) {
+            latch.countDown()
+          }
+        },
+        null,
+      )
+    if (!dispatched) return false
+    try {
+      latch.await(holdMs + 800L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {}
+    return completed || dispatched
+  }
+
+  /**
+   * Executes any shell/build command directly inside the Termux UI without closing Gboard:
+   * 1) Copies command to Clipboard and opens/focuses Termux with keyboard ON
+   * 2) Holds a 3-second long-press inside Termux terminal area and releases
+   * 3) Waits 2 seconds for [Copy | Paste | More...] popup and clicks "Paste"
+   * 4) Clicks Gboard's bottom-right blue Enter/Return arrow button while keeping keyboard visible
+   */
+  fun executeTermuxCommandViaUi(context: Context, command: String): String {
+    val cleanCmd = command.trim().replace("\r\n", "\n").trimEnd('\n')
+    if (cleanCmd.isBlank()) return "Termux-এ চালানোর মতো কোনো কমান্ড দেওয়া হয়নি বস।"
+
+    val clipLatch = java.util.concurrent.CountDownLatch(1)
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+      try {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("LXR Termux Command", cleanCmd))
+      } catch (_: Throwable) {}
+      clipLatch.countDown()
+    }
+    try {
+      clipLatch.await(1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {}
+    Thread.sleep(140L)
+
+    val dm = resources.displayMetrics
+    val screenW = dm.widthPixels.coerceAtLeast(720)
+    val screenH = dm.heightPixels.coerceAtLeast(1280)
+
+    // Bring Termux to foreground if not already active
+    val curPkgBefore = rootInActiveWindow?.packageName?.toString().orEmpty()
+    if (curPkgBefore != TermuxUiAutomation.TERMUX_PACKAGE) {
+      val launch = context.packageManager.getLaunchIntentForPackage(TermuxUiAutomation.TERMUX_PACKAGE)
+        ?: return "ফোনে Termux ইনস্টল করা নেই বস (com.termux পাওয়া যায়নি)।"
+      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      context.startActivity(launch)
+      val waitDeadline = System.currentTimeMillis() + 4500L
+      while (System.currentTimeMillis() < waitDeadline) {
+        Thread.sleep(240L)
+        if (LockVaultManager.isAppLockScreenShowing(this)) {
+          LockVaultManager.unlockAppLockIfPresent(context, this)
+          Thread.sleep(360L)
+        }
+        val activePkg = rootInActiveWindow?.packageName?.toString().orEmpty()
+        if (activePkg == TermuxUiAutomation.TERMUX_PACKAGE || currentApp == TermuxUiAutomation.TERMUX_PACKAGE) {
+          Thread.sleep(350L)
+          break
+        }
+      }
+    } else if (LockVaultManager.isAppLockScreenShowing(this)) {
+      LockVaultManager.unlockAppLockIfPresent(context, this)
+      Thread.sleep(320L)
+    }
+
+    fun inspectImeBounds(): Rect? {
+      val imeWin =
+        windows?.firstOrNull { win ->
+          win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+            win.root?.packageName?.toString() in TermuxUiAutomation.GBOARD_PACKAGES
+        } ?: return null
+      val rect = Rect()
+      imeWin.getBoundsInScreen(rect)
+      return if (rect.height() >= (screenH * 0.18f).toInt()) rect else null
+    }
+
+    // Ensure Gboard keyboard stays ON inside Termux (tap terminal briefly if keyboard is hidden)
+    var imeRect = inspectImeBounds()
+    if (imeRect == null) {
+      val (tx, ty) = TermuxUiAutomation.computeLongPressPoint(screenW, screenH, null)
+      tapAt(tx, ty)
+      Thread.sleep(700L)
+      imeRect = inspectImeBounds()
+    }
+
+    // Step 1: Long-press for 3 seconds inside Termux terminal area and release
+    val (lpX, lpY) = TermuxUiAutomation.computeLongPressPoint(screenW, screenH, imeRect?.top)
+    val pressedOk = longPressAndWait(lpX, lpY, TermuxUiAutomation.LONG_PRESS_DURATION_MS)
+    if (!pressedOk) {
+      return "Termux স্ক্রিনে ৩ সেকেন্ড লং-প্রেস চালানো যায়নি বস।"
+    }
+
+    // Step 2: Wait 2 seconds for [Copy | Paste | More...] popup, then click "Paste"
+    Thread.sleep(TermuxUiAutomation.POPUP_WAIT_AFTER_RELEASE_MS)
+
+    fun collectAllWindowsNodes(): Pair<List<TermuxWindowNodeInfo>, List<AccessibilityNodeInfo>> {
+      val infoList = mutableListOf<TermuxWindowNodeInfo>()
+      val rawList = mutableListOf<AccessibilityNodeInfo>()
+      val seenRoots = mutableListOf<AccessibilityNodeInfo>()
+      windows?.forEach { w -> w.root?.let { seenRoots.add(it) } }
+      rootInActiveWindow?.let { r -> if (seenRoots.none { it == r }) seenRoots.add(r) }
+
+      fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+        if (n == null || depth > 35 || rawList.size > 350) return
+        val r = Rect()
+        n.getBoundsInScreen(r)
+        rawList.add(n)
+        infoList.add(
+          TermuxWindowNodeInfo(
+            text = n.text?.toString()?.trim().orEmpty(),
+            contentDescription = n.contentDescription?.toString()?.trim().orEmpty(),
+            viewId = n.viewIdResourceName.orEmpty(),
+            className = n.className?.toString().orEmpty(),
+            packageName = n.packageName?.toString().orEmpty(),
+            isClickable = n.isClickable,
+            left = r.left,
+            top = r.top,
+            right = r.right,
+            bottom = r.bottom,
+          )
+        )
+        for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+      }
+      seenRoots.forEach { walk(it, 0) }
+      return infoList to rawList
+    }
+
+    var pasted = false
+    for (attempt in 0 until 4) {
+      val (nodesInfo, rawNodes) = collectAllWindowsNodes()
+      val pasteInfo = TermuxUiAutomation.findPastePopupCandidate(nodesInfo)
+      if (pasteInfo != null) {
+        val idx = nodesInfo.indexOf(pasteInfo)
+        val rawNode = rawNodes.getOrNull(idx)
+        val clickedNode = rawNode != null && clickNode(rawNode)
+        val clickedPoint = if (!clickedNode) tapAt(pasteInfo.centerX, pasteInfo.centerY) else true
+        if (clickedNode || clickedPoint) {
+          pasted = true
+          break
+        }
+      }
+      if (attempt < 3) Thread.sleep(450L)
+    }
+
+    if (!pasted) {
+      readEntireScreenTree()
+      return "Termux-এ ৩ সেকেন্ড ধরে রাখার পর Paste বাটনটি পপ-আপে খুঁজে পাওয়া যায়নি বস। ক্লিপবোর্ড ও Termux স্ক্রিন একবার পরীক্ষা করুন।"
+    }
+
+    // Give Termux a moment to finish pasting the text, and guarantee keyboard remains open
+    Thread.sleep(550L)
+    imeRect = inspectImeBounds()
+    if (imeRect == null) {
+      val (tx, ty) = TermuxUiAutomation.computeLongPressPoint(screenW, screenH, null)
+      tapAt(tx, ty)
+      Thread.sleep(600L)
+      imeRect = inspectImeBounds()
+    }
+
+    // Step 3: Click Gboard's bottom-right blue Enter / arrow button
+    var enterTapped = false
+    val imeWindow =
+      windows?.firstOrNull { win ->
+        win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+          win.root?.packageName?.toString() in TermuxUiAutomation.GBOARD_PACKAGES
+      }
+    val imeRoot = imeWindow?.root
+    if (imeRoot != null) {
+      val imeNodesInfo = mutableListOf<TermuxWindowNodeInfo>()
+      val imeRawNodes = mutableListOf<AccessibilityNodeInfo>()
+      fun walkIme(n: AccessibilityNodeInfo?, depth: Int) {
+        if (n == null || depth > 25 || imeRawNodes.size > 200) return
+        val r = Rect()
+        n.getBoundsInScreen(r)
+        imeRawNodes.add(n)
+        imeNodesInfo.add(
+          TermuxWindowNodeInfo(
+            text = n.text?.toString()?.trim().orEmpty(),
+            contentDescription = n.contentDescription?.toString()?.trim().orEmpty(),
+            viewId = n.viewIdResourceName.orEmpty(),
+            className = n.className?.toString().orEmpty(),
+            packageName = n.packageName?.toString().orEmpty(),
+            isClickable = n.isClickable,
+            left = r.left,
+            top = r.top,
+            right = r.right,
+            bottom = r.bottom,
+          )
+        )
+        for (i in 0 until n.childCount) walkIme(n.getChild(i), depth + 1)
+      }
+      walkIme(imeRoot, 0)
+      val rIme = imeRect ?: Rect().also { imeWindow.getBoundsInScreen(it) }
+      val enterInfo =
+        TermuxUiAutomation.findGboardEnterKeyCandidate(
+          imeNodes = imeNodesInfo,
+          imeLeft = rIme.left,
+          imeTop = rIme.top,
+          imeRight = rIme.right,
+          imeBottom = rIme.bottom,
+        )
+      if (enterInfo != null) {
+        val rawEnter = imeRawNodes.getOrNull(imeNodesInfo.indexOf(enterInfo))
+        enterTapped =
+          (rawEnter != null && clickNode(rawEnter)) ||
+            tapAt(enterInfo.centerX, enterInfo.centerY)
+      }
+    }
+
+    if (!enterTapped) {
+      val (ex, ey) =
+        TermuxUiAutomation.computeGboardBlueEnterFallbackPoint(
+          screenW = screenW,
+          screenH = screenH,
+          imeTop = imeRect?.top,
+          imeRight = imeRect?.right,
+          imeBottom = imeRect?.bottom,
+        )
+      enterTapped = tapAt(ex, ey)
+    }
+
+    Thread.sleep(380L)
+    readEntireScreenTree()
+    return if (enterTapped) {
+      "হয়েছে, বস! Termux-এ ৩ সেকেন্ড ধরে রেখে Paste করে Google Gboard-এর নীল এন্টার বাটনে ক্লিক করে কমান্ড রান করেছি।"
+    } else {
+      "Termux-এ কমান্ড Paste হয়েছে বস, তবে Gboard এন্টার বাটন চাপতে পারিনি।"
+    }
   }
 
   fun tapFallback() {

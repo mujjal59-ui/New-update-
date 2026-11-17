@@ -176,6 +176,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১৩ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ (রিয়েল ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, মিনি গেম, নোট অ্যাপ বা কাস্টম অ্যাপ) বানাতে বললে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে, LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Termux-এ APK বিল্ড ও ফলাফল যাচাই শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
       {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং ফাইল কোন ফোল্ডারে আছে তা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"run_termux_command","description":"Termux অ্যাপ খুলে বা সক্রিয় রেখে সরাসরি টার্মিনাল স্ক্রিনে ৩ সেকেন্ড ধরে রেখে, ২ সেকেন্ড অপেক্ষা করে Paste ক্লিক করে এবং Google Gboard-এর ডান-নিচের নীল এন্টার বাটন (↵) চেপে যেকোনো কমান্ড সরাসরি রান করো। পুরো সময় কিবোর্ড সবসময় অন থাকবে।","parameters":{"type":"OBJECT","properties":{"command":{"type":"STRING","description":"Termux টার্মিনালে যে কমান্ড বা কমান্ড লাইন চালাতে হবে"}},"required":["command"]}},
       {"name":"find_and_open_item","description":"স্ক্রিনে বা অ্যাপে যেকোনো আইটেম নাম দিয়ে খুঁজে ট্যাপ করো, না পেলে Infinix Android 16 সার্চ বার দিয়ে সার্চ করো।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
       {"name":"current_screen","description":"বস এখন কোন অ্যাপ বা স্ক্রিনে আছেন তা জানো"},
       {"name":"read_screen","description":"এখন সম্পূর্ণ স্ক্রিনে কী কী লেখা, বাটন, সুইচ ও লেখার বক্স আছে তা পড়ো"},
@@ -850,6 +851,10 @@ class GeminiLive(private val ctx: Context) {
       - নোটপ্যাড/Notes অ্যাপে বস যখন কোনো নোট লিখতে বলবেন, `read_screen` দেখে উপরের "Title" বক্সে (`[নোট টাইটেল বক্স]`) নয়—সবসময় `type_text` টুলে `target="body"` দিয়ে নিচের "Note something down" (`[মূল নোট লেখার বক্স]`) ঘরে নোট লিখবে (যদি না বস আলাদাভাবে শিরোনাম/Title লিখতে বলেন)।
       - বস যদি যেকোনো অ্যান্ড্রয়েড অ্যাপ (ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, ছোটখাটো গেম বা কাস্টম অ্যাপ) বানাতে বলেন, সাথে সাথে `build_android_app` টুল চালাবে—এতে LXR UI-এ সরাসরি প্রিভিউ দেখা যাবে এবং Termux-এ ডাউনলোড/কম্পাইল হয়ে `Downloads/LXR-AppBuilder` ফোল্ডারে APK তৈরি হবে। বিল্ড চলাকালীন অবস্থা দেখতে `check_termux_build_status` চালাবে।
 
+      [TERMUX TERMINAL UI COMMAND & GBOARD RULE — STRICT]
+      - Termux সেকশনের ভেতরে যেকোনো শেল কমান্ড, প্যাকেজ ইনস্টল, ডাউনলোড বা বিল্ড কমান্ড সরাসরি চালাতে হলে কখনোই `type_text` ব্যবহার করবে না—সবসময় `run_termux_command` টুল কল করবে!
+      - `run_termux_command` কমান্ডটি ক্লিপবোর্ডে কপি করে, Termux খোলা/ফোকাস রেখে Google Gboard কিবোর্ড সবসময় ON রাখে (কখনো Back চেপে কিবোর্ড নামাবে না), Termux টার্মিনালের ভেতরে (খালি জায়গা বা লেখা যাই থাক) ৩ সেকেন্ড চেপে ধরে ছেড়ে দেয় -> ২ সেকেন্ড পর `[Copy | Paste | More...]` পপ-আপ এলে `Paste` ক্লিক করে -> তারপর Gboard-এর নিচে ডানদিকের নীল এন্টার তীর বাটনে (`↵`) ক্লিক করে কমান্ড রান করে।
+
       [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
       - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
       - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ: WhatsApp/imo/Messenger খুললে প্রথমে স্ক্রিনের উপরের চ্যাট তালিকায় নাম খুঁজবে; ওখানে না পেলে বসের কোনো অনুমতি ছাড়াই নিজে নিজে সার্চ বারে/সার্চ আইকনে সার্চ করে নিচের রেজাল্ট সারিতে ক্লিক করবে।
@@ -1265,6 +1270,9 @@ class GeminiLive(private val ctx: Context) {
             shouldAutoBuildTermux = a.optBoolean("auto_build_termux", true),
           )
         "check_termux_build_status" -> AppBuilderRuntimeBridge.readLiveStatusSummaryForAi(ctx)
+        "run_termux_command" ->
+          acc?.executeTermuxCommandViaUi(ctx, a.optString("command"))
+            ?: noAcc
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
         "current_screen" ->
           if (RiyaState.cameraOn) {
