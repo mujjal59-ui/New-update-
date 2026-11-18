@@ -527,36 +527,7 @@ fun AppBuilderScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
 
 @Composable
 fun VideoCreatorScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
-  BackHandler(onBack = back)
-  StudioScaffoldScreen(
-    screenTag = "video_creator_screen",
-    title = stringResource(R.string.video_creator_screen_title),
-    subtitle = stringResource(R.string.video_creator_screen_subtitle),
-    statusNote = stringResource(R.string.video_creator_status_note),
-    topBarIcon = Icons.Filled.Videocam,
-    accentPrimary = CYBER_CYAN,
-    accentSecondary = CYBER_BLUE,
-    modules =
-      listOf(
-        StudioModulePreview(
-          icon = Icons.Filled.MovieCreation,
-          title = "Scene Timeline",
-          subtitle = "৯:১৬ শর্টস এবং ১৬:৯ ইউটিউব ফ্রেম লেআউট স্টুডিও",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.Subtitles,
-          title = "Voice & Subtitle Sync",
-          subtitle = "বাংলা ভয়েস ওভার ও টাইপোগ্রাফি ক্যাপশন স্টাইল প্রিভিউ",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.SmartDisplay,
-          title = "Export Presets",
-          subtitle = "HD / Full HD রেজোলিউশন এবং অডিও ট্র্যাক সেটআপ",
-        ),
-      ),
-    back = back,
-    onNavigate = onNavigate,
-  )
+  VideoCreatorStudioScreen(back = back, onNavigate = onNavigate)
 }
 
 @Composable

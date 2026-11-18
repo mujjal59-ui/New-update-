@@ -2,6 +2,7 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <files-path name="app_builder_projects" path="lxr_app_builder_projects/" />
     <files-path name="app_builder_exports" path="lxr_app_builder_exports/" />
+    <files-path name="video_studio_projects" path="lxr_video_studio/" />
     <cache-path name="app_builder_cache" path="." />
     <external-path name="downloads_public" path="Download/" />
 </paths>
