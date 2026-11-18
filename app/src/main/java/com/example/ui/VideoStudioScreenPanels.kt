@@ -28,8 +28,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
@@ -59,7 +61,10 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,9 +81,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
 import com.example.video.AndroidVideoRendererAndExporter
 import com.example.video.PipelineRunStatus
 import com.example.video.ProductionSettings
+import com.example.video.StudioMediaLibrary
 import com.example.video.StudioProgressState
 import com.example.video.TransitionEffect
 import com.example.video.VideoAspectRatio
@@ -89,6 +96,7 @@ import com.example.video.VideoStudioUiState
 import com.example.video.VideoStudioViewModel
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun ToolCardScriptPanel(
@@ -292,7 +300,10 @@ fun ToolCardVoicePanel(
 fun ToolCardImageVisualPanel(
   state: VideoStudioUiState,
   vm: VideoStudioViewModel,
+  onPickVisuals: () -> Unit = {},
+  onPickAudio: () -> Unit = {},
 ) {
+  val ctx = LocalContext.current
   val project = state.activeProject
   Column(
     modifier = Modifier
@@ -303,18 +314,101 @@ fun ToolCardImageVisualPanel(
       .padding(14.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Text("C. IMAGE & VIDEO — AI অ্যানিমেশন, চরিত্র, ব্যাকগ্রাউন্ড ও স্টক ভিজ্যুয়াল", color = Color(0xFF60A5FA), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+    Text(
+      "C. IMAGE & VIDEO — ${state.bundledAssets.size}টি ৩ডি/গ্রাম/কার্টুন ইমেজ, গ্যালারি ও Lip-Sync",
+      color = Color(0xFF60A5FA),
+      fontWeight = FontWeight.Bold,
+      fontSize = 13.sp,
+    )
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-      Text("Image-to-Video মোশন ও Ken Burns অ্যানিমেশন", color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+      Text("Image-to-Video মোশন, হাঁটা, নাচ ও ৩৬০° এফেক্ট", color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
       Switch(
         checked = state.settings.imageToVideoMotionEnabled,
         onCheckedChange = { v -> vm.updateSettings { it.copy(imageToVideoMotionEnabled = v) } },
         colors = SwitchDefaults.colors(checkedTrackColor = CYBER_BLUE),
       )
     }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+      Text("মুখ নাড়িয়ে কথা বলা ও লিপ-সিঙ্ক (Audio Lip-Sync)", color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+      Switch(
+        checked = state.settings.lipSyncEnabled,
+        onCheckedChange = { v -> vm.updateSettings { it.copy(lipSyncEnabled = v) } },
+        colors = SwitchDefaults.colors(checkedTrackColor = CYBER_CYAN),
+      )
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+      OutlinedButton(onClick = onPickVisuals, modifier = Modifier.weight(1f)) {
+        Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text("গ্যালারি ছবি/ভিডিও", color = CYBER_AMBER, fontSize = 11.sp)
+      }
+      OutlinedButton(onClick = onPickAudio, modifier = Modifier.weight(1f)) {
+        Icon(Icons.Filled.AudioFile, contentDescription = null, tint = Color(0xFFE879F9), modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text("কাস্টম অডিও", color = Color(0xFFE879F9), fontSize = 11.sp)
+      }
+    }
+
+    if (state.bundledAssets.isNotEmpty()) {
+      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+          "বিল্ট-ইন ৩ডি/গ্রাম প্যাক (${state.bundledAssets.size}টি) — ট্যাপ করে দৃশ্যে যুক্ত করুন (${state.selectedBundledAssetFiles.size} নির্বাচিত):",
+          color = CYBER_CYAN,
+          fontSize = 11.sp,
+          modifier = Modifier.weight(1f),
+        )
+        if (state.selectedBundledAssetFiles.isNotEmpty()) {
+          TextButton(onClick = { vm.clearSelectedBundledAssets() }) {
+            Text("Clear", color = CYBER_RED, fontSize = 10.5.sp)
+          }
+        }
+      }
+      Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        state.bundledAssets.forEach { asset ->
+          val selected = asset.fileName in state.selectedBundledAssetFiles
+          val thumb = remember(asset.fileName) {
+            StudioMediaLibrary.loadStudioBitmap(ctx, assetFileName = asset.fileName, maxDim = 120, stripLightBackgroundIfSprite = false)
+          }
+          Column(
+            modifier = Modifier
+              .width(74.dp)
+              .clip(RoundedCornerShape(10.dp))
+              .background(if (selected) CYBER_CYAN.copy(alpha = 0.2f) else Color(0xFF0E1530))
+              .border(if (selected) 1.5.dp else 1.dp, if (selected) CYBER_CYAN else Color(0xFF283459), RoundedCornerShape(10.dp))
+              .clickable { vm.toggleBundledAssetSelection(asset.fileName) }
+              .padding(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+          ) {
+            if (thumb != null) {
+              Image(
+                bitmap = thumb.asImageBitmap(),
+                contentDescription = asset.titleBn,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)),
+              )
+            }
+            Text(
+              asset.titleBn,
+              color = if (selected) CYBER_CYAN else Color(0xFFCBD5E1),
+              fontSize = 9.sp,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+      }
+    }
 
     if (project == null || project.previewFramePaths.isEmpty()) {
-      Text("ভিডিও জেনারেট করলে প্রতিটি দৃশ্যের AI Scene Art, 2D/3D চরিত্র ও ব্যাকগ্রাউন্ড ভিজ্যুয়াল এখানে দেখা যাবে।", color = Color(0xFF94A3B8), fontSize = 12.sp)
+      Text(
+        "উপরে প্রম্পট বা ছবি দিয়ে 'সম্পূর্ণ রিয়েল ভিডিও তৈরি করুন' চাপুন — প্রতিটি দৃশ্যের লাইভ চরিত্র ও ইফেক্ট প্রিভিউ এখানে দেখা যাবে।",
+        color = Color(0xFF94A3B8),
+        fontSize = 12.sp,
+      )
       return
     }
 
@@ -348,8 +442,16 @@ fun ToolCardImageVisualPanel(
 
     val activeSc = project.scenes.getOrNull(safeIdx)
     if (activeSc != null) {
-      Text("Visual Source: ${activeSc.visualSource.labelBn} • Effect: ${activeSc.effectTag}", color = CYBER_CYAN, fontSize = 11.5.sp)
-      Text("Prompt: ${activeSc.visualPrompt}", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+      Text(
+        "মোশন: ${activeSc.motionStyle.labelBn} • চরিত্র: ${activeSc.characterPreset.labelBn}",
+        color = CYBER_CYAN,
+        fontSize = 11.5.sp,
+      )
+      Text(
+        "মিডিয়া/অ্যাসেট: ${activeSc.matchedAssetFile.ifBlank { activeSc.userMediaPath.substringAfterLast('/') }}",
+        color = Color(0xFFCBD5E1),
+        fontSize = 11.sp,
+      )
     }
   }
 }
@@ -587,20 +689,49 @@ fun VideoPreviewPlayerDialog(
   project: VideoProject,
   onDismiss: () -> Unit,
 ) {
+  val ctx = LocalContext.current
   val mp4File = File(project.artifacts.mp4Path)
+  val canTryVideoView = mp4File.exists() && project.artifacts.usedFreeRenderEngineLabel.contains("MediaCodec", ignoreCase = true)
+  var useFallbackSlideshow by remember(mp4File.absolutePath) { mutableStateOf(!canTryVideoView) }
+  var slideIndex by remember { mutableIntStateOf(0) }
+
+  if (useFallbackSlideshow && project.previewFramePaths.isNotEmpty()) {
+    LaunchedEffect(project.previewFramePaths.size) {
+      while (true) {
+        delay(1800L)
+        slideIndex = (slideIndex + 1) % project.previewFramePaths.size.coerceAtLeast(1)
+      }
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      AndroidVideoRendererAndExporter.stopPreviewAudio()
+    }
+  }
+
   AlertDialog(
     onDismissRequest = onDismiss,
     containerColor = CYBER_SURFACE,
     title = { Text(project.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp) },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
-        if (mp4File.exists() && project.artifacts.usedFreeRenderEngineLabel.contains("MediaCodec", ignoreCase = true)) {
+        if (!useFallbackSlideshow && mp4File.exists()) {
+          val playUri = remember(mp4File.absolutePath) {
+            runCatching {
+              FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", mp4File)
+            }.getOrElse { Uri.fromFile(mp4File) }
+          }
           AndroidView(
             factory = { c ->
               VideoView(c).apply {
-                setVideoURI(Uri.fromFile(mp4File))
+                setVideoURI(playUri)
                 setMediaController(MediaController(c).apply { setAnchorView(this@apply) })
                 setOnPreparedListener { mp -> mp.isLooping = true; start() }
+                setOnErrorListener { _, _, _ ->
+                  useFallbackSlideshow = true
+                  true
+                }
               }
             },
             modifier = Modifier
@@ -609,14 +740,17 @@ fun VideoPreviewPlayerDialog(
               .clip(RoundedCornerShape(10.dp)),
           )
         } else {
-          // Animated / frame preview fallback if MediaCodec was bypassed
-          val firstFrame = project.previewFramePaths.firstOrNull()?.let { File(it) }
-          val bmp = remember(firstFrame?.absolutePath) { firstFrame?.takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.absolutePath) } }
+          val framePath = project.previewFramePaths.getOrNull(slideIndex % project.previewFramePaths.size.coerceAtLeast(1))
+          val frameFile = framePath?.let { File(it) }
+          val bmp = remember(frameFile?.absolutePath) { frameFile?.takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.absolutePath) } }
           if (bmp != null) {
             Image(
               bitmap = bmp.asImageBitmap(),
-              contentDescription = "Preview Frame",
-              modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)),
+              contentDescription = "Animated Scene Preview ${slideIndex + 1}",
+              modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 9f / 16f else 16f / 9f)
+                .clip(RoundedCornerShape(10.dp)),
               contentScale = ContentScale.Crop,
             )
           }
@@ -629,7 +763,15 @@ fun VideoPreviewPlayerDialog(
       }
     },
     confirmButton = {
-      TextButton(onClick = onDismiss) { Text("বন্ধ করুন", color = CYBER_CYAN) }
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (mp4File.exists()) {
+          TextButton(onClick = {
+            val intent = AndroidVideoRendererAndExporter.createShareIntent(ctx, mp4File.absolutePath, "video/mp4", project.title)
+            if (intent != null) ctx.startActivity(Intent.createChooser(intent, "এক্সটার্নাল প্লেয়ারে চালান"))
+          }) { Text("প্লেয়ারে ওপেন", color = CYBER_GREEN) }
+        }
+        TextButton(onClick = onDismiss) { Text("বন্ধ করুন", color = CYBER_CYAN) }
+      }
     },
   )
 }

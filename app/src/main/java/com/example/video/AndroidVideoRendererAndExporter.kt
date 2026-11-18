@@ -63,6 +63,8 @@ object AndroidVideoRendererAndExporter {
         height = targetH,
         framePhase = 0.35f,
         showSubtitles = project.settings.subtitlesEnabled,
+        context = context,
+        mouthOpen = 0.62f,
       )
       val file = File(dir, "scene_${sc.index}.png")
       FileOutputStream(file).use { out ->
@@ -75,9 +77,12 @@ object AndroidVideoRendererAndExporter {
   }
 
   /**
-   * Renders a real playable MP4 file (Video + Synced Audio).
-   * Tries hardware MediaCodec H.264 + AAC + MediaMuxer first (with safe 720p/even-dimension guard);
-   * if unavailable (e.g., host JVM / unsupported codec), writes a valid ISO-BMFF MP4 container.
+   * Renders a real playable multi-frame H.264 MP4 file with audio-driven lip-sync & motion.
+   * Priority order:
+   *  1. Surface MediaCodec H.264 + 44.1kHz AAC + MediaMuxer (fast GPU-compatible Canvas -> Surface)
+   *  2. Surface MediaCodec H.264 video-only MP4 (if device AAC encoder fails cleanly)
+   *  3. ByteBuffer YUV420 MediaCodec fallback
+   *  4. Portable ISO-BMFF MP4 container strictly for headless JVM Robolectric unit tests
    */
   fun renderMp4Video(
     context: Context,
@@ -94,12 +99,57 @@ object AndroidVideoRendererAndExporter {
     val requestedW = if (project.settings.resolution.is1080p) aspect.width1080 else aspect.width720
     val requestedH = if (project.settings.resolution.is1080p) aspect.height1080 else aspect.height720
 
-    // Keep encoding crisp and reliable across all mobile GPUs (720p or 540p even dims for speed/safety)
-    val encodeW = if (requestedW > 1280) 1280 else (requestedW / 2) * 2
-    val encodeH = if (requestedH > 1280) 1280 else (requestedH / 2) * 2
+    val encodeW = (if (requestedW > 1280) 1280 else requestedW) / 16 * 16
+    val encodeH = (if (requestedH > 1280) 1280 else requestedH) / 16 * 16
 
+    // 1) Primary: Surface MediaCodec H.264 + 44100Hz AAC
+    val surfaceResult = runCatching {
+      encodeWithSurfaceMediaCodec(
+        context = context,
+        outFile = outFile,
+        project = project,
+        width = encodeW,
+        height = encodeH,
+        mixedPcmOriginal = mixedPcmMono,
+        originalSampleRate = audioSampleRate,
+        includeAudio = true,
+        onProgress = onProgress,
+      )
+    }
+    if (surfaceResult.isSuccess && outFile.exists() && outFile.length() > 4096L) {
+      return RenderOutcome(
+        mp4File = outFile,
+        engineLabel = "Android MediaCodec Surface H.264/AAC MP4 (${encodeW}x${encodeH} • 18fps)",
+      )
+    }
+
+    // 2) Fallback: Surface MediaCodec H.264 (Video-only if AAC quirk occurs on vendor ROM)
+    if (outFile.exists()) outFile.delete()
+    val videoOnlySurface = runCatching {
+      encodeWithSurfaceMediaCodec(
+        context = context,
+        outFile = outFile,
+        project = project,
+        width = encodeW,
+        height = encodeH,
+        mixedPcmOriginal = mixedPcmMono,
+        originalSampleRate = audioSampleRate,
+        includeAudio = false,
+        onProgress = onProgress,
+      )
+    }
+    if (videoOnlySurface.isSuccess && outFile.exists() && outFile.length() > 4096L) {
+      return RenderOutcome(
+        mp4File = outFile,
+        engineLabel = "Android MediaCodec H.264 MP4 (${encodeW}x${encodeH} • WAV synced)",
+      )
+    }
+
+    // 3) Fallback: ByteBuffer YUV420 H.264 + AAC
+    if (outFile.exists()) outFile.delete()
     val hwResult = runCatching {
-      encodeWithMediaCodecMuxer(
+      encodeWithByteBufferMediaCodec(
+        context = context,
         outFile = outFile,
         project = project,
         width = encodeW,
@@ -109,16 +159,17 @@ object AndroidVideoRendererAndExporter {
         onProgress = onProgress,
       )
     }
-
-    if (hwResult.isSuccess && outFile.exists() && outFile.length() > 1024L) {
+    if (hwResult.isSuccess && outFile.exists() && outFile.length() > 2048L) {
       return RenderOutcome(
         mp4File = outFile,
-        engineLabel = "Android MediaCodec H.264/AAC MP4 (${encodeW}x${encodeH})",
+        engineLabel = "Android MediaCodec YUV H.264/AAC MP4 (${encodeW}x${encodeH})",
       )
     }
 
-    // Portable ISO-BMFF MP4 fallback for host JVM tests or restricted hardware
+    // 4) Headless JVM unit-test fallback (when no MediaCodec hardware encoder exists)
+    if (outFile.exists()) outFile.delete()
     writePortableIsoBmffMp4(
+      context = context,
       outFile = outFile,
       project = project,
       width = encodeW,
@@ -132,7 +183,194 @@ object AndroidVideoRendererAndExporter {
     )
   }
 
-  private fun encodeWithMediaCodecMuxer(
+  private fun encodeWithSurfaceMediaCodec(
+    context: Context,
+    outFile: File,
+    project: VideoProject,
+    width: Int,
+    height: Int,
+    mixedPcmOriginal: ShortArray,
+    originalSampleRate: Int,
+    includeAudio: Boolean,
+    onProgress: (Float) -> Unit,
+  ) {
+    val fps = 18
+    val codecInfo = findAvcEncoderInfo() ?: error("No AVC encoder available")
+    val vFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+      setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+      setInteger(MediaFormat.KEY_BIT_RATE, 2_800_000)
+      setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+      setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+    }
+
+    val vCodec = MediaCodec.createByCodecName(codecInfo.name)
+    vCodec.configure(vFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+    val inputSurface = vCodec.createInputSurface()
+    vCodec.start()
+
+    // Standard 44100Hz AAC works reliably across all Android vendor encoders
+    val aacRate = 44100
+    val resampledPcm =
+      if (includeAudio) {
+        VideoScriptAndMediaGenerator.resamplePcmMono(mixedPcmOriginal, originalSampleRate, aacRate)
+      } else ShortArray(0)
+
+    var aCodec: MediaCodec? = null
+    if (includeAudio && resampledPcm.isNotEmpty()) {
+      val aFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, aacRate, 1).apply {
+        setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+        setInteger(MediaFormat.KEY_BIT_RATE, 96_000)
+        setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+      }
+      aCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).apply {
+        configure(aFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        start()
+      }
+    }
+
+    val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    var videoTrackIdx = -1
+    var audioTrackIdx = -1
+    var muxerStarted = false
+
+    val vInfo = MediaCodec.BufferInfo()
+    val aInfo = MediaCodec.BufferInfo()
+
+    val sceneList = project.scenes.ifEmpty { return }
+    val totalSec = sceneList.sumOf { it.effectiveDurationSec.toDouble() }.toFloat().coerceAtLeast(3f)
+    val totalFrames = (totalSec * fps).roundToInt().coerceAtLeast(36)
+    val frameDurationUs = 1_000_000L / fps
+
+    var audioSampleOffset = 0
+    var audioDone = (aCodec == null)
+    var frameIndex = 0
+    var videoEosSent = false
+    var videoDone = false
+
+    fun tryStartMuxer() {
+      val needAudio = aCodec != null
+      if (!muxerStarted && videoTrackIdx >= 0 && (!needAudio || audioTrackIdx >= 0)) {
+        muxer.start()
+        muxerStarted = true
+      }
+    }
+
+    fun drainEncoder(codec: MediaCodec, info: MediaCodec.BufferInfo, isVideo: Boolean): Boolean {
+      var spin = 0
+      while (spin < 32) {
+        spin++
+        val idx = codec.dequeueOutputBuffer(info, 4_000)
+        when {
+          idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+            if (isVideo && videoTrackIdx < 0) {
+              videoTrackIdx = muxer.addTrack(codec.outputFormat)
+            } else if (!isVideo && audioTrackIdx < 0) {
+              audioTrackIdx = muxer.addTrack(codec.outputFormat)
+            }
+            tryStartMuxer()
+          }
+          idx >= 0 -> {
+            val outBuf = codec.getOutputBuffer(idx)
+            if ((info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && info.size > 0 && outBuf != null && muxerStarted) {
+              outBuf.position(info.offset)
+              outBuf.limit(info.offset + info.size)
+              val track = if (isVideo) videoTrackIdx else audioTrackIdx
+              if (track >= 0) muxer.writeSampleData(track, outBuf, info)
+            }
+            val eos = (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+            codec.releaseOutputBuffer(idx, false)
+            if (eos) return true
+          }
+          else -> return false
+        }
+      }
+      return false
+    }
+
+    try {
+      while (!videoDone || !audioDone) {
+        if (!videoDone) {
+          if (frameIndex < totalFrames) {
+            val curTimeSec = frameIndex.toFloat() / fps
+            val (activeScene, localPhase) = findSceneAtTime(sceneList, curTimeSec)
+            val mouthOpen =
+              if (project.settings.lipSyncEnabled) {
+                AdvancedCharacterAnimator.computeMouthOpenEnvelope(
+                  pcm = mixedPcmOriginal,
+                  sampleRate = originalSampleRate,
+                  timeSec = curTimeSec,
+                  hasDialogue = activeScene.dialogueLine.isNotBlank() || activeScene.narrationText.isNotBlank(),
+                )
+              } else 0.35f
+
+            val canvas = inputSurface.lockCanvas(null)
+            try {
+              AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(
+                context = context,
+                canvas = canvas,
+                scene = activeScene,
+                width = width,
+                height = height,
+                framePhase = localPhase,
+                globalTimeSec = curTimeSec,
+                mouthOpen = mouthOpen,
+                showSubtitles = project.settings.subtitlesEnabled,
+              )
+            } finally {
+              inputSurface.unlockCanvasAndPost(canvas)
+            }
+            frameIndex++
+            onProgress((frameIndex.toFloat() / totalFrames).coerceIn(0f, 0.94f))
+          } else if (!videoEosSent) {
+            vCodec.signalEndOfInputStream()
+            videoEosSent = true
+          }
+          videoDone = drainEncoder(vCodec, vInfo, isVideo = true)
+        }
+
+        val activeAudio = aCodec
+        if (activeAudio != null && !audioDone) {
+          val aInIdx = activeAudio.dequeueInputBuffer(5_000)
+          if (aInIdx >= 0) {
+            if (audioSampleOffset >= resampledPcm.size) {
+              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / aacRate
+              activeAudio.queueInputBuffer(aInIdx, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            } else {
+              val chunkSamples = minOf(1024, resampledPcm.size - audioSampleOffset)
+              val inBuf = activeAudio.getInputBuffer(aInIdx)
+              inBuf?.clear()
+              inBuf?.order(ByteOrder.LITTLE_ENDIAN)
+              for (i in 0 until chunkSamples) {
+                inBuf?.putShort(resampledPcm[audioSampleOffset + i])
+              }
+              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / aacRate
+              activeAudio.queueInputBuffer(aInIdx, 0, chunkSamples * 2, ptsUs, 0)
+              audioSampleOffset += chunkSamples
+            }
+          }
+          audioDone = drainEncoder(activeAudio, aInfo, isVideo = false)
+        }
+
+        // Prevent infinite loop if encoder stalls before EOS after signaling
+        if (videoEosSent && frameIndex >= totalFrames && (!audioDone && audioSampleOffset >= resampledPcm.size)) {
+          val moreVideo = drainEncoder(vCodec, vInfo, isVideo = true)
+          val moreAudio = if (activeAudio != null) drainEncoder(activeAudio, aInfo, isVideo = false) else true
+          if (moreVideo) videoDone = true
+          if (moreAudio) audioDone = true
+        }
+      }
+      onProgress(1f)
+    } finally {
+      runCatching { inputSurface.release() }
+      runCatching { vCodec.stop(); vCodec.release() }
+      runCatching { aCodec?.stop(); aCodec?.release() }
+      if (muxerStarted) runCatching { muxer.stop() }
+      runCatching { muxer.release() }
+    }
+  }
+
+  private fun encodeWithByteBufferMediaCodec(
+    context: Context,
     outFile: File,
     project: VideoProject,
     width: Int,
@@ -158,7 +396,9 @@ object AndroidVideoRendererAndExporter {
     vCodec.configure(vFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
     vCodec.start()
 
-    val aFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1).apply {
+    val aacRate = 44100
+    val resampledPcm = VideoScriptAndMediaGenerator.resamplePcmMono(mixedPcm, sampleRate, aacRate)
+    val aFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, aacRate, 1).apply {
       setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
       setInteger(MediaFormat.KEY_BIT_RATE, 96_000)
       setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
@@ -177,7 +417,7 @@ object AndroidVideoRendererAndExporter {
 
     val sceneList = project.scenes.ifEmpty { return }
     val totalSec = sceneList.sumOf { it.effectiveDurationSec.toDouble() }.toFloat().coerceAtLeast(4f)
-    val totalFrames = (totalSec * fps).roundToInt().coerceIn(24, 3600)
+    val totalFrames = (totalSec * fps).roundToInt().coerceAtLeast(24)
     val frameDurationUs = 1_000_000L / fps
     val pixels = IntArray(width * height)
     val yuvFrame = ByteArray(width * height * 3 / 2)
@@ -225,7 +465,6 @@ object AndroidVideoRendererAndExporter {
 
     try {
       while (!videoDone || !audioDone) {
-        // Feed video frame
         if (!videoDone) {
           val inIdx = vCodec.dequeueInputBuffer(8_000)
           if (inIdx >= 0) {
@@ -235,12 +474,21 @@ object AndroidVideoRendererAndExporter {
             } else {
               val curTimeSec = frameIndex.toFloat() / fps
               val (activeScene, localPhase) = findSceneAtTime(sceneList, curTimeSec)
+              val mouthOpen = AdvancedCharacterAnimator.computeMouthOpenEnvelope(
+                mixedPcm,
+                sampleRate,
+                curTimeSec,
+                activeScene.dialogueLine.isNotBlank() || activeScene.narrationText.isNotBlank(),
+              )
               val bmp = VideoScriptAndMediaGenerator.renderSceneBitmap(
                 scene = activeScene,
                 width = width,
                 height = height,
                 framePhase = localPhase,
                 showSubtitles = project.settings.subtitlesEnabled,
+                context = context,
+                mouthOpen = mouthOpen,
+                globalTimeSec = curTimeSec,
               )
               bmp.getPixels(pixels, 0, width, 0, 0, width, height)
               bmp.recycle()
@@ -256,23 +504,22 @@ object AndroidVideoRendererAndExporter {
           if (!videoDone) videoDone = drainEncoder(vCodec, vInfo, isVideo = true)
         }
 
-        // Feed audio samples
         if (!audioDone) {
           val aInIdx = aCodec.dequeueInputBuffer(8_000)
           if (aInIdx >= 0) {
-            if (audioSampleOffset >= mixedPcm.size) {
-              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / sampleRate
+            if (audioSampleOffset >= resampledPcm.size) {
+              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / aacRate
               aCodec.queueInputBuffer(aInIdx, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
               audioDone = drainEncoder(aCodec, aInfo, isVideo = false)
             } else {
-              val chunkSamples = minOf(1024, mixedPcm.size - audioSampleOffset)
+              val chunkSamples = minOf(1024, resampledPcm.size - audioSampleOffset)
               val inBuf = aCodec.getInputBuffer(aInIdx)
               inBuf?.clear()
               inBuf?.order(ByteOrder.LITTLE_ENDIAN)
               for (i in 0 until chunkSamples) {
-                inBuf?.putShort(mixedPcm[audioSampleOffset + i])
+                inBuf?.putShort(resampledPcm[audioSampleOffset + i])
               }
-              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / sampleRate
+              val ptsUs = (audioSampleOffset.toLong() * 1_000_000L) / aacRate
               aCodec.queueInputBuffer(aInIdx, 0, chunkSamples * 2, ptsUs, 0)
               audioSampleOffset += chunkSamples
             }
@@ -352,11 +599,8 @@ object AndroidVideoRendererAndExporter {
     }
   }
 
-  /**
-   * Writes a compact valid ISO-BMFF MP4 box file (`ftyp` + `moov` + `mdat` with preview frames & PCM chunks)
-   * when running in headless JVM unit tests without hardware MediaCodec.
-   */
   fun writePortableIsoBmffMp4(
+    context: Context? = null,
     outFile: File,
     project: VideoProject,
     width: Int,
@@ -385,15 +629,18 @@ object AndroidVideoRendererAndExporter {
     val ftyp = box("ftyp", ftypPayload)
 
     val mdatPayload = ByteArrayOutputStream().apply {
-      val bmp = VideoScriptAndMediaGenerator.renderSceneBitmap(
-        scene = project.scenes.first(),
-        width = minOf(width, 320),
-        height = minOf(height, 240),
-        framePhase = 0.5f,
-        showSubtitles = project.settings.subtitlesEnabled,
-      )
-      bmp.compress(Bitmap.CompressFormat.JPEG, 75, this)
-      bmp.recycle()
+      project.scenes.forEach { sc ->
+        val bmp = VideoScriptAndMediaGenerator.renderSceneBitmap(
+          scene = sc,
+          width = minOf(width, 320),
+          height = minOf(height, 240),
+          framePhase = 0.5f,
+          showSubtitles = project.settings.subtitlesEnabled,
+          context = context,
+        )
+        bmp.compress(Bitmap.CompressFormat.JPEG, 75, this)
+        bmp.recycle()
+      }
       val sampleCap = minOf(mixedPcm.size, 8000)
       for (i in 0 until sampleCap) {
         write(mixedPcm[i].toInt() and 0xFF)
@@ -405,13 +652,13 @@ object AndroidVideoRendererAndExporter {
     val totalDurationMs = (project.scenes.sumOf { it.effectiveDurationSec.toDouble() } * 1000.0).roundToInt().coerceAtLeast(1000)
     val mvhdPayload = ByteArray(100).apply {
       ByteBuffer.wrap(this).order(ByteOrder.BIG_ENDIAN).apply {
-        putInt(0) // version + flags
-        putInt(0) // creation
-        putInt(0) // modification
-        putInt(1000) // timescale
+        putInt(0)
+        putInt(0)
+        putInt(0)
+        putInt(1000)
         putInt(totalDurationMs)
-        putInt(0x00010000) // rate 1.0
-        putShort(0x0100) // volume 1.0
+        putInt(0x00010000)
+        putShort(0x0100)
       }
     }
     val moov = box("moov", box("mvhd", mvhdPayload))
@@ -423,10 +670,6 @@ object AndroidVideoRendererAndExporter {
     }
   }
 
-  /**
-   * Exports all 5 production deliverables (`mp4`, `script.txt`, `voiceover.wav`, `subtitles.srt`, and OpenMontage ZIP bundle)
-   * both into internal storage AND public `Downloads/LXR-VideoStudio/<slug>/`.
-   */
   fun exportAllArtifacts(
     context: Context,
     project: VideoProject,
@@ -467,7 +710,6 @@ object AndroidVideoRendererAndExporter {
       setExecutable(true)
     }
 
-    // Create full OpenMontage project ZIP bundle
     val zipFile = File(workDir, "${slug}_openmontage_project.zip")
     ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
       fun addEntry(path: String, bytes: ByteArray) {
@@ -507,7 +749,6 @@ object AndroidVideoRendererAndExporter {
       mirrorToDownloadsFolder(context, slug, src, name, mime, publicDownloadFolder)
       exportedSummary.add("$name (${src.length() / 1024} KB)")
     }
-    // Mirror Termux helper + frames list cleanly if public dir writable
     publicDownloadFolder?.let { pub ->
       runCatching { File(pub, "lxr_openmontage_termux.sh").writeText(termuxSh, Charsets.UTF_8) }
       runCatching { File(pub, "openmontage_runner.py").writeText(pythonRunner, Charsets.UTF_8) }
@@ -544,11 +785,9 @@ object AndroidVideoRendererAndExporter {
     mimeType: String,
     publicDir: File?,
   ) {
-    // 1) Direct file write when external download path is accessible
     publicDir?.let { dir ->
       runCatching { source.copyTo(File(dir, displayName), overwrite = true) }
     }
-    // 2) Android 10+ scoped MediaStore.Downloads write
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       runCatching {
         val values = ContentValues().apply {

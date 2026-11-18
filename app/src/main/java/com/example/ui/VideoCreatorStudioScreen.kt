@@ -1,7 +1,12 @@
 package com.example.ui
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,7 +32,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.MovieFilter
@@ -54,12 +62,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -69,8 +80,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.service.RiyaVoiceManager
 import com.example.video.DurationPreset
+import com.example.video.MotionChoreography
 import com.example.video.PipelineRunStatus
 import com.example.video.ProductionToolTab
+import com.example.video.TalkingCharacterPreset
+import com.example.video.UserMediaKind
 import com.example.video.VideoAspectRatio
 import com.example.video.VideoResolutionPreset
 import com.example.video.VideoStudioCatalog
@@ -88,6 +102,23 @@ fun VideoCreatorStudioScreen(
   BackHandler(onBack = back)
   val state by vm.uiState.collectAsState()
   val ctx = LocalContext.current
+
+  val pickVisualLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 12)) { uris ->
+      if (uris.isNotEmpty()) vm.importUserMediaUris(uris)
+    }
+
+  val pickAudioLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) vm.importUserMediaUris(listOf(uri), UserMediaKind.AUDIO)
+    }
+
+  val onPickGalleryVisuals: () -> Unit = {
+    pickVisualLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+  }
+  val onPickCustomAudio: () -> Unit = {
+    pickAudioLauncher.launch(arrayOf("audio/*"))
+  }
 
   Column(
     modifier = Modifier
@@ -118,7 +149,13 @@ fun VideoCreatorStudioScreen(
       Spacer(Modifier.width(10.dp))
       Column(modifier = Modifier.weight(1f)) {
         Text("LXR AI Video Studio", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("OpenMontage + Free MediaCodec Engine", color = CYBER_CYAN, fontSize = 11.sp)
+        Text(
+          "Unlimited • ${state.bundledAssets.size} Assets • MediaCodec H.264",
+          color = CYBER_CYAN,
+          fontSize = 11.sp,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
       PremiumThreeDotButton(
         onNavigate = onNavigate,
@@ -158,11 +195,13 @@ fun VideoCreatorStudioScreen(
           }
         }
 
-        // 1. ONE LINE TO VIDEO PROMPT BOX
-        OneLinePromptCard(state = state, vm = vm)
-
-        // Video Settings Strip (15+ Types, Duration, 9:16/16:9, 720p/1080p)
-        VideoTypeAndSettingsCard(state = state, vm = vm)
+        // 1. ONE LINE TO VIDEO PROMPT BOX + GALLERY UPLOAD
+        OneLinePromptCard(
+          state = state,
+          vm = vm,
+          onPickVisuals = onPickGalleryVisuals,
+          onPickAudio = onPickCustomAudio,
+        )
 
         // 2. FOUR MAIN PRODUCTION TOOL CARDS (SCRIPT / VOICE OVER / IMAGE & VIDEO / EDIT)
         FourMainToolCardsGrid(
@@ -174,9 +213,17 @@ fun VideoCreatorStudioScreen(
         when (state.selectedToolTab) {
           ProductionToolTab.SCRIPT -> ToolCardScriptPanel(project = state.activeProject, vm = vm)
           ProductionToolTab.VOICE_OVER -> ToolCardVoicePanel(state = state, vm = vm)
-          ProductionToolTab.IMAGE_VIDEO -> ToolCardImageVisualPanel(state = state, vm = vm)
+          ProductionToolTab.IMAGE_VIDEO -> ToolCardImageVisualPanel(
+            state = state,
+            vm = vm,
+            onPickVisuals = onPickGalleryVisuals,
+            onPickAudio = onPickCustomAudio,
+          )
           ProductionToolTab.EDIT -> ToolCardEditPanel(state = state, vm = vm)
         }
+
+        // Video Settings Strip (20 Types, Motion, Talking Character, Duration, Ratio, Quality)
+        VideoTypeAndSettingsCard(state = state, vm = vm)
 
         // 3. OPENMONTAGE INTEGRATION CARD
         OpenMontageIntegrationCard(state = state, vm = vm)
@@ -199,7 +246,12 @@ fun VideoCreatorStudioScreen(
 }
 
 @Composable
-private fun OneLinePromptCard(state: VideoStudioUiState, vm: VideoStudioViewModel) {
+private fun OneLinePromptCard(
+  state: VideoStudioUiState,
+  vm: VideoStudioViewModel,
+  onPickVisuals: () -> Unit,
+  onPickAudio: () -> Unit,
+) {
   val isRunning = state.progress.status == PipelineRunStatus.RUNNING
   Column(
     modifier = Modifier
@@ -210,16 +262,30 @@ private fun OneLinePromptCard(state: VideoStudioUiState, vm: VideoStudioViewMode
       .padding(14.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
       Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = CYBER_CYAN, modifier = Modifier.size(18.dp))
       Spacer(Modifier.width(6.dp))
-      Text("১. ONE LINE TO VIDEO — এক লাইনে সম্পূর্ণ ভিডিও", color = CYBER_CYAN, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+      Text(
+        "১. ONE LINE TO VIDEO — এক লাইনে আনলিমিটেড ভিডিও",
+        color = CYBER_CYAN,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier.weight(1f),
+      )
+      if (state.totalVideosCreatedCount > 0) {
+        Text(
+          "তৈরি: ${state.totalVideosCreatedCount}টি",
+          color = CYBER_GREEN,
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.Bold,
+        )
+      }
     }
 
     OutlinedTextField(
       value = state.promptInput,
       onValueChange = { vm.updatePrompt(it) },
-      label = { Text("আপনার ভিডিওর আইডিয়া লিখুন (বাংলা বা ইংরেজি)", fontSize = 11.5.sp) },
+      label = { Text("আপনার ভিডিওর আইডিয়া লিখুন (নাটক, ৩৬০° ফ্যাশন, কথা বলা ফুলকপি-আপেল, নাচ, স্টোরি...)", fontSize = 11.sp) },
       minLines = 2,
       maxLines = 4,
       modifier = Modifier.fillMaxWidth().testTag("video_prompt_input"),
@@ -231,22 +297,90 @@ private fun OneLinePromptCard(state: VideoStudioUiState, vm: VideoStudioViewMode
       ),
     )
 
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-      OutlinedButton(
-        onClick = { vm.updatePrompt(VideoStudioCatalog.DEFAULT_EXAMPLE_PROMPT) },
-      ) {
-        Text("উদাহরণ: শিশু ও মহাকাশ", color = CYBER_AMBER, fontSize = 11.sp)
+    // Quick preset inspiration chips
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      listOf(
+        "ফুলকপি ও আপেল কথা বলা" to VideoStudioCatalog.DEFAULT_EXAMPLE_PROMPT,
+        "৩৬০° ফ্যাশন শো" to "একটি আধুনিক ৩৬০ ডিগ্রি ফ্যাশন শো ভিডিও তৈরি করো যেখানে মডেল স্টাইলিশ ড্রেসে ঘুরে ঘুরে কথা বলছে",
+        "নাটক ও সিরিয়াল" to "গ্রামের পটভূমিতে আবেগঘন সামাজিক নাটক ও সিরিয়াল পর্ব তৈরি করো যেখানে চরিত্ররা স্পষ্ট বাংলায় সংলাপ বলছে",
+        "নাচ ও মোশন গ্রাফিক্স" to "রঙিন মোশন গ্রাফিক্স এবং কার্টুন চরিত্রের নাচানাচি ও গান দিয়ে একটি প্রাণবন্ত শর্ট ভিডিও বানাও",
+        "শিশু ও মহাকাশ" to "একটি সুন্দর শিক্ষামূলক অ্যানিমেশন ভিডিও তৈরি করো, যেখানে একটি শিশু মহাকাশ সম্পর্কে শিখছে।",
+      ).forEach { (chipLabel, chipPrompt) ->
+        FilterChip(
+          selected = state.promptInput == chipPrompt,
+          onClick = { vm.updatePrompt(chipPrompt) },
+          label = { Text(chipLabel, fontSize = 10.5.sp) },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_PURPLE, selectedLabelColor = Color.White),
+        )
       }
-      Button(
-        onClick = { vm.startFullPipeline() },
-        enabled = !isRunning,
-        modifier = Modifier.weight(1f).testTag("generate_full_video_btn"),
-        colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
-      ) {
-        Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(if (isRunning) "তৈরি হচ্ছে..." else "সম্পূর্ণ ভিডিও তৈরি করুন", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+    }
+
+    // Play-compliant Gallery Photo / Video / Screenshot / Audio Picker
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+      OutlinedButton(onClick = onPickVisuals, modifier = Modifier.weight(1f).testTag("pick_gallery_media_btn")) {
+        Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text("+ ছবি/ভিডিও/স্ক্রিনশট", color = CYBER_AMBER, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
+      OutlinedButton(onClick = onPickAudio, modifier = Modifier.weight(1f).testTag("pick_custom_audio_btn")) {
+        Icon(Icons.Filled.AudioFile, contentDescription = null, tint = Color(0xFFE879F9), modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text("+ অডিও/ভয়েস", color = Color(0xFFE879F9), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+    }
+
+    if (state.userMediaItems.isNotEmpty()) {
+      Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        state.userMediaItems.forEach { item ->
+          val thumbBmp = remember(item.cachedFilePath) {
+            if (item.kind == UserMediaKind.IMAGE || item.kind == UserMediaKind.SCREENSHOT) {
+              runCatching { BitmapFactory.decodeFile(item.cachedFilePath) }.getOrNull()
+            } else null
+          }
+          Row(
+            modifier = Modifier
+              .clip(RoundedCornerShape(10.dp))
+              .background(Color(0xFF0E1530))
+              .border(1.dp, CYBER_CYAN.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+              .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            if (thumbBmp != null) {
+              Image(
+                bitmap = thumbBmp.asImageBitmap(),
+                contentDescription = item.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)),
+              )
+              Spacer(Modifier.width(6.dp))
+            }
+            Text(
+              "${item.kind.labelBn}: ${item.displayName.take(14)}",
+              color = Color.White,
+              fontSize = 10.5.sp,
+              maxLines = 1,
+            )
+            IconButton(onClick = { vm.removeUserMedia(item.id) }, modifier = Modifier.size(24.dp)) {
+              Icon(Icons.Filled.Close, contentDescription = "বাদ দিন", tint = CYBER_RED, modifier = Modifier.size(14.dp))
+            }
+          }
+        }
+      }
+    }
+
+    Button(
+      onClick = { vm.startFullPipeline() },
+      enabled = !isRunning,
+      modifier = Modifier.fillMaxWidth().testTag("generate_full_video_btn"),
+      colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
+    ) {
+      Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
+      Spacer(Modifier.width(8.dp))
+      Text(
+        if (isRunning) "রিয়েল MP4 ভিডিও তৈরি হচ্ছে..." else "সম্পূর্ণ রিয়েল ভিডিও তৈরি করুন (লিমিট নেই)",
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+      )
     }
   }
 }
@@ -266,13 +400,12 @@ private fun VideoTypeAndSettingsCard(state: VideoStudioUiState, vm: VideoStudioV
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
       Icon(Icons.Filled.Settings, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(16.dp))
       Spacer(Modifier.width(6.dp))
-      Text("ভিডিও ধরন (${VideoType.entries.size}টি ফরম্যাট), সময়কাল ও কোয়ালিটি", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+      Text("ভিডিও ধরন (${VideoType.entries.size}টি), মোশন ও কথা বলা চরিত্র", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
       TextButton(onClick = { vm.setShowSettingsSheet(!state.showSettingsSheet) }) {
         Text(if (state.showSettingsSheet) "সংক্ষেপ" else "বিস্তারিত", color = CYBER_CYAN, fontSize = 11.5.sp)
       }
     }
 
-    // Horizontal chip selector for all 15+ Video Types
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       VideoType.entries.forEach { type ->
         FilterChip(
@@ -293,6 +426,30 @@ private fun VideoTypeAndSettingsCard(state: VideoStudioUiState, vm: VideoStudioV
       )
     }
 
+    Text("মোশন ও মুভমেন্ট (Walking, Dancing, 360° Fashion, Lip-Sync):", color = CYBER_CYAN, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      MotionChoreography.entries.forEach { m ->
+        FilterChip(
+          selected = state.settings.preferredMotionStyle == m,
+          onClick = { vm.selectMotionChoreography(m) },
+          label = { Text(m.labelBn, fontSize = 10.5.sp) },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_AMBER, selectedLabelColor = Color.Black),
+        )
+      }
+    }
+
+    Text("কথা বলা চরিত্র (ফুলকপি, পাতাকপি, কলা, আপেল, ফুল, আঙ্গুল, ৩ডি):", color = Color(0xFFE879F9), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      TalkingCharacterPreset.entries.forEach { cp ->
+        FilterChip(
+          selected = state.settings.preferredCharacterPreset == cp,
+          onClick = { vm.selectTalkingCharacterPreset(cp) },
+          label = { Text(cp.labelBn, fontSize = 10.5.sp) },
+          colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CYBER_PURPLE, selectedLabelColor = Color.White),
+        )
+      }
+    }
+
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       DurationPreset.entries.forEach { dpPreset ->
         FilterChip(
@@ -307,9 +464,9 @@ private fun VideoTypeAndSettingsCard(state: VideoStudioUiState, vm: VideoStudioV
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("কাস্টম সময়কাল: ${state.customDurationSec} সেকেন্ড", color = CYBER_CYAN, fontSize = 11.5.sp)
         Slider(
-          value = state.customDurationSec.toFloat(),
+          value = state.customDurationSec.coerceIn(10, 600).toFloat(),
           onValueChange = { vm.updateCustomDurationSeconds(it.toInt()) },
-          valueRange = 10f..360f,
+          valueRange = 10f..600f,
           colors = SliderDefaults.colors(thumbColor = CYBER_CYAN, activeTrackColor = CYBER_CYAN),
         )
       }
@@ -348,7 +505,7 @@ private fun FourMainToolCardsGrid(
         tab = ProductionToolTab.SCRIPT,
         icon = Icons.Filled.Description,
         accent = CYBER_CYAN,
-        subtitle = "Story, Dialogue & Script",
+        subtitle = "Story, Drama & Dialogue",
         selected = selectedTab == ProductionToolTab.SCRIPT,
         modifier = Modifier.weight(1f).testTag("tool_card_script"),
         onClick = { onSelect(ProductionToolTab.SCRIPT) },
@@ -357,7 +514,7 @@ private fun FourMainToolCardsGrid(
         tab = ProductionToolTab.VOICE_OVER,
         icon = Icons.Filled.RecordVoiceOver,
         accent = Color(0xFFE879F9),
-        subtitle = "7 Google Voices / Piper",
+        subtitle = "7 Google Voices + LipSync",
         selected = selectedTab == ProductionToolTab.VOICE_OVER,
         modifier = Modifier.weight(1f).testTag("tool_card_voice_over"),
         onClick = { onSelect(ProductionToolTab.VOICE_OVER) },
@@ -368,7 +525,7 @@ private fun FourMainToolCardsGrid(
         tab = ProductionToolTab.IMAGE_VIDEO,
         icon = Icons.Filled.PhotoLibrary,
         accent = Color(0xFF60A5FA),
-        subtitle = "2D/3D Scenes & Stock",
+        subtitle = "60+ 3D Assets & Gallery",
         selected = selectedTab == ProductionToolTab.IMAGE_VIDEO,
         modifier = Modifier.weight(1f).testTag("tool_card_image_video"),
         onClick = { onSelect(ProductionToolTab.IMAGE_VIDEO) },
@@ -377,7 +534,7 @@ private fun FourMainToolCardsGrid(
         tab = ProductionToolTab.EDIT,
         icon = Icons.Filled.Tune,
         accent = CYBER_GREEN,
-        subtitle = "Timeline, BGM & MP4",
+        subtitle = "Timeline, 360° & MP4",
         selected = selectedTab == ProductionToolTab.EDIT,
         modifier = Modifier.weight(1f).testTag("tool_card_edit"),
         onClick = { onSelect(ProductionToolTab.EDIT) },

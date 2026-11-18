@@ -69,10 +69,11 @@ data class PendingIncomingMessage(
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
   const val END_SENSITIVITY = "END_SENSITIVITY_HIGH"
-  const val PREFIX_PADDING_MS = 60
-  // Combined with 220ms denoised hangover + immediate audioStreamEnd flush -> ~0.8-1.4s ultra-fast replies
-  const val SILENCE_DURATION_MS = 600
-  const val MIC_HANGOVER_MS = 220L
+  const val PREFIX_PADDING_MS = 40
+  // Combined with 150ms hangover + 380ms audioStreamEnd flush -> fast ~0.9-1.5s replies without cutting Boss mid-sentence
+  const val SILENCE_DURATION_MS = 500
+  const val MIC_HANGOVER_MS = 150L
+  const val END_OF_TURN_FLUSH_MS = 380L
 
   fun buildRealtimeInputConfigJson(): JSONObject =
     JSONObject().put(
@@ -128,7 +129,7 @@ object AudioEchoGuard {
     lastSpeakerOutputRms: Double,
     voiceMatchBargeIn: Boolean,
     consecutiveLoudChunks: Int,
-    phoneTailHoldMs: Long = 180L,
+    phoneTailHoldMs: Long = 140L,
   ): Boolean {
     if (nowMs < micMuteUntilMs) return !voiceMatchBargeIn
     if (ttsIsSpeaking) return !voiceMatchBargeIn
@@ -195,7 +196,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি অ্যাপ লক খুলে দাও। ভেতরের সেটিংস বা পিনের কথা উল্লেখ করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১৩ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১৪ এ টু জেড কাজের তালিকা (নতুন সীমাহীন AI ভিডিও স্টুডিওসহ) ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ (রিয়েল ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, মিনি গেম, নোট অ্যাপ বা কাস্টম অ্যাপ) বানাতে বললে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে, LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Termux-এ APK বিল্ড ও ফলাফল যাচাই শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
       {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং ফাইল কোন ফোল্ডারে আছে তা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"run_termux_command","description":"Termux অ্যাপ খুলে বা সক্রিয় রেখে সরাসরি টার্মিনাল স্ক্রিনে ৩ সেকেন্ড ধরে রেখে, ২ সেকেন্ড অপেক্ষা করে Paste ক্লিক করে এবং Google Gboard-এর ডান-নিচের নীল এন্টার বাটন (↵) চেপে যেকোনো কমান্ড সরাসরি রান করো। পুরো সময় কিবোর্ড সবসময় অন থাকবে।","parameters":{"type":"OBJECT","properties":{"command":{"type":"STRING","description":"Termux টার্মিনালে যে কমান্ড বা কমান্ড লাইন চালাতে হবে"}},"required":["command"]}},
@@ -562,11 +563,11 @@ class GeminiLive(private val ctx: Context) {
 
   private fun sendScreenNow() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
-    if ((ws?.queueSize() ?: 0L) > 4_000L) return
+    if ((ws?.queueSize() ?: 0L) > 1_500L) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 360 else 480, quality = if (lowNet) 28 else 38) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 300 else 380, quality = if (lowNet) 22 else 30) { jpg ->
       if (jpg != null) {
         lastShot = jpg.contentHashCode()
         sendImage(jpg)
@@ -576,13 +577,13 @@ class GeminiLive(private val ctx: Context) {
 
   private fun watchScreen() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
-    if ((ws?.queueSize() ?: 0L) > 4_000L) return
+    if ((ws?.queueSize() ?: 0L) > 1_500L) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 360 else 480, quality = if (lowNet) 28 else 38) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 300 else 380, quality = if (lowNet) 22 else 30) { jpg ->
       if (jpg != null) {
         val h = jpg.contentHashCode()
         if (h != lastShot) {
@@ -2200,7 +2201,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 2, 12288))
+        .setBufferSizeInBytes(maxOf(minAudioBuf, 5120))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -2463,12 +2464,12 @@ class GeminiLive(private val ctx: Context) {
 
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
               val withinEndOfTurnSilence =
-                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= 640L
+                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.END_OF_TURN_FLUSH_MS
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
 
-              // When Boss stops speaking and post-hangover silence reaches ~640ms -> flush audio stream immediately so Gemini replies right away!
+              // When Boss stops speaking and silence reaches END_OF_TURN_FLUSH_MS (380ms) -> flush stream immediately so Gemini replies within ~1s!
               val justEndedTurn =
-                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > 640L
+                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > LiveVadConfig.END_OF_TURN_FLUSH_MS
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {

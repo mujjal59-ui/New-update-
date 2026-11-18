@@ -1,6 +1,7 @@
 package com.example.video
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.File
@@ -27,11 +28,58 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
 
   init {
     refreshCapabilities()
+    loadBundledAssets()
   }
 
   fun refreshCapabilities() {
     val report = OpenMontageFrameworkBridge.inspectCapabilities(ctx)
     _uiState.update { it.copy(capabilityReport = report) }
+  }
+
+  fun loadBundledAssets() {
+    val list = StudioMediaLibrary.listBundledAssets(ctx)
+    _uiState.update { it.copy(bundledAssets = list) }
+  }
+
+  fun importUserMediaUris(uris: List<Uri>, forcedKind: UserMediaKind? = null) {
+    if (uris.isEmpty()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val imported = uris.mapNotNull { StudioMediaLibrary.importUserUriToProjectCache(ctx, it, forcedKind) }
+      if (imported.isNotEmpty()) {
+        _uiState.update { st ->
+          st.copy(
+            userMediaItems = st.userMediaItems + imported,
+            lastActionBanner = "${imported.size}টি আপনার গ্যালারি ছবি/ভিডিও/অডিও যোগ হয়েছে ✓",
+          )
+        }
+      }
+    }
+  }
+
+  fun removeUserMedia(id: String) {
+    _uiState.update { st ->
+      st.copy(userMediaItems = st.userMediaItems.filterNot { it.id == id })
+    }
+  }
+
+  fun toggleBundledAssetSelection(fileName: String) {
+    _uiState.update { st ->
+      val current = st.selectedBundledAssetFiles
+      val next = if (fileName in current) current - fileName else current + fileName
+      st.copy(selectedBundledAssetFiles = next)
+    }
+  }
+
+  fun clearSelectedBundledAssets() {
+    _uiState.update { it.copy(selectedBundledAssetFiles = emptyList()) }
+  }
+
+  fun selectMotionChoreography(motion: MotionChoreography) {
+    updateSettings { it.copy(preferredMotionStyle = motion) }
+  }
+
+  fun selectTalkingCharacterPreset(preset: TalkingCharacterPreset) {
+    updateSettings { it.copy(preferredCharacterPreset = preset) }
   }
 
   fun updatePrompt(text: String) = _uiState.update { it.copy(promptInput = text) }
@@ -50,7 +98,7 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
   }
 
   fun updateCustomDurationSeconds(sec: Int) {
-    _uiState.update { it.copy(customDurationSec = sec.coerceIn(10, 600)) }
+    _uiState.update { it.copy(customDurationSec = sec.coerceIn(10, 1800)) }
   }
 
   fun selectToolTab(tab: ProductionToolTab) = _uiState.update { it.copy(selectedToolTab = tab) }
@@ -194,12 +242,15 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
         checkpointWaitIfPaused()
         updateStageProgress(currentStage, script = 0.25f, msg = "১/১২: প্রম্পট ও OpenMontage টপিক বিশ্লেষণ চলছে...")
         blueprint = VideoScriptAndMediaGenerator.generateTopicAndScript(
+          context = ctx,
           prompt = prompt,
           videoType = workingProj.videoType,
           customTypeLabel = workingProj.customTypeLabel,
           durationPreset = workingProj.durationPreset,
           customDurationSec = workingProj.customDurationSeconds,
           settings = workingProj.settings,
+          userMediaItems = st0.userMediaItems,
+          selectedBundledFiles = st0.selectedBundledAssetFiles,
         )
         completed.add(PipelineStage.TOPIC_ANALYSIS)
 
@@ -253,6 +304,7 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
         scenes = workingProj.scenes,
         settings = workingProj.settings,
         allowNetworkCloudTry = allowNetworkCloudTry,
+        userAudioItems = st0.userMediaItems.filter { it.kind == UserMediaKind.AUDIO },
       )
       completed.add(PipelineStage.VOICEOVER_GEN)
       updateStageProgress(currentStage, completed, script = 1f, scene = 1f, image = 1f, voice = 1f, msg = "৬/১২: ভয়েসওভার সম্পন্ন (${voiceRes.engineLabel})")
@@ -353,7 +405,8 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       _uiState.update { st ->
         st.copy(
           activeProject = finalProj,
-          savedProjects = (listOf(finalProj) + st.savedProjects.filterNot { it.id == finalProj.id }).take(15),
+          savedProjects = listOf(finalProj) + st.savedProjects.filterNot { it.id == finalProj.id },
+          totalVideosCreatedCount = st.totalVideosCreatedCount + 1,
           progress = StudioProgressState(
             activeStage = PipelineStage.MP4_EXPORT,
             status = PipelineRunStatus.COMPLETED,
@@ -436,6 +489,28 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       val proj = st.activeProject ?: return@update st
       val updatedScenes = proj.scenes.map { sc ->
         if (sc.index == sceneIdx) sc.copy(voiceId = voiceId, emotionalTone = emotion) else sc
+      }
+      st.copy(activeProject = proj.copy(scenes = updatedScenes))
+    }
+  }
+
+  fun updateSceneMotionAndCharacter(
+    sceneIdx: Int,
+    motion: MotionChoreography,
+    preset: TalkingCharacterPreset,
+    assetFile: String? = null,
+  ) {
+    _uiState.update { st ->
+      val proj = st.activeProject ?: return@update st
+      val updatedScenes = proj.scenes.map { sc ->
+        if (sc.index == sceneIdx) {
+          sc.copy(
+            motionStyle = motion,
+            characterPreset = preset,
+            matchedAssetFile = assetFile ?: sc.matchedAssetFile,
+            effectTag = "${motion.labelBn} • ${preset.labelBn}",
+          )
+        } else sc
       }
       st.copy(activeProject = proj.copy(scenes = updatedScenes))
     }

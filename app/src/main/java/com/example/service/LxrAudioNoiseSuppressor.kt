@@ -125,7 +125,7 @@ class LxrAudioNoiseSuppressor(
         (candidate && (speechHangFrames > 0 || consecutiveSpeechCandidates >= 2))
 
     if (rawSpeechDetected) {
-      speechHangFrames = 2 // brief ~80ms syllable bridge without dragging end-of-speech latency
+      speechHangFrames = 1 // ~40ms crisp syllable bridge for sub-second turn handoff
     } else if (speechHangFrames > 0) {
       speechHangFrames--
     }

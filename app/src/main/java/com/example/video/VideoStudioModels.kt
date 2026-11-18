@@ -14,6 +14,10 @@ enum class VideoType(
   ANIMATION_3D_STYLE("3D Style Animation", "3D Style Animation", "3d_depth_animation.yaml", "Cosmic & Epic"),
   CARTOON("Cartoon Video", "Cartoon Video", "cartoon_adventure.yaml", "Cheerful Cartoon"),
   STORYTELLING("Storytelling Video", "Storytelling Video", "storytelling_arc.yaml", "Warm Narrative"),
+  DRAMA_SERIAL("নাটক ও সিরিয়াল", "Drama & Serial", "drama_serial.yaml", "Emotional Drama"),
+  FASHION_360("৩৬০° ফ্যাশন ও মডেল", "360 Fashion Showcase", "fashion_360.yaml", "Runway 360 Glam"),
+  MOTION_GRAPHICS("মোশন গ্রাফিক্স", "Motion Graphics", "motion_graphics.yaml", "Dynamic Kinetic"),
+  TALKING_PRODUCE("কথা বলা ফল/সবজি/ফুল", "Talking Produce & Flower", "talking_characters.yaml", "Playful Expressive"),
   EDUCATIONAL("Educational Video", "Educational Video", "educational_explainer.yaml", "Curious & Clear"),
   DOCUMENTARY("Documentary", "Documentary", "documentary_deep.yaml", "Atmospheric Doc"),
   EXPLAINER("Explainer Video", "Explainer Video", "explainer_motion.yaml", "Clean Modern"),
@@ -27,15 +31,53 @@ enum class VideoType(
   CUSTOM("Custom Video Type", "Custom Type", "custom_openmontage.yaml", "Adaptive Freeflow"),
 }
 
+enum class MotionChoreography(val labelBn: String, val key: String) {
+  AUTO("অটো স্মার্ট মোশন", "auto"),
+  TALKING_LIPSYNC("মুখ নাড়িয়ে কথা বলা (Lip-Sync)", "talking"),
+  WALKING("হাঁটাচলা (Walking)", "walking"),
+  DANCING("নাচানাচি (Dancing)", "dancing"),
+  FASHION_360_SPIN("৩৬০° ফ্যাশন ঘূর্ণন", "fashion_360"),
+  MOTION_GRAPHICS("মোশন গ্রাফিক্স ও কাইনেটিক", "motion_graphics"),
+  DRAMA_CINEMATIC("নাটক ও সিরিয়াল সিনেমাটিক", "drama_cinematic"),
+}
+
+enum class TalkingCharacterPreset(val labelBn: String, val key: String) {
+  AUTO("বিষয় অনুযায়ী অটো চরিত্র", "auto"),
+  BUNDLED_3D("৩ডি কার্টুন ও গ্রামের মানুষ", "bundled_3d"),
+  CAULIFLOWER("কথা বলা ফুলকপি (Cauliflower)", "cauliflower"),
+  CABBAGE("কথা বলা পাতাকপি (Cabbage)", "cabbage"),
+  BANANA("কথা বলা কলা (Banana)", "banana"),
+  APPLE("কথা বলা আপেল (Apple)", "apple"),
+  FLOWER("কথা বলা ফুল (Flower)", "flower"),
+  FINGER("কথা বলা আঙ্গুল (Finger)", "finger"),
+  USER_MEDIA("আপনার দেওয়া ছবি/ভিডিও", "user_media"),
+}
+
+enum class UserMediaKind(val labelBn: String) {
+  IMAGE("ছবি / ইমেজ"),
+  SCREENSHOT("স্ক্রিনশট"),
+  VIDEO("ভিডিও ক্লিপ"),
+  AUDIO("অডিও/ভয়েস"),
+}
+
+data class UserMediaItem(
+  val id: String,
+  val uriString: String,
+  val displayName: String,
+  val kind: UserMediaKind,
+  val cachedFilePath: String,
+  val durationMs: Long = 0L,
+)
+
 enum class DurationPreset(
   val labelBn: String,
   val defaultSeconds: Int,
   val recommendedScenes: Int,
 ) {
-  SHORT_15_60S("১৫–৬০ সেকেন্ড (Shorts)", 30, 4),
-  ANIMATION_3_5M("৩–৫ মিনিট (Animation)", 210, 6),
+  SHORT_15_60S("১৫–৬০ সেকেন্ড (Shorts)", 24, 4),
+  ANIMATION_3_5M("৩–৫ মিনিট (Animation)", 180, 6),
   YOUTUBE_ADAPTIVE("YouTube ভিডিও (৯০ সেকেন্ড)", 90, 5),
-  CUSTOM("কাস্টম সময়কাল", 45, 5),
+  CUSTOM("কাস্টম (আনলিমিটেড)", 45, 5),
 }
 
 enum class VideoAspectRatio(
@@ -51,7 +93,7 @@ enum class VideoAspectRatio(
 }
 
 enum class VideoResolutionPreset(val label: String, val is1080p: Boolean) {
-  HD_720P("720p HD (দ্রুত ও নির্ভরযোগ্য)", false),
+  HD_720P("720p HD (দ্রুত ও রিয়েলিস্টিক)", false),
   FHD_1080P("1080p Full HD", true),
 }
 
@@ -74,14 +116,14 @@ enum class PipelineStage(val stepNumber: Int, val titleBn: String, val key: Stri
   TOPIC_ANALYSIS(1, "১. টপিক ও ধারণা বিশ্লেষণ", "topic_analysis"),
   SCRIPT_GENERATION(2, "২. সম্পূর্ণ স্ক্রিপ্ট তৈরি", "script_generation"),
   SCENE_PLANNING(3, "৩. দৃশ্য (Scene) পরিকল্পনা", "scene_planning"),
-  CHARACTER_PLANNING(4, "৪. চরিত্র (Character) ডিজাইন", "character_planning"),
-  IMAGE_VISUAL_GEN(5, "৫. AI ভিজ্যুয়াল ও অ্যানিমেশন দৃশ্য", "image_visual_gen"),
-  VOICEOVER_GEN(6, "৬. ভয়েসওভার ও কণ্ঠ নির্বাচন", "voiceover_gen"),
+  CHARACTER_PLANNING(4, "৪. চরিত্র (Character) ও লিপ-সিঙ্ক ডিজাইন", "character_planning"),
+  IMAGE_VISUAL_GEN(5, "৫. ইমেজ/ভিডিও ও অ্যানিমেশন দৃশ্য ম্যাচিং", "image_visual_gen"),
+  VOICEOVER_GEN(6, "৬. স্পষ্ট ভয়েসওভার ও কণ্ঠ নির্বাচন", "voiceover_gen"),
   BACKGROUND_MUSIC(7, "৭. কপিরাইট-মুক্ত ব্যাকগ্রাউন্ড মিউজিক", "background_music"),
   SUBTITLE_GEN(8, "৮. সাবটাইটেল (.SRT) তৈরি", "subtitle_gen"),
-  SCENE_EDITING(9, "৯. টাইমলাইন ও দৃশ্য এডিটিং", "scene_editing"),
-  AUDIO_SYNC(10, "১০. ভয়েস ও মিউজিক সিঙ্ক", "audio_sync"),
-  FINAL_RENDER(11, "১১. চূড়ান্ত MP4 ভিডিও রেন্ডারিং", "final_render"),
+  SCENE_EDITING(9, "৯. টাইমলাইন, মোশন ও ৩৬০° এডিটিং", "scene_editing"),
+  AUDIO_SYNC(10, "১০. লিপ-সিঙ্ক ও অডিও সিঙ্ক", "audio_sync"),
+  FINAL_RENDER(11, "১১. রিয়েল H.264/AAC MP4 রেন্ডারিং", "final_render"),
   MP4_EXPORT(12, "১২. Downloads ফোল্ডারে এক্সপোর্ট", "mp4_export"),
 }
 
@@ -96,10 +138,10 @@ enum class PipelineRunStatus(val labelBn: String) {
 
 enum class VisualSourceKind(val labelBn: String) {
   AI_SCENE_ART("AI Scene Art"),
-  ANIMATED_2D_VECTOR("2D Vector Animation"),
-  DEPTH_3D_STYLE("3D Depth Render"),
+  ANIMATED_2D_VECTOR("2D/Talking Character"),
+  DEPTH_3D_STYLE("3D Asset + Motion"),
   IMAGE_TO_VIDEO_MOTION("Image-to-Video Motion"),
-  FREE_STOCK_OPEN_MEDIA("Free Open Stock Clip"),
+  FREE_STOCK_OPEN_MEDIA("User Photo/Video/Asset"),
 }
 
 data class CharacterProfile(
@@ -110,7 +152,7 @@ data class CharacterProfile(
   val recommendedVoiceId: String,
   val primaryColorHex: Long,
   val accentColorHex: Long,
-  val avatarVariant: String, // "child_explorer", "robot_guide", "narrator", "cosmic_owl", "hero"
+  val avatarVariant: String,
 )
 
 data class VideoScenePlan(
@@ -120,17 +162,23 @@ data class VideoScenePlan(
   val dialogueLine: String,
   val characterName: String,
   val voiceId: String,
-  val emotionalTone: String, // "Warm", "Curious", "Excited", "Calm", "Dramatic"
+  val emotionalTone: String,
   val visualPrompt: String,
-  val themeKeyword: String, // "space_kid", "planet_earth", "rocket_launch", "solar_system", "galaxy_future", "general"
+  val themeKeyword: String,
   val visualSource: VisualSourceKind,
-  val effectTag: String, // "Starfield", "OrbitMotion", "GlowPulse", "KenBurns", "ParticleSpark"
+  val effectTag: String,
   val overlayHeadline: String,
   val durationSec: Float,
   val trimStartSec: Float = 0f,
   val trimEndSec: Float = durationSec,
   val transition: TransitionEffect = TransitionEffect.FADE,
   val sfxCue: String = "Chime",
+  val matchedAssetFile: String = "",
+  val backgroundAssetFile: String = "",
+  val userMediaPath: String = "",
+  val userMediaIsVideo: Boolean = false,
+  val motionStyle: MotionChoreography = MotionChoreography.AUTO,
+  val characterPreset: TalkingCharacterPreset = TalkingCharacterPreset.AUTO,
 ) {
   val effectiveDurationSec: Float
     get() = (trimEndSec - trimStartSec).coerceAtLeast(1.5f)
@@ -152,21 +200,20 @@ data class GoogleVoiceCatalogItem(
 )
 
 object VideoStudioCatalog {
-  // Strictly includes all 7 requested Google Voice Models matched with Store.VOICE_OPTIONS
   val GOOGLE_VOICES: List<GoogleVoiceCatalogItem> = listOf(
-    GoogleVoiceCatalogItem("Aoede", "Aoede", VoiceGender.FEMALE, "শিশু-বান্ধব ও শিক্ষামূলক গল্পের নারী কণ্ঠ", "Warm & Joyful"),
+    GoogleVoiceCatalogItem("Aoede", "Aoede", VoiceGender.FEMALE, "শিশু-বান্ধব, গল্প ও মিষ্টি নারী কণ্ঠ", "Warm & Joyful"),
     GoogleVoiceCatalogItem("Iapetus", "Iapetus", VoiceGender.MALE, "স্পষ্ট শিক্ষামূলক ও ডকুমেন্টারি পুরুষ কণ্ঠ", "Clear & Calm"),
-    GoogleVoiceCatalogItem("Leda", "Leda", VoiceGender.FEMALE, "কোমল, শান্ত ও গল্প বলার নারী কণ্ঠ", "Soft & Gentle"),
+    GoogleVoiceCatalogItem("Leda", "Leda", VoiceGender.FEMALE, "কোমল, নাটক ও গল্প বলার নারী কণ্ঠ", "Soft & Gentle"),
     GoogleVoiceCatalogItem("Orus", "Orus", VoiceGender.MALE, "দৃঢ়, মোটিভেশনাল ও সিনেম্যাটিক পুরুষ কণ্ঠ", "Strong & Heroic"),
-    GoogleVoiceCatalogItem("Achernar", "Achernar", VoiceGender.FEMALE, "উৎসাহী, প্রাণবন্ত ও চরিত্রের কণ্ঠ", "Bright & Expressive"),
-    GoogleVoiceCatalogItem("Charon", "Charon", VoiceGender.MALE, "গভীর, রহস্যময় ও মহাকাশ বিবরণী পুরুষ কণ্ঠ", "Deep & Dramatic"),
-    GoogleVoiceCatalogItem("Sulafat", "Sulafat", VoiceGender.FEMALE, "আন্তরিক ও ব্যাখ্যামূলক উপস্থাপিকা কণ্ঠ", "Sincere & Clear"),
+    GoogleVoiceCatalogItem("Achernar", "Achernar", VoiceGender.FEMALE, "উৎসাহী, নাচ-গান ও কার্টুন কণ্ঠ", "Bright & Expressive"),
+    GoogleVoiceCatalogItem("Charon", "Charon", VoiceGender.MALE, "গভীর, রহস্যময় ও সিরিয়াল বিবরণী কণ্ঠ", "Deep & Dramatic"),
+    GoogleVoiceCatalogItem("Sulafat", "Sulafat", VoiceGender.FEMALE, "আন্তরিক ও ফ্যাশন/ব্যাখ্যামূলক উপস্থাপিকা কণ্ঠ", "Sincere & Clear"),
   )
 
   fun voiceIds(): List<String> = Store.VOICE_OPTIONS.map { it.id }
 
   const val DEFAULT_EXAMPLE_PROMPT =
-    "একটি সুন্দর শিক্ষামূলক অ্যানিমেশন ভিডিও তৈরি করো, যেখানে একটি শিশু মহাকাশ সম্পর্কে শিখছে।"
+    "একটি সুন্দর শিক্ষামূলক অ্যানিমেশন ভিডিও তৈরি করো, যেখানে কথা বলা ফুলকপি ও আপেল শিশুদের সাথে গ্রামে নেচে-গেয়ে মজার গল্প শেখাচ্ছে।"
 }
 
 data class ProductionSettings(
@@ -177,12 +224,15 @@ data class ProductionSettings(
   val voiceoverEnabled: Boolean = true,
   val soundEffectsEnabled: Boolean = true,
   val imageToVideoMotionEnabled: Boolean = true,
+  val lipSyncEnabled: Boolean = true,
   val transitionEffect: TransitionEffect = TransitionEffect.FADE,
   val selectedVoiceId: String = "Aoede",
   val autoSelectVoiceByAi: Boolean = true,
   val useCharacterVoicesPerScene: Boolean = true,
-  val selectedVoiceGenderFilter: String = "ALL", // "ALL", "FEMALE", "MALE"
-  val preferredEmotionalTone: String = "Warm & Curious",
+  val selectedVoiceGenderFilter: String = "ALL",
+  val preferredEmotionalTone: String = "Warm & Expressive",
+  val preferredMotionStyle: MotionChoreography = MotionChoreography.AUTO,
+  val preferredCharacterPreset: TalkingCharacterPreset = TalkingCharacterPreset.AUTO,
 )
 
 data class StudioProgressState(
@@ -194,7 +244,7 @@ data class StudioProgressState(
   val sceneProgress: Float = 0f,
   val editingProgress: Float = 0f,
   val renderingProgress: Float = 0f,
-  val statusMessageBn: String = "একটি প্রম্পট লিখে 'সম্পূর্ণ ভিডিও তৈরি করুন' চাপুন।",
+  val statusMessageBn: String = "সীমাহীন ভিডিও তৈরি — প্রম্পট লিখুন বা ছবি/ভিডিও যোগ করে চাপুন!",
   val completedStages: Set<PipelineStage> = emptySet(),
   val failedStage: PipelineStage? = null,
   val errorMessage: String? = null,
@@ -225,13 +275,13 @@ data class ExportedVideoArtifacts(
 data class OpenMontageCapabilityReport(
   val frameworkRepoUrl: String = "https://github.com/Open-Montage-app/OpenMontage",
   val onDeviceEncoderAvailable: Boolean = true,
-  val onDeviceEncoderNote: String = "Android MediaCodec H.264 + MediaMuxer + Canvas 100% ফ্রি ও অফলাইন প্রস্তুত ✓",
+  val onDeviceEncoderNote: String = "Android MediaCodec Hardware Surface H.264/AAC MP4 + 60+ 3D Assets প্রস্তুত ✓ (আনলিমিটেড)",
   val termuxInstalled: Boolean = false,
   val termuxRunPermGranted: Boolean = false,
-  val ffmpegNote: String = "Termux-এ `pkg install ffmpeg` দিয়ে হাই-স্পিড রেন্ডারিং সমর্থিত (বিকল্প হিসেবে অন-ডিভাইস MP4 রেন্ডার সক্রিয় ✓)।",
-  val piperTtsNote: String = "পেইড API নয় — ফ্রি Gemini/Firebase বা অফলাইন Piper TTS / LXR ফনেটিক ভয়েস ইঞ্জিন ব্যবহৃত হয় ✓।",
-  val remotionNote: String = "Remotion কম্পোজিশন এক্সপোর্ট হয়; অ্যান্ড্রয়েড Termux-এ Chromium সীমাবদ্ধতায় নেটিভ Canvas/FFmpeg অটো-ব্যবহৃত হয়।",
-  val stockMediaNote: String = "কপিরাইট-মুক্ত Wikimedia/CC0 প্রম্পট ও অন-ডিভাইস ভেক্টর/অ্যানিমেশন দৃশ্য সম্পূর্ণ ফ্রি।",
+  val ffmpegNote: String = "Termux FFmpeg + অন-ডিভাইস GPU Surface MP4 রেন্ডার সক্রিয় ✓।",
+  val piperTtsNote: String = "পেইড API নয় — ফ্রি Google Voice বা এক্সপ্রেসিভ LXR বাংলা/ইংরেজি ভয়েস ব্যবহৃত হয় ✓।",
+  val remotionNote: String = "Remotion কম্পোজিশন এক্সপোর্ট হয়; অ্যান্ড্রয়েডে নেটিভ Canvas + MediaCodec অটো-ব্যবহৃত হয়।",
+  val stockMediaNote: String = "বিল্ট-ইন ৬০+ ৩ডি/গ্রাম/নাচ/ক্যারেক্টার ইমেজ + আপনার গ্যালারির ছবি/ভিডিও/স্ক্রিনশট সম্পূর্ণ সমর্থিত ✓।",
 )
 
 data class VideoProject(
@@ -241,15 +291,15 @@ data class VideoProject(
   val prompt: String,
   val videoType: VideoType = VideoType.ANIMATION,
   val customTypeLabel: String = "",
-  val durationPreset: DurationPreset = DurationPreset.ANIMATION_3_5M,
-  val customDurationSeconds: Int = 36,
+  val durationPreset: DurationPreset = DurationPreset.SHORT_15_60S,
+  val customDurationSeconds: Int = 24,
   val topicAnalysisSummary: String = "",
   val fullScriptText: String = "",
   val characters: List<CharacterProfile> = emptyList(),
   val scenes: List<VideoScenePlan> = emptyList(),
   val subtitles: List<SubtitleCue> = emptyList(),
   val previewFramePaths: List<String> = emptyList(),
-  val bgmMoodLabel: String = "Cosmic Wonder Ambient (Free Procedural Synth)",
+  val bgmMoodLabel: String = "Lively Cinematic Ambient (Free Procedural Synth)",
   val bgmWavPath: String = "",
   val settings: ProductionSettings = ProductionSettings(),
   val artifacts: ExportedVideoArtifacts = ExportedVideoArtifacts(),
@@ -268,6 +318,10 @@ data class VideoStudioUiState(
   val customDurationSec: Int = 24,
   val selectedToolTab: ProductionToolTab = ProductionToolTab.SCRIPT,
   val settings: ProductionSettings = ProductionSettings(),
+  val bundledAssets: List<StudioAssetEntry> = emptyList(),
+  val selectedBundledAssetFiles: List<String> = emptyList(),
+  val userMediaItems: List<UserMediaItem> = emptyList(),
+  val totalVideosCreatedCount: Int = 0,
   val activeProject: VideoProject? = null,
   val savedProjects: List<VideoProject> = emptyList(),
   val progress: StudioProgressState = StudioProgressState(),

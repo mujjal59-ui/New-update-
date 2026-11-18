@@ -37,10 +37,11 @@ object RiyaVoiceManager {
 
   private val ttsHttpClient =
     OkHttpClient.Builder()
-      .connectTimeout(4500, TimeUnit.MILLISECONDS)
-      .readTimeout(9000, TimeUnit.MILLISECONDS)
-      .writeTimeout(4500, TimeUnit.MILLISECONDS)
-      .callTimeout(14000, TimeUnit.MILLISECONDS)
+      .connectionPool(okhttp3.ConnectionPool(4, 2, TimeUnit.MINUTES))
+      .connectTimeout(2500, TimeUnit.MILLISECONDS)
+      .readTimeout(6500, TimeUnit.MILLISECONDS)
+      .writeTimeout(2500, TimeUnit.MILLISECONDS)
+      .callTimeout(10000, TimeUnit.MILLISECONDS)
       .retryOnConnectionFailure(true)
       .build()
 

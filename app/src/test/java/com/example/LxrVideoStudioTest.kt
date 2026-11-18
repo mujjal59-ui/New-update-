@@ -1,6 +1,8 @@
 package com.example
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.test.assertIsDisplayed
@@ -11,16 +13,24 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.VideoCreatorStudioScreen
+import com.example.video.AdvancedCharacterAnimator
+import com.example.video.MotionChoreography
 import com.example.video.OpenMontageFrameworkBridge
 import com.example.video.PipelineRunStatus
 import com.example.video.PipelineStage
 import com.example.video.ProductionToolTab
+import com.example.video.StudioMediaLibrary
+import com.example.video.TalkingCharacterPreset
 import com.example.video.TransitionEffect
+import com.example.video.VideoScenePlan
 import com.example.video.VideoStudioCatalog
 import com.example.video.VideoStudioViewModel
 import com.example.video.VideoType
+import com.example.video.VisualSourceKind
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipFile
+import kotlin.math.sin
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -37,15 +47,88 @@ class LxrVideoStudioTest {
   @get:Rule val composeTestRule = createComposeRule()
 
   @Test
-  fun catalog_contains15PlusVideoTypes_andAll7GoogleVoiceModels() {
+  fun catalog_contains15PlusVideoTypes_all7GoogleVoices_and60BundledAssets() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
     assertTrue("Must support at least 15 video types + custom", VideoType.entries.size >= 16)
     val expectedVoices = setOf("Aoede", "Iapetus", "Leda", "Orus", "Achernar", "Charon", "Sulafat")
     val actualVoices = VideoStudioCatalog.GOOGLE_VOICES.map { it.id }.toSet()
     assertEquals(expectedVoices, actualVoices)
+
+    val bundled = StudioMediaLibrary.listBundledAssets(app)
+    assertEquals("All 60 studio pack assets must be bundled", 60, bundled.size)
   }
 
   @Test
-  fun testAnimationEndToEnd_generatesScriptVoiceVisualsSubtitlesMp4AndOpenMontageBundle() = runTest {
+  fun talkingProduceCharacters_lipSyncEnvelope_and360MotionRenderCleanly() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    // 1. Verify audio-driven lip-sync mouth envelope differentiates loud speech vs silence
+    val pcm = ShortArray(24000) { i ->
+      if (i < 12000) (sin(i * 0.12) * 8000.0).toInt().toShort() else 0
+    }
+    val loudMouth = AdvancedCharacterAnimator.computeMouthOpenEnvelope(pcm, 24000, 0.25f, true)
+    val silentMouth = AdvancedCharacterAnimator.computeMouthOpenEnvelope(pcm, 24000, 0.75f, true)
+    assertTrue("Mouth must open during speech ($loudMouth)", loudMouth > 0.25f)
+    assertTrue("Mouth must close during silence ($silentMouth)", silentMouth < 0.05f)
+
+    // 2. Render all requested talking produce/flower/finger characters + all motion styles
+    val producePresets = listOf(
+      TalkingCharacterPreset.CAULIFLOWER,
+      TalkingCharacterPreset.CABBAGE,
+      TalkingCharacterPreset.BANANA,
+      TalkingCharacterPreset.APPLE,
+      TalkingCharacterPreset.FLOWER,
+      TalkingCharacterPreset.FINGER,
+    )
+    val motions = listOf(
+      MotionChoreography.TALKING_LIPSYNC,
+      MotionChoreography.WALKING,
+      MotionChoreography.DANCING,
+      MotionChoreography.FASHION_360_SPIN,
+      MotionChoreography.MOTION_GRAPHICS,
+      MotionChoreography.DRAMA_CINEMATIC,
+    )
+
+    val bmp = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    producePresets.forEachIndexed { idx, preset ->
+      val scene = VideoScenePlan(
+        index = idx + 1,
+        title = "Scene ${idx + 1}",
+        narrationText = "কথা বলা ${preset.labelBn}",
+        dialogueLine = "হ্যালো! আমি কথা বলছি ও নাচছি!",
+        characterName = preset.labelBn,
+        voiceId = "Aoede",
+        emotionalTone = "Playful",
+        visualPrompt = preset.labelBn,
+        themeKeyword = "produce_story",
+        visualSource = VisualSourceKind.ANIMATED_2D_VECTOR,
+        effectTag = motions[idx].labelBn,
+        overlayHeadline = preset.labelBn,
+        durationSec = 4f,
+        motionStyle = motions[idx],
+        characterPreset = preset,
+      )
+      AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(
+        context = app,
+        canvas = canvas,
+        scene = scene,
+        width = 640,
+        height = 360,
+        framePhase = 0.45f,
+        globalTimeSec = 1.8f,
+        mouthOpen = loudMouth,
+        showSubtitles = true,
+      )
+      // Verify rendered bitmap compresses to valid non-empty PNG frame
+      val pngOut = ByteArrayOutputStream()
+      assertTrue(bmp.compress(Bitmap.CompressFormat.PNG, 90, pngOut))
+      assertTrue("Rendered frame PNG must be non-empty", pngOut.size() > 150)
+    }
+    bmp.recycle()
+  }
+
+  @Test
+  fun testAnimationEndToEnd_generatesScriptVoiceVisualsSubtitlesMp4AndUnlimitedProjects() = runTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     val vm = VideoStudioViewModel(app)
 
@@ -55,6 +138,7 @@ class LxrVideoStudioTest {
 
     val st = vm.uiState.value
     assertEquals(PipelineRunStatus.COMPLETED, st.progress.status)
+    assertEquals(1, st.totalVideosCreatedCount)
     assertEquals(1f, st.progress.scriptProgress, 0.01f)
     assertEquals(1f, st.progress.voiceProgress, 0.01f)
     assertEquals(1f, st.progress.imageProgress, 0.01f)
@@ -88,7 +172,7 @@ class LxrVideoStudioTest {
     assertTrue("Subtitles SRT must exist", srt.exists())
     val srtText = srt.readText(Charsets.UTF_8)
     assertTrue(srtText.contains("-->"))
-    assertTrue(srtText.contains("আরিয়ান") || srtText.contains("মহাকাশ"))
+    assertTrue(srtText.contains("মহাকাশ"))
 
     val scriptTxt = File(art.scriptTxtPath)
     assertTrue("Script TXT must exist", scriptTxt.exists())
@@ -117,6 +201,15 @@ class LxrVideoStudioTest {
 
     // OpenMontage free-only policy check
     assertTrue(OpenMontageFrameworkBridge.buildPipelineYaml(edited).contains("paid_apis_allowed: false"))
+
+    // Run a second project with talking cauliflower/apple & 360 mode to confirm no limits & semantic matching
+    vm.updatePrompt("কথা বলা ফুলকপি এবং আপেল নিয়ে ৩৬০ ফ্যাশন ও নাটক ভিডিও তৈরি করো")
+    vm.selectVideoType(VideoType.TALKING_PRODUCE)
+    vm.runPipelineSynchronouslyForTest(allowNetworkCloudTry = false)
+    val st2 = vm.uiState.value
+    assertEquals(PipelineRunStatus.COMPLETED, st2.progress.status)
+    assertEquals(2, st2.totalVideosCreatedCount)
+    assertEquals(2, st2.savedProjects.size)
   }
 
   @Test
@@ -139,6 +232,9 @@ class LxrVideoStudioTest {
     composeTestRule.onNodeWithTag("video_creator_screen_back_btn").assertIsDisplayed()
     composeTestRule.onNodeWithTag("video_prompt_input").assertIsDisplayed()
     composeTestRule.onNodeWithTag("generate_full_video_btn").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("pick_gallery_media_btn").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("pick_custom_audio_btn").assertIsDisplayed()
 
     // Switch across all 4 production tool cards
     composeTestRule.onNodeWithTag("tool_card_voice_over").performClick()
