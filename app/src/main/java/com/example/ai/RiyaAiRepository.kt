@@ -88,6 +88,7 @@ class RiyaAiRepository {
     screenSummary: String,
     accessibilityActive: Boolean,
     preferFastLowNet: Boolean = false,
+    memoryContext: String = "",
   ): Flow<String> = flow {
     val q = userPrompt.lowercase()
     val asksCreator =
@@ -124,7 +125,11 @@ class RiyaAiRepository {
       if (screenSummary.isNotBlank()) {
         appendLine("বর্তমান স্ক্রিনে যা দেখা যাচ্ছে: $screenSummary")
       }
-      appendLine("সংক্ষিপ্ত, স্পষ্ট ও প্রাকৃতিক বাংলায় উত্তর দিন (কোনো ** বা ইমোজি ছাড়া)।")
+      if (memoryContext.isNotBlank()) {
+        appendLine("গত ৩০ দিনের স্মৃতি ও প্রাসঙ্গিক তথ্য:")
+        appendLine(memoryContext.take(4000))
+      }
+      appendLine("গভীর অভিজ্ঞতা ও বিবেক দিয়ে স্পষ্ট, প্রাকৃতিক ও বুদ্ধিদীপ্ত বাংলায় উত্তর দিন (কোনো ** বা ইমোজি ছাড়া)।")
     }
 
     val activeModel = if (preferFastLowNet) fastModel else chatModel
@@ -154,14 +159,19 @@ class RiyaAiRepository {
     appLabel: String,
     senderName: String,
     incomingMessage: String,
+    busyTemplate: String = com.example.data.RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN,
   ): Result<String> {
     return try {
       val prompt =
         """
-        $appLabel-এ $senderName মেসেজ পাঠিয়েছেন: "$incomingMessage"
-        বসের পক্ষ থেকে LXR--AI হিসেবে ১ থেকে ২ লাইনের ভদ্র, স্পষ্ট ও প্রাকৃতিক বাংলা উত্তর লিখে দিন। কোনো মার্কডাউন বা ইমোজি দেবেন না।
+        $appLabel-এ "$senderName" মেসেজ পাঠিয়েছেন: "$incomingMessage"
+        কাজ:
+        ১) প্রথমে বুঝুন মেসেজটিতে কী বলা বা জিজ্ঞেস করা হয়েছে (যেমন: সালাম/কেমন আছেন, জরুরি কল, কোথায় আছেন, দেখা করা, টাকা/কাজের কথা, নাকি সাধারণ মেসেজ)।
+        ২) যদি মেসেজটি শুধু সাধারণ খোঁজখবর বা বস ব্যস্ত থাকার কারণে অপেক্ষার অনুরোধের উপযোগী হয়, তাহলে এই ভদ্র কাঠামোর মতো উত্তর দিন:
+        "$busyTemplate"
+        আর যদি মেসেজটিতে নির্দিষ্ট কোনো প্রশ্ন বা জরুরি বিষয় থাকে, তাহলে বসের পক্ষ থেকে LXR--AI হিসেবে অত্যন্ত বিনয়ী, প্রাসঙ্গিক ও স্পষ্ট বাংলায় ২-৩ বাক্যে সঠিক উত্তর লিখে দিন যাতে প্রেরক বুঝতে পারেন বার্তাটি সঠিকভাবে পড়া হয়েছে এবং বস অবসর হলেই যোগাযোগ করবেন। কোনো মার্কডাউন বা ইমোজি দেবেন না।
         """.trimIndent()
-      val response = withTimeout(30_000L) { fastModel.generateContent(prompt) }
+      val response = withTimeout(15_000L) { fastModel.generateContent(prompt) }
       val reply = response.text?.trim()
       if (!reply.isNullOrBlank()) {
         Result.success(reply)

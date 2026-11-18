@@ -10,6 +10,7 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.example.ai.RiyaAiRepository
 import com.example.data.AutoReplyLogEntity
+import com.example.data.RiyaPreferences
 import com.example.data.RiyaRepository
 import com.example.data.RiyaState
 import com.example.data.Store
@@ -73,12 +74,19 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             val person = b.getParcelable("sender_person") as? android.app.Person
             sender = person?.name?.toString()?.trim().orEmpty()
           }
-          val effectiveSender = sender.ifBlank { convTitle.ifBlank { extraTitle } }
+          val effectiveSender =
+            when {
+              sender.isNotBlank() && convTitle.isNotBlank() && !sender.equals(convTitle, true) ->
+                "$sender ($convTitle)"
+              sender.isNotBlank() -> sender
+              convTitle.isNotBlank() -> convTitle
+              else -> extraTitle
+            }
           val isSelfEcho =
             effectiveSender.equals("You", true) ||
               effectiveSender.equals("আপনি", true) ||
-              (selfName.isNotEmpty() && effectiveSender.equals(selfName, true))
-          if (!isSelfEcho && effectiveSender.isNotBlank() && text.isNotBlank()) {
+              (selfName.isNotEmpty() && sender.equals(selfName, true))
+          if (!isSelfEcho && effectiveSender.isNotBlank() && text.isNotBlank() && !isNoiseSummaryText(text)) {
             return effectiveSender to text
           }
         }
@@ -86,23 +94,31 @@ class RiyaNotificationListenerService : NotificationListenerService() {
 
       // 2. Fallback: EXTRA_TEXT_LINES / EXTRA_BIG_TEXT / EXTRA_TEXT
       val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-      val lineText = textLines?.lastOrNull()?.toString()?.trim().orEmpty()
-      val rawMsg =
+      val lineText =
+        textLines
+          ?.mapNotNull { it?.toString()?.trim() }
+          ?.lastOrNull { it.isNotBlank() && !isNoiseSummaryText(it) }
+          .orEmpty()
+      val bigOrText =
         (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: extras.getCharSequence(Notification.EXTRA_TEXT))
           ?.toString()
           ?.trim()
           .orEmpty()
-          .ifBlank { lineText }
+      val rawMsg = if (bigOrText.isNotBlank() && !isNoiseSummaryText(bigOrText)) bigOrText else lineText
 
       var sender = convTitle.ifBlank { extraTitle }
       var msgText = rawMsg
 
       if (msgText.contains(": ") &&
         (sender.equals("WhatsApp", true) ||
+          sender.equals("WhatsApp Business", true) ||
           sender.equals("imo", true) ||
+          sender.equals("imo HD", true) ||
           sender.equals("Messenger", true) ||
-          sender.contains("new messages", true))
+          sender.equals("Messenger Lite", true) ||
+          sender.contains("new messages", true) ||
+          sender.contains("নতুন বার্তা", true))
       ) {
         val splitIdx = msgText.indexOf(": ")
         sender = msgText.substring(0, splitIdx).trim()
@@ -111,15 +127,26 @@ class RiyaNotificationListenerService : NotificationListenerService() {
 
       if (sender.isBlank() || msgText.isBlank()) return null
       val lowerSender = sender.lowercase()
-      val lowerMsg = msgText.lowercase()
-      if (lowerSender in setOf("whatsapp", "imo", "messenger", "you", "আপনি") ||
+      if (lowerSender in setOf("whatsapp", "whatsapp business", "imo", "messenger", "messenger lite", "you", "আপনি") ||
         lowerSender.contains("new messages") ||
-        lowerMsg.contains("checking for new messages") ||
-        lowerMsg.contains("নতুন বার্তা পরীক্ষা করা হচ্ছে")
+        lowerSender.contains("নতুন বার্তা") ||
+        isNoiseSummaryText(msgText)
       ) {
         return null
       }
       return sender to msgText
+    }
+
+    private fun isNoiseSummaryText(text: String): Boolean {
+      val lower = text.trim().lowercase()
+      if (lower.isEmpty()) return true
+      return lower.contains("checking for new messages") ||
+        lower.contains("নতুন বার্তা পরীক্ষা করা হচ্ছে") ||
+        lower.contains("messages from ") ||
+        lower.matches(Regex("^\\d+\\s+new messages?$")) ||
+        lower.matches(Regex("^[০-৯\\d]+টি নতুন (বার্তা|মেসেজ)$")) ||
+        lower == "chat heads active" ||
+        lower.contains("tap for more info")
     }
 
     fun handleAccessibilityFallbackNotification(
@@ -219,7 +246,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           Store.remember(ctx, "[$appLabel] $sender: $msgText")
           RiyaState.addLog("📩 $appLabel ($sender): $msgText")
 
-          val immediateTemplate = settings.customReplyTemplate.ifBlank { "আমি একটু ব্যস্ত আছি বস, পরে কথা বলছি।" }
+          val immediateTemplate =
+            settings.customReplyTemplate.ifBlank { RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN }
           val event =
             IncomingMessageEvent(
               eventKey = eventKey,
@@ -265,8 +293,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
               RiyaRuntimeBridge.canAutoReplyToSender(senderCooldownKey)
           ) {
             val smartReply =
-              kotlinx.coroutines.withTimeoutOrNull(1800L) {
-                aiRepo.generateSmartAutoReply(appLabel, sender, msgText).getOrNull()
+              kotlinx.coroutines.withTimeoutOrNull(2200L) {
+                aiRepo.generateSmartAutoReply(appLabel, sender, msgText, immediateTemplate).getOrNull()
               } ?: immediateTemplate
             RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, smartReply)
 
@@ -292,8 +320,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           } else {
             // Prepare contextual draft reply first (fast timeout) so Boss hears both the incoming text AND prepared reply!
             val plannedDraft =
-              (kotlinx.coroutines.withTimeoutOrNull(1400L) {
-                aiRepo.generateSmartAutoReply(appLabel, sender, msgText).getOrNull()
+              (kotlinx.coroutines.withTimeoutOrNull(1800L) {
+                aiRepo.generateSmartAutoReply(appLabel, sender, msgText, immediateTemplate).getOrNull()
               } ?: immediateTemplate).trim()
             if (plannedDraft != immediateTemplate) {
               RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, plannedDraft)
@@ -342,12 +370,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             "${event.appLabel}-এ ${event.senderName}-কে রিপ্লাই পাঠানো হয়েছে: \"$replyText\"",
             "মেসেজ পাঠানো সম্পন্ন",
           )
-          if (RiyaState.live?.isReady() != true) {
-            RiyaVoiceManager.speakUrgent(
-              context,
-              "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
-            )
-          }
+          notifyReplySentSpeech(context, event.appLabel, event.senderName, replyText)
           return true
         } catch (e: Exception) {
           Log.e(TAG, "RemoteInput send failed", e)
@@ -362,12 +385,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
         if (result.contains("পাঠানো হয়েছে")) {
           RiyaRuntimeBridge.markSenderReplied("${event.packageName}:${event.senderName}")
           RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.SENT)
-          if (RiyaState.live?.isReady() != true) {
-            RiyaVoiceManager.speakUrgent(
-              context,
-              "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
-            )
-          }
+          notifyReplySentSpeech(context, event.appLabel, event.senderName, replyText)
           return true
         }
       }
@@ -381,12 +399,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
         if (diag.succeeded) {
           RiyaRuntimeBridge.markSenderReplied("${event.packageName}:${event.senderName}")
           RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.SENT)
-          if (RiyaState.live?.isReady() != true) {
-            RiyaVoiceManager.speakUrgent(
-              context,
-              "বস, ইমোতে ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
-            )
-          }
+          notifyReplySentSpeech(context, "ইমো", event.senderName, replyText)
           return true
         }
       }
@@ -395,17 +408,28 @@ class RiyaNotificationListenerService : NotificationListenerService() {
       if (eventKey.startsWith("sim_")) {
         RiyaRuntimeBridge.markSenderReplied("${event.packageName}:${event.senderName}")
         RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.SENT)
-        if (RiyaState.live?.isReady() != true) {
-          RiyaVoiceManager.speakUrgent(
-            context,
-            "বস, ${event.appLabel}-এ ${event.senderName}-কে আমি লিখে পাঠিয়েছি: $replyText।",
-          )
-        }
+        notifyReplySentSpeech(context, event.appLabel, event.senderName, replyText)
         return true
       }
 
       RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.FAILED)
       return false
+    }
+
+    private fun notifyReplySentSpeech(
+      context: Context,
+      appLabel: String,
+      senderName: String,
+      replyText: String,
+    ) {
+      val spokenConfirm =
+        "বস, $appLabel-এ $senderName-কে আমি ঠিক এই উত্তরটি লিখে পাঠিয়েছি: $replyText।"
+      val live = RiyaState.live
+      if (live != null && live.isReady()) {
+        live.announceSentReply(appLabel, senderName, replyText)
+      } else {
+        RiyaVoiceManager.speakUrgent(context, spokenConfirm)
+      }
     }
   }
 

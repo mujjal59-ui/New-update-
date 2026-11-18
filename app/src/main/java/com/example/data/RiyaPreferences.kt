@@ -22,14 +22,35 @@ data class RiyaSettings(
   val whatsAppAutoReply: Boolean = true,
   val imoAutoReply: Boolean = true,
   val messengerAutoReply: Boolean = true,
-  val customReplyTemplate: String =
-    "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
+  val customReplyTemplate: String = RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN,
   val enforceFullScreenRead: Boolean = true,
   val fastExecutionMode: Boolean = true,
   val autoAnnounceAccessibilityLoss: Boolean = true,
 )
 
 class RiyaPreferences(private val context: Context) {
+  companion object {
+    const val DEFAULT_BUSY_REPLY_TEMPLATE_BN =
+      "আসসালামু আলাইকুম। আশা করি ভালো আছেন।\n\n" +
+        "আমি LXR--AI,বস এই মুহূর্তে কিছুটা ব্যস্ত রয়েছেন। তিনি অবসর হলেই আপনার সঙ্গে যত দ্রুত সম্ভব যোগাযোগ করবেন, ইনশাআল্লাহ।\n\n" +
+        "ততক্ষণ পর্যন্ত আপনার সদয় অপেক্ষার জন্য কৃতজ্ঞতা প্রকাশ করছি ধন্যবাদ।"
+
+    private val LEGACY_DEFAULT_TEMPLATES =
+      setOf(
+        "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
+        "হ্যালো, বস একটু ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস রিপ্লাই দেবেন।",
+        "আমি একটু ব্যস্ত আছি বস, পরে কথা বলছি।",
+      )
+
+    fun normalizeTemplate(stored: String?): String {
+      val trimmed = stored?.trim().orEmpty()
+      if (trimmed.isEmpty() || trimmed in LEGACY_DEFAULT_TEMPLATES) {
+        return DEFAULT_BUSY_REPLY_TEMPLATE_BN
+      }
+      return trimmed
+    }
+  }
+
   private object Keys {
     val VOICE_ENABLED = booleanPreferencesKey("voice_enabled")
     val SPEECH_RATE = floatPreferencesKey("speech_rate")
@@ -54,9 +75,7 @@ class RiyaPreferences(private val context: Context) {
         whatsAppAutoReply = prefs[Keys.WHATSAPP_ENABLED] ?: true,
         imoAutoReply = prefs[Keys.IMO_ENABLED] ?: true,
         messengerAutoReply = prefs[Keys.MESSENGER_ENABLED] ?: true,
-        customReplyTemplate =
-          prefs[Keys.CUSTOM_TEMPLATE]
-            ?: "হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।",
+        customReplyTemplate = normalizeTemplate(prefs[Keys.CUSTOM_TEMPLATE]),
         enforceFullScreenRead = prefs[Keys.ENFORCE_SCREEN_READ] ?: true,
         fastExecutionMode = prefs[Keys.FAST_EXECUTION] ?: true,
         autoAnnounceAccessibilityLoss = prefs[Keys.ANNOUNCE_A11Y_LOSS] ?: true,

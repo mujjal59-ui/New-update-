@@ -57,12 +57,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.RiyaAiRepository
 import com.example.data.RiyaPreferences
+import com.example.data.RiyaRepository
 import com.example.data.RiyaSettings
 import com.example.data.RiyaState
 import com.example.data.Store
 import com.example.service.ImoSendPrecisionEngine
 import com.example.service.InfinixDevicePlaybook
 import com.example.service.Keep
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.service.RiyaAccessibilityService
 import com.example.service.RiyaNotificationHelper
 import com.example.service.RiyaNotificationListenerService
@@ -72,6 +75,7 @@ import com.example.service.ScreenNodeInfo
 import android.graphics.Rect
 import com.example.service.IncomingMessageEvent
 import com.example.service.IncomingReplyStatus
+import com.example.service.PendingIncomingMessage
 import java.util.UUID
 import kotlinx.coroutines.launch
 
@@ -323,6 +327,66 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       scope.launch { prefs.updateAppAutoReply("com.facebook.orca", v) }
     }
 
+    var templateDraft by remember(settings.customReplyTemplate) {
+      mutableStateOf(settings.customReplyTemplate)
+    }
+
+    Column(
+      Modifier
+        .fillMaxWidth()
+        .background(CYBER_CARD, RoundedCornerShape(16.dp))
+        .border(1.dp, CYBER_CYAN.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+        .padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(
+        "ব্যস্ত থাকলে অটো রিপ্লাই মেসেজ টেমপ্লেট",
+        color = CYBER_CYAN,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+      )
+      OutlinedTextField(
+        value = templateDraft,
+        onValueChange = { templateDraft = it },
+        modifier = Modifier.fillMaxWidth().testTag("auto_reply_template_input"),
+        minLines = 3,
+        maxLines = 6,
+        colors =
+          OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            focusedBorderColor = CYBER_CYAN,
+            unfocusedBorderColor = Color(0xFF475073),
+          ),
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+          onClick = {
+            scope.launch {
+              prefs.updateCustomTemplate(templateDraft)
+              Toast.makeText(ctx, "রিপ্লাই মেসেজ সেভ হয়েছে ✓", Toast.LENGTH_SHORT).show()
+            }
+          },
+          modifier = Modifier.weight(1f).testTag("auto_reply_template_save_button"),
+          colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN),
+        ) {
+          Text("সেভ করুন", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        OutlinedButton(
+          onClick = {
+            templateDraft = RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN
+            scope.launch {
+              prefs.updateCustomTemplate(RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN)
+              Toast.makeText(ctx, "নতুন ডিফল্ট উত্তর সেট হয়েছে ✓", Toast.LENGTH_SHORT).show()
+            }
+          },
+          modifier = Modifier.weight(1f).testTag("auto_reply_template_reset_button"),
+        ) {
+          Text("ডিফল্ট সেট করুন", color = Color.White, fontSize = 12.sp)
+        }
+      }
+    }
+
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
       Button(
         onClick = {
@@ -333,7 +397,7 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
             )
           } catch (_: Exception) {}
         },
-        modifier = Modifier.weight(1f),
+        modifier = Modifier.weight(1f).testTag("notification_access_button"),
         colors = ButtonDefaults.buttonColors(containerColor = CYBER_BLUE),
       ) {
         Text("Notification Access")
@@ -348,16 +412,23 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
               appLabel = "imo",
               senderName = "সুমাইয়া (টেস্ট)",
               messageText = "বস, কোথায় আছেন?",
-              suggestedReply = "হ্যালো, বস একটু ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস রিপ্লাই দেবেন।",
+              suggestedReply = settings.customReplyTemplate.ifBlank { RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN },
               hasRemoteInput = true,
               status = IncomingReplyStatus.PENDING_PERMISSION,
             )
           RiyaRuntimeBridge.registerIncomingMessage(ev, null)
           RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, ev, 7701)
-          RiyaVoiceManager.speakUrgent(
-            ctx,
-            "বস, ইমোতে সুমাইয়া মেসেজ পাঠিয়েছেন: বস, কোথায় আছেন? আমি কি উত্তর পাঠাবো? অনুমতি দিন।",
-          )
+          if (RiyaState.live?.isReady() == true) {
+            RiyaState.live?.onIncomingMessageReceived(
+              PendingIncomingMessage("imo", "imo", ev.senderName, ev.messageText, ev.packageName, ev.suggestedReply),
+              autoSentReply = null,
+            )
+          } else {
+            RiyaVoiceManager.speakUrgent(
+              ctx,
+              "বস, ইমোতে সুমাইয়া মেসেজ পাঠিয়েছেন: বস, কোথায় আছেন? আমি উত্তর হিসেবে লিখে ঠিক করেছি: ${ev.suggestedReply}। পাঠিয়ে দেবো কি?",
+            )
+          }
         },
         modifier = Modifier.weight(1f).testTag("simulate_incoming_msg_button"),
       ) {
@@ -382,15 +453,37 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         )
         Text("মেসেজ: ${ev.messageText}", color = Color.White, fontSize = 13.sp)
         Text("উত্তর: ${ev.suggestedReply}", color = Color.LightGray, fontSize = 12.sp)
-        if (ev.status == IncomingReplyStatus.PENDING_PERMISSION) {
+        if (ev.status == IncomingReplyStatus.PENDING_PERMISSION || ev.status == IncomingReplyStatus.FAILED) {
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
               onClick = {
-                RiyaNotificationListenerService.sendApprovedReply(ctx, ev.eventKey, ev.suggestedReply)
+                scope.launch {
+                  val ok =
+                    withContext(Dispatchers.IO) {
+                      val sent = RiyaNotificationListenerService.sendApprovedReply(ctx, ev.eventKey, ev.suggestedReply)
+                      RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
+                        ev.eventKey,
+                        if (sent) "SENT_APPROVED" else "FAILED",
+                        ev.suggestedReply,
+                      )
+                      sent
+                    }
+                  Toast.makeText(
+                      ctx,
+                      if (ok) "রিপ্লাই পাঠানো হয়েছে ✓" else "পাঠানো যায়নি — Accessibility পরীক্ষা করুন",
+                      Toast.LENGTH_SHORT,
+                    )
+                    .show()
+                }
               },
+              modifier = Modifier.testTag("approve_pending_reply_button"),
               colors = ButtonDefaults.buttonColors(containerColor = CYBER_GREEN),
             ) {
-              Text("অনুমতি দিন ও পাঠান", color = Color.Black, fontWeight = FontWeight.Bold)
+              Text(
+                if (ev.status == IncomingReplyStatus.FAILED) "আবার পাঠান" else "অনুমতি দিন ও পাঠান",
+                color = Color.Black,
+                fontWeight = FontWeight.Bold,
+              )
             }
             OutlinedButton(
               onClick = {
@@ -398,7 +491,11 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                   ev.eventKey,
                   IncomingReplyStatus.DISMISSED,
                 )
-              }
+                scope.launch(Dispatchers.IO) {
+                  RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(ev.eventKey, "DISMISSED", "")
+                }
+              },
+              modifier = Modifier.testTag("dismiss_pending_reply_button"),
             ) {
               Text("বাতিল", color = Color.White)
             }

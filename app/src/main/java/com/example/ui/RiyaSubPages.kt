@@ -1294,26 +1294,49 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
 fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val ctx = LocalContext.current
   var refresh by remember { mutableIntStateOf(0) }
+  var searchQuery by remember { mutableStateOf("") }
   val used = remember(refresh) { Store.size(ctx) }
-  val text = remember(refresh) { Store.recent(ctx, 4000) }
+  val text =
+    remember(refresh, searchQuery) {
+      if (searchQuery.isBlank()) Store.recent(ctx, 8000)
+      else Store.searchMemory(ctx, searchQuery, maxDays = Store.RETENTION_DAYS)
+    }
   Column(
     Modifier.fillMaxSize().background(FULL_BG_GRADIENT).statusBarsPadding().padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     SubPageTopBar(
-      title = "Memory",
+      title = "Memory (৩০ দিন)",
       icon = Icons.Filled.Memory,
       iconColors = listOf(CYBER_BLUE, CYBER_CYAN),
       onBack = back,
       onNavigate = onNavigate,
     )
-    Text("%.2f MB / 30 MB ব্যবহৃত হয়েছে".format(used / 1048576.0), color = Color.White)
+    Text("%.2f MB / 30 MB ব্যবহৃত হয়েছে (গত ৩০ দিনের স্মৃতি সুরক্ষিত)".format(used / 1048576.0), color = Color.White, fontSize = 13.sp)
     LinearProgressIndicator(
       progress = { (used.toFloat() / Store.CAP).coerceIn(0f, 1f) },
       modifier = Modifier.fillMaxWidth(),
       color = CYBER_RED,
     )
-    Text("স্মৃতিসমূহ:", color = CYBER_CYAN, fontWeight = FontWeight.SemiBold)
+    OutlinedTextField(
+      value = searchQuery,
+      onValueChange = { searchQuery = it },
+      modifier = Modifier.fillMaxWidth().testTag("memory_search_input"),
+      singleLine = true,
+      placeholder = { Text("১ মাসের পুরনো কথার সূত্র দিয়ে খুঁজুন…", color = Color.Gray, fontSize = 13.sp) },
+      colors =
+        OutlinedTextFieldDefaults.colors(
+          focusedTextColor = Color.White,
+          unfocusedTextColor = Color.White,
+          focusedBorderColor = CYBER_CYAN,
+          unfocusedBorderColor = Color(0xFF475073),
+        ),
+    )
+    Text(
+      if (searchQuery.isBlank()) "সাম্প্রতিক স্মৃতিসমূহ:" else "সূত্র অনুযায়ী পাওয়া স্মৃতি:",
+      color = CYBER_CYAN,
+      fontWeight = FontWeight.SemiBold,
+    )
     Text(
       text.ifBlank { "এখনো কোনো মেমোরি সেভ হয়নি" },
       Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -1325,7 +1348,7 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         Store.clear(ctx)
         refresh++
       },
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().testTag("memory_clear_button"),
     ) {
       Text("স্মৃতি মুছে ফেলুন", color = CYBER_RED)
     }

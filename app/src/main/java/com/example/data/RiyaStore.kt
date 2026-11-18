@@ -364,6 +364,11 @@ object Store {
         ScreenLockType.PATTERN -> appPattern(c).length >= 4
       }
 
+  const val RETENTION_DAYS = 30
+  private const val MILLIS_PER_DAY = 86_400_000L
+  private val TS_LINE_REGEX = Regex("^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2})]\\s*(.*)$")
+  @Volatile private var writeCountSincePrune = 0
+
   private fun f(c: Context) = File(c.filesDir, "memory.txt")
 
   fun size(c: Context): Long = f(c).let { if (it.exists()) it.length() else 0L }
@@ -372,19 +377,74 @@ object Store {
     f(c).delete()
   }
 
+  private fun sanitizeLine(line: String): String =
+    line
+      .replace(Regex("\\bPriya\\b", RegexOption.IGNORE_CASE), "LXR--AI")
+      .replace(Regex("\\bRiya AI\\b", RegexOption.IGNORE_CASE), "LXR--AI")
+      .replace("প্রিয়া", "এল এক্স আর এ আই")
+      .replace("রিয়া এআই", "এল এক্স আর এ আই")
+      .replace("রিয়া", "এল এক্স আর এ আই")
+      .replace("\n", " ")
+      .trim()
+
   @Synchronized
   fun remember(c: Context, line: String) {
-    val ts = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+    rememberAt(c, line, System.currentTimeMillis())
+  }
+
+  @Synchronized
+  fun rememberAt(c: Context, line: String, timestampMs: Long) {
+    val clean = sanitizeLine(line)
+    if (clean.isBlank()) return
+    val ts = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestampMs))
     val file = f(c)
-    val sanitized =
-      line
-        .replace(Regex("\\bPriya\\b", RegexOption.IGNORE_CASE), "LXR--AI")
-        .replace(Regex("\\bRiya AI\\b", RegexOption.IGNORE_CASE), "LXR--AI")
-        .replace("প্রিয়া", "এল এক্স আর এ আই")
-        .replace("রিয়া এআই", "এল এক্স আর এ আই")
-        .replace("রিয়া", "এল এক্স আর এ আই")
-    file.appendText("[$ts] ${sanitized.replace("\n", " ")}\n")
+    file.appendText("[$ts] $clean\n")
+    writeCountSincePrune++
+    if (writeCountSincePrune >= 50) {
+      writeCountSincePrune = 0
+      pruneOlderThanDays(c, RETENTION_DAYS, timestampMs)
+    }
     if (file.length() > CAP) trim(file)
+  }
+
+  private fun parseLineTimestampMs(line: String): Long? {
+    val m = TS_LINE_REGEX.matchEntire(line) ?: return null
+    return try {
+      SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).parse(m.groupValues[1])?.time
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /**
+   * Prunes conversation entries older than [days] days (default 30 days) while keeping the
+   * entire rolling 1-month history intact on disk.
+   */
+  @Synchronized
+  fun pruneOlderThanDays(
+    c: Context,
+    days: Int = RETENTION_DAYS,
+    nowMs: Long = System.currentTimeMillis(),
+  ): Int {
+    val file = f(c)
+    if (!file.exists()) return 0
+    val cutoffMs = nowMs - (days.coerceAtLeast(1).toLong() * MILLIS_PER_DAY)
+    val allLines = file.readLines(Charsets.UTF_8)
+    val kept = ArrayList<String>(allLines.size)
+    var removed = 0
+    for (line in allLines) {
+      if (line.isBlank()) continue
+      val tsMs = parseLineTimestampMs(line)
+      if (tsMs != null && tsMs < cutoffMs) {
+        removed++
+      } else {
+        kept.add(line)
+      }
+    }
+    if (removed > 0) {
+      file.writeText(if (kept.isEmpty()) "" else kept.joinToString("\n") + "\n", Charsets.UTF_8)
+    }
+    return removed
   }
 
   private fun trim(file: File) {
@@ -398,13 +458,176 @@ object Store {
     file.writeBytes(rest)
   }
 
+  @Synchronized
   fun recent(c: Context, max: Int = 20000): String {
     val file = f(c)
     if (!file.exists()) return ""
     return RandomAccessFile(file, "r").use { r ->
       val start = maxOf(0L, r.length() - max)
       r.seek(start)
-      ByteArray((r.length() - start).toInt()).also { r.readFully(it) }.toString(Charsets.UTF_8)
+      if (start > 0L) {
+        // Advance past partial UTF-8/line fragment so Bengali characters never tear
+        r.readLine()
+      }
+      val rem = (r.length() - r.filePointer).coerceAtLeast(0L).toInt()
+      ByteArray(rem).also { r.readFully(it) }.toString(Charsets.UTF_8)
     }
+  }
+
+  /**
+   * Builds a compact day-by-day awareness digest across the past [days] days so LXR--AI knows
+   * events from 1 day to 30 days ago right at session startup.
+   */
+  @Synchronized
+  fun build30DayDigest(
+    c: Context,
+    maxChars: Int = 4500,
+    days: Int = RETENTION_DAYS,
+    nowMs: Long = System.currentTimeMillis(),
+  ): String {
+    val file = f(c)
+    if (!file.exists()) return ""
+    val cutoffMs = nowMs - (days.toLong() * MILLIS_PER_DAY)
+    val lines = file.readLines(Charsets.UTF_8).filter { line ->
+      if (line.isBlank()) false
+      else {
+        val ts = parseLineTimestampMs(line)
+        ts == null || ts >= cutoffMs
+      }
+    }
+    if (lines.isEmpty()) return ""
+
+    // Pick FACT lines + representative per-day highlights prior to the latest tail
+    val groupedByDay = LinkedHashMap<String, MutableList<String>>()
+    for (line in lines) {
+      val day =
+        if (line.length >= 11 && line.startsWith("[")) line.substring(1, 11) else "তারিখ-অজানা"
+      groupedByDay.getOrPut(day) { mutableListOf() }.add(line)
+    }
+    val sb = StringBuilder()
+    val dayKeys = groupedByDay.keys.toList()
+    for (day in dayKeys) {
+      val dayLines = groupedByDay[day].orEmpty()
+      val factOrBossLines =
+        dayLines.filter { it.contains("FACT:") || it.contains("Boss") || it.contains("[WhatsApp]") || it.contains("[imo]") || it.contains("[Messenger]") }
+      val chosen =
+        if (factOrBossLines.isNotEmpty()) {
+          listOfNotNull(factOrBossLines.firstOrNull(), factOrBossLines.lastOrNull()).distinct()
+        } else {
+          listOfNotNull(dayLines.firstOrNull())
+        }
+      for (entry in chosen) {
+        val compact = entry.take(150)
+        if (sb.length + compact.length + 2 > maxChars) break
+        sb.appendLine(compact)
+      }
+      if (sb.length >= maxChars) break
+    }
+    return sb.toString().trim()
+  }
+
+  /**
+   * Searches the entire rolling 30-day memory log using small clues, keywords, names, or dates.
+   * Returns matched events with +/- 2 surrounding conversation lines for full context.
+   */
+  @Synchronized
+  fun searchMemory(
+    c: Context,
+    query: String,
+    maxDays: Int = RETENTION_DAYS,
+    maxMatchedCenters: Int = 18,
+    nowMs: Long = System.currentTimeMillis(),
+  ): String {
+    val file = f(c)
+    if (!file.exists()) return "মেমোরিতে এখনো কোনো তথ্য সংরক্ষিত নেই বস।"
+    val qClean = query.trim().lowercase()
+    val cutoffMs = nowMs - (maxDays.coerceAtLeast(1).toLong() * MILLIS_PER_DAY)
+    val allLines =
+      file.readLines(Charsets.UTF_8).filter { line ->
+        if (line.isBlank()) false
+        else {
+          val ts = parseLineTimestampMs(line)
+          ts == null || ts >= cutoffMs
+        }
+      }
+    if (allLines.isEmpty()) return "গত $maxDays দিনের মধ্যে মেমোরিতে কোনো কথোপকথন পাওয়া যায়নি বস।"
+
+    if (qClean.isBlank()) {
+      return allLines.takeLast(25).joinToString("\n")
+    }
+
+    val stopWords =
+      setOf(
+        "কি", "কী", "করে", "বলেছিলাম", "বলেছ", "আগে", "দিন", "আগেকার", "মনে", "আছে",
+        "কথা", "বিষয়ে", "সম্পর্কে", "ওই", "সেই", "একটা", "কিছু", "ছিল", "বস", "তুমি",
+        "আমি", "একটু", "বলো", "the", "a", "an", "is", "was", "what", "when", "about", "remember",
+      )
+    val rawTokens =
+      qClean
+        .split(Regex("[\\s,।?!.;:\"'()\\[\\]{}/\\\\]+"))
+        .map { it.trim() }
+        .filter { it.length >= 2 }
+    val clueTokens = rawTokens.filterNot { it in stopWords }.ifEmpty { rawTokens }
+
+    // Support relative date clues ("গতকাল", "এক সপ্তাহ", "কয়দিন")
+    val targetDaysBack =
+      when {
+        qClean.contains("গতকাল") || qClean.contains("yesterday") -> 1L..2L
+        qClean.contains("পরশু") -> 2L..3L
+        qClean.contains("সপ্তাহ") || qClean.contains("week") -> 4L..10L
+        qClean.contains("১৫ দিন") || qClean.contains("দুই সপ্তাহ") -> 10L..20L
+        qClean.contains("মাস") || qClean.contains("month") -> 0L..30L
+        else -> null
+      }
+
+    data class ScoredIdx(val idx: Int, val score: Int)
+    val scored = mutableListOf<ScoredIdx>()
+    for (i in allLines.indices) {
+      val line = allLines[i]
+      val lower = line.lowercase()
+      var score = 0
+      if (lower.contains(qClean)) score += 12
+      for (tok in clueTokens) {
+        if (lower.contains(tok)) score += if (tok.length >= 4) 5 else 3
+      }
+      if (line.contains("FACT:")) score += 1
+      if (targetDaysBack != null) {
+        val ts = parseLineTimestampMs(line)
+        if (ts != null) {
+          val ageDays = (nowMs - ts) / MILLIS_PER_DAY
+          if (ageDays in targetDaysBack) score += 4
+        }
+      }
+      if (score >= 3) {
+        scored.add(ScoredIdx(i, score))
+      }
+    }
+
+    if (scored.isEmpty()) {
+      val fallbackTail = allLines.takeLast(12).joinToString("\n")
+      return "গত $maxDays দিনের মেমোরিতে '$query' সম্পর্কিত সরাসরি মিল পাওয়া যায়নি। সাম্প্রতিক তথ্য:\n$fallbackTail"
+    }
+
+    val topCenters =
+      scored
+        .sortedWith(compareByDescending<ScoredIdx> { it.score }.thenByDescending { it.idx })
+        .take(maxMatchedCenters)
+        .map { it.idx }
+
+    val selectedIndices = sortedSetOf<Int>()
+    for (center in topCenters) {
+      val start = (center - 1).coerceAtLeast(0)
+      val end = (center + 2).coerceAtMost(allLines.lastIndex)
+      for (j in start..end) selectedIndices.add(j)
+    }
+
+    val sb = StringBuilder()
+    sb.appendLine("গত $maxDays দিনের মেমোরি থেকে '$query' সূত্রের ফলাফল:")
+    for (idx in selectedIndices) {
+      val line = allLines[idx]
+      if (sb.length + line.length + 2 > 5500) break
+      sb.appendLine(line)
+    }
+    return sb.toString().trim()
   }
 }

@@ -81,6 +81,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ai.configureAppCheck
 import com.example.data.RiyaPreferences
+import com.example.data.RiyaRepository
+import com.example.data.RiyaSettings
 import com.example.data.RiyaState
 import com.example.data.Store
 import com.example.service.AccessibilityStatusMonitor
@@ -215,9 +217,17 @@ fun RiyaApp() {
   var menu by remember { mutableStateOf(false) }
   var chat by remember { mutableStateOf(false) }
   var always by remember { mutableStateOf(Store.always(ctx)) }
+  val prefsSettings by prefs.settingsFlow.collectAsState(initial = null)
   var arWa by remember { mutableStateOf(Store.autoReplyWhatsApp(ctx)) }
   var arImo by remember { mutableStateOf(Store.autoReplyImo(ctx)) }
   var arMsg by remember { mutableStateOf(Store.autoReplyMessenger(ctx)) }
+  LaunchedEffect(prefsSettings) {
+    prefsSettings?.let { s ->
+      arWa = Store.autoReplyWhatsApp(ctx) && s.whatsAppAutoReply
+      arImo = Store.autoReplyImo(ctx) && s.imoAutoReply
+      arMsg = Store.autoReplyMessenger(ctx) && s.messengerAutoReply
+    }
+  }
   var camOn by remember { mutableStateOf(false) }
 
   val running by RiyaState.running.collectAsState()
@@ -632,15 +642,34 @@ fun RiyaHomeScreen(
           maxLines = 2,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          val scope = rememberCoroutineScope()
           Button(
             onClick = {
-              RiyaNotificationListenerService.sendApprovedReply(
-                ctx,
-                pendingIncoming.eventKey,
-                pendingIncoming.suggestedReply,
-              )
+              scope.launch {
+                val ok =
+                  withContext(Dispatchers.IO) {
+                    val sent =
+                      RiyaNotificationListenerService.sendApprovedReply(
+                        ctx,
+                        pendingIncoming.eventKey,
+                        pendingIncoming.suggestedReply,
+                      )
+                    RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
+                      pendingIncoming.eventKey,
+                      if (sent) "SENT_APPROVED" else "FAILED",
+                      pendingIncoming.suggestedReply,
+                    )
+                    sent
+                  }
+                Toast.makeText(
+                    ctx,
+                    if (ok) "রিপ্লাই পাঠানো হয়েছে ✓" else "পাঠানো যায়নি — Accessibility পরীক্ষা করুন",
+                    Toast.LENGTH_SHORT,
+                  )
+                  .show()
+              }
             },
-            modifier = Modifier.weight(1f).height(38.dp),
+            modifier = Modifier.weight(1f).height(38.dp).testTag("home_approve_reply_button"),
             colors = ButtonDefaults.buttonColors(containerColor = CYBER_GREEN),
           ) {
             Text("অনুমতি দিন ও পাঠান", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -651,8 +680,12 @@ fun RiyaHomeScreen(
                 pendingIncoming.eventKey,
                 IncomingReplyStatus.DISMISSED,
               )
+              scope.launch(Dispatchers.IO) {
+                RiyaRepository(ctx.applicationContext)
+                  .updateAutoReplyStatus(pendingIncoming.eventKey, "DISMISSED", "")
+              }
             },
-            modifier = Modifier.height(38.dp),
+            modifier = Modifier.height(38.dp).testTag("home_dismiss_reply_button"),
           ) {
             Text("বাতিল", color = Color.White, fontSize = 11.sp)
           }

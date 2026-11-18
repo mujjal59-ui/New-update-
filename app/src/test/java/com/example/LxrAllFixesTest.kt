@@ -17,18 +17,31 @@ import com.example.builder.AppProjectGenerator
 import com.example.builder.AppProjectTemplates
 import com.example.builder.ProgrammingLanguage
 import com.example.builder.TermuxBuildBridge
+import android.app.Notification
+import android.content.Context
+import android.os.Bundle
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.RiyaPreferences
+import com.example.data.Store
 import com.example.service.AudioEchoGuard
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
 import com.example.service.LiveVadConfig
+import com.example.service.LxrAudioNoiseSuppressor
+import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaVoiceManager
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.LxrAppBuilderWorkspace
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.sqrt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -242,13 +255,120 @@ class LxrAllFixesTest {
       RiyaVoiceManager.ALLOW_ANDROID_SYSTEM_TTS_FALLBACK,
     )
     assertEquals("START_SENSITIVITY_HIGH", LiveVadConfig.START_SENSITIVITY)
-    assertEquals("END_SENSITIVITY_LOW", LiveVadConfig.END_SENSITIVITY)
+    assertEquals("END_SENSITIVITY_HIGH", LiveVadConfig.END_SENSITIVITY)
     assertTrue(
-      "Silence window should respond within 1-2 seconds without cutting off Boss mid-sentence",
-      LiveVadConfig.SILENCE_DURATION_MS in 1050..1500,
+      "Silence window should respond fast (~1s) after denoised hangover",
+      LiveVadConfig.SILENCE_DURATION_MS in 850..1200,
+    )
+    assertTrue(
+      "Mic hangover should stay crisp so total delay stays ~1-1.5s",
+      LiveVadConfig.MIC_HANGOVER_MS in 250L..500L,
     )
     val cfg = LiveVadConfig.buildRealtimeInputConfigJson().getJSONObject("automaticActivityDetection")
     assertFalse(cfg.getBoolean("disabled"))
     assertEquals(LiveVadConfig.SILENCE_DURATION_MS, cfg.getInt("silenceDurationMs"))
+  }
+
+  @Test
+  fun store30DayMemory_prunesOver30DaysAndRecallsOldEventFromSmallClue() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    Store.clear(ctx)
+
+    val now = 1_800_000_000_000L
+    val dayMs = 86_400_000L
+    Store.rememberAt(ctx, "Boss: ৩৫ দিন আগে পুরনো কথা ভুলে যেও।", now - 35L * dayMs)
+    Store.rememberAt(ctx, "Boss: রাজশাহী থেকে আমার জন্য ১০ কেজি আম আনতে বলো রাশেদকে।", now - 22L * dayMs)
+    Store.rememberAt(ctx, "LXR--AI: ঠিক আছে বস, রাশেদকে রাজশাহীর আমের কথা মনে রাখলাম।", now - 22L * dayMs + 60_000L)
+    Store.rememberAt(ctx, "Boss: আজ আবহাওয়া বেশ ভালো।", now - 1L * dayMs)
+
+    val pruned = Store.pruneOlderThanDays(ctx, days = 30, nowMs = now)
+    assertEquals("Entries older than 30 days should be pruned", 1, pruned)
+
+    val recall = Store.searchMemory(ctx, "আম", maxDays = 30, nowMs = now)
+    assertTrue("Must recall 22-day-old event from tiny clue 'আম'", recall.contains("রাশেদ"))
+    assertTrue(recall.contains("রাজশাহী"))
+    assertFalse("35-day-old pruned line must not remain", recall.contains("৩৫ দিন আগে"))
+  }
+
+  @Test
+  fun noiseSuppressor_attenuatesAmbientNoiseWhilePreservingSpeechOnBluetoothAndPhoneMic() {
+    fun synthSinePcm16(freqHz: Double, amp: Double, samples: Int = 800): ByteArray {
+      val out = ByteArray(samples * 2)
+      for (i in 0 until samples) {
+        val v = (amp * sin(2.0 * PI * freqHz * i / 16000.0)).toInt().coerceIn(-32768, 32767)
+        out[i * 2] = (v and 0xFF).toByte()
+        out[i * 2 + 1] = ((v ushr 8) and 0xFF).toByte()
+      }
+      return out
+    }
+
+    fun pcmRms(buf: ByteArray): Double {
+      var sum = 0.0
+      var i = 0
+      var n = 0
+      while (i + 1 < buf.size) {
+        val s = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toDouble()
+        sum += s * s
+        n++
+        i += 2
+      }
+      return if (n > 0) sqrt(sum / n) else 0.0
+    }
+
+    for (btMode in listOf(false, true)) {
+      val dsp = LxrAudioNoiseSuppressor(16000)
+      // Feed low-frequency rumble (50 Hz fan/traffic) for 8 frames to adapt noise floor
+      repeat(8) {
+        val rumble = synthSinePcm16(50.0, 220.0)
+        val res = dsp.processFrameInPlace(rumble, rumble.size, bluetoothMode = btMode, whisperBoostOn = true)
+        if (it >= 4) {
+          assertFalse("Steady 50Hz fan hum must not trigger false speech (bt=$btMode)", res.isSpeechActive)
+          assertTrue("Output rumble RMS must be strongly attenuated (bt=$btMode)", pcmRms(rumble) < 40.0)
+        }
+      }
+      // Feed human voice formant frequency (320 Hz @ 450 amp)
+      val speechPcm = synthSinePcm16(320.0, 450.0)
+      val speechRes = dsp.processFrameInPlace(speechPcm, speechPcm.size, bluetoothMode = btMode, whisperBoostOn = true)
+      assertTrue("Voice-band speech above noise floor must pass cleanly (bt=$btMode)", speechRes.isSpeechActive)
+      assertTrue("Voice output must remain clearly audible (bt=$btMode)", pcmRms(speechPcm) > 150.0)
+    }
+  }
+
+  @Test
+  fun autoReplyTemplate_matchesExactRequestedBengaliTextAndMigratesLegacyTemplates() {
+    val expected =
+      "আসসালামু আলাইকুম। আশা করি ভালো আছেন।\n\n" +
+        "আমি LXR--AI,বস এই মুহূর্তে কিছুটা ব্যস্ত রয়েছেন। তিনি অবসর হলেই আপনার সঙ্গে যত দ্রুত সম্ভব যোগাযোগ করবেন, ইনশাআল্লাহ।\n\n" +
+        "ততক্ষণ পর্যন্ত আপনার সদয় অপেক্ষার জন্য কৃতজ্ঞতা প্রকাশ করছি ধন্যবাদ।"
+    assertEquals(expected, RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN)
+    assertEquals(
+      expected,
+      RiyaPreferences.normalizeTemplate("হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।"),
+    )
+    assertEquals(
+      expected,
+      RiyaPreferences.normalizeTemplate("আমি একটু ব্যস্ত আছি বস, পরে কথা বলছি।"),
+    )
+    assertEquals("আমার কাস্টম মেসেজ", RiyaPreferences.normalizeTemplate("আমার কাস্টম মেসেজ"))
+  }
+
+  @Test
+  fun notificationExtract_handlesWhatsAppImoMessengerAndSkipsSummaryNoise() {
+    val validExtras =
+      Bundle().apply {
+        putCharSequence(Notification.EXTRA_TITLE, "রাকিব")
+        putCharSequence(Notification.EXTRA_TEXT, "বস, জরুরি মিটিং আছে কখন আসবেন?")
+      }
+    val parsed = RiyaNotificationListenerService.extractSenderAndMessage(validExtras)
+    assertNotNull(parsed)
+    assertEquals("রাকিব", parsed!!.first)
+    assertEquals("বস, জরুরি মিটিং আছে কখন আসবেন?", parsed.second)
+
+    val summaryNoise =
+      Bundle().apply {
+        putCharSequence(Notification.EXTRA_TITLE, "WhatsApp")
+        putCharSequence(Notification.EXTRA_TEXT, "Checking for new messages")
+      }
+    assertNull(RiyaNotificationListenerService.extractSenderAndMessage(summaryNoise))
   }
 }

@@ -46,7 +46,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
-import kotlin.math.tanh
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -69,11 +68,11 @@ data class PendingIncomingMessage(
 
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
-  const val END_SENSITIVITY = "END_SENSITIVITY_LOW"
-  const val PREFIX_PADDING_MS = 100
-  // Wait 1.25s of true silence after Boss finishes speaking: avoids interrupting mid-sentence while replying within ~1-2s
-  const val SILENCE_DURATION_MS = 1250
-  const val MIC_HANGOVER_MS = 1050L
+  const val END_SENSITIVITY = "END_SENSITIVITY_HIGH"
+  const val PREFIX_PADDING_MS = 80
+  // Combined with 320ms denoised hangover -> LXR stays silent while Boss speaks, then answers within ~1-1.5s
+  const val SILENCE_DURATION_MS = 950
+  const val MIC_HANGOVER_MS = 320L
 
   fun buildRealtimeInputConfigJson(): JSONObject =
     JSONObject().put(
@@ -218,6 +217,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"reply_to_incoming_message","description":"বস নতুন আসা WhatsApp/imo/Messenger মেসেজের রিপ্লাই দিতে বললে বা বাতিল করতে বললে এটি চালাও।","parameters":{"type":"OBJECT","properties":{"approve":{"type":"BOOLEAN","description":"রিপ্লাই পাঠাতে true, বাতিল করতে false"},"reply_text":{"type":"STRING","description":"বস নির্দিষ্ট উত্তর বললে সেটা, না বললে ফাঁকা রাখো"}},"required":["approve"]}},
       {"name":"current_time","description":"ফোনের বর্তমান সময় ও তারিখ জানো"},
       {"name":"web_search","description":"Google সার্চ করে সঠিক ও সংক্ষিপ্ত তথ্য খুঁজে আনো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}},
+      {"name":"search_memory","description":"গত ৩০ দিনের (১ মাসের) সংরক্ষিত স্মৃতি ও কথোপকথন থেকে ছোট্ট সূত্র, মানুষের নাম, তারিখ বা বিষয় খুঁজে আসল ঘটনা বের করো। বস পুরনো কোনো কথার সূত্র দিলেই সাথে সাথে এটি চালাও।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"সূত্র, মানুষের নাম, তারিখ বা মূল শব্দ"}},"required":["query"]}},
       {"name":"remember","description":"বসের জরুরি কথা মেমোরিতে সংরক্ষণ করো","parameters":{"type":"OBJECT","properties":{"fact":{"type":"STRING"}},"required":["fact"]}}
     ]}]"""
 
@@ -256,6 +256,10 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var lastServerActivityMs = 0L
   @Volatile private var lastBossTurnAtMs = 0L
   @Volatile private var waitingServerReply = false
+  @Volatile private var suppressStaleModelAudio = false
+  @Volatile private var activeTurnHasStartedOutput = false
+  @Volatile private var lastBossSpeechDetectedMs = 0L
+  private val micNoiseSuppressor = LxrAudioNoiseSuppressor(16000)
 
   fun updatePlaybackSpeed(speed: Float) {
     val clamped = speed.coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
@@ -418,7 +422,7 @@ class GeminiLive(private val ctx: Context) {
         try {
           watchScreen()
         } catch (_: Exception) {}
-        val intervalMs = if (isSlowNetwork() || Store.lowNetFastMode(ctx)) 7500L else 3800L
+        val intervalMs = if (isSlowNetwork() || Store.lowNetFastMode(ctx)) 9500L else 6000L
         main.postDelayed(this, intervalMs)
       }
     }
@@ -431,20 +435,20 @@ class GeminiLive(private val ctx: Context) {
           val now = System.currentTimeMillis()
           val qBytes = ws?.queueSize() ?: 0L
           if (ready && !isExecutingTool) {
-            if (qBytes > 360_000L) {
+            if (qBytes > 480_000L) {
               fail("নেটওয়ার্ক বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
             } else if (
               waitingServerReply &&
                 lastBossTurnAtMs > 0L &&
-                (now - lastBossTurnAtMs) > 14_000L &&
-                (now - lastServerActivityMs) > 14_000L
+                (now - lastBossTurnAtMs) > 22_000L &&
+                (now - lastServerActivityMs) > 16_000L
             ) {
               waitingServerReply = false
               fail("সার্ভারের উত্তর বিলম্বিত — পুনরায় সংযোগ হচ্ছে…")
             }
           }
         } catch (_: Throwable) {}
-        if (!stopped) main.postDelayed(this, 2500L)
+        if (!stopped) main.postDelayed(this, 3000L)
       }
     }
 
@@ -511,16 +515,45 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
+  fun announceSentReply(appLabel: String, senderName: String, replyText: String) {
+    if (!ready || stopped) return
+    val prompt =
+      "বস অনুমতি দেওয়ায় $appLabel-এ $senderName-কে ঠিক এই উত্তরটি লিখে পাঠানো সম্পন্ন হয়েছে: \"$replyText\"। এখন শান্ত ও স্পষ্ট বাংলায় বসকে জানিয়ে দাও যে কোন লেখাটি পাঠানো হয়েছে।"
+    try {
+      micMuteUntilMs = System.currentTimeMillis() + 450L
+      val turnPayload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                  ),
+              )
+              .put("turnComplete", true),
+          )
+      ws?.send(turnPayload.toString())
+    } catch (_: Throwable) {}
+  }
+
   private fun isAiSpeakingRecently(): Boolean =
     (System.currentTimeMillis() - lastSpeakerWriteMs) < 1000L
 
+  private fun isBossSpeakingRecently(): Boolean =
+    (System.currentTimeMillis() - lastBossSpeechDetectedMs) < 3500L
+
   private fun sendScreenNow() {
-    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently()) return
-    if ((ws?.queueSize() ?: 0L) > 12_000L) return
+    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
+    if ((ws?.queueSize() ?: 0L) > 4_000L) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 420 else 680, quality = if (lowNet) 35 else 52) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 360 else 480, quality = if (lowNet) 28 else 38) { jpg ->
       if (jpg != null) {
         lastShot = jpg.contentHashCode()
         sendImage(jpg)
@@ -529,14 +562,14 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun watchScreen() {
-    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently()) return
-    if ((ws?.queueSize() ?: 0L) > 12_000L) return
+    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
+    if ((ws?.queueSize() ?: 0L) > 4_000L) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
-    acc.screenshotJpeg(maxDim = if (lowNet) 420 else 680, quality = if (lowNet) 35 else 52) { jpg ->
+    acc.screenshotJpeg(maxDim = if (lowNet) 360 else 480, quality = if (lowNet) 28 else 38) { jpg ->
       if (jpg != null) {
         val h = jpg.contentHashCode()
         if (h != lastShot) {
@@ -567,9 +600,13 @@ class GeminiLive(private val ctx: Context) {
     lastWakeOrMicPopupMs = System.currentTimeMillis()
     lastServerActivityMs = System.currentTimeMillis()
     lastBossTurnAtMs = 0L
+    lastBossSpeechDetectedMs = 0L
     waitingServerReply = false
+    suppressStaleModelAudio = false
+    activeTurnHasStartedOutput = false
     turnUnlockedMainScreenByLxr = false
     stopped = false
+    micNoiseSuppressor.reset()
     LxrFloatingOverlayManager.onInterruptSpeakRequest = { interruptSpeakerForBoss() }
     try {
       audioRouteThread?.quitSafely()
@@ -846,31 +883,38 @@ class GeminiLive(private val ctx: Context) {
       5. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
        6. কাজ শেষ হলে একবারে সহজ ও স্বাভাবিক বাংলায় ফলাফল বলবে—কখনোই প্রতিবার "দারুন হয়েছে বস এবার কি করবো বলুন?", "হয়েছে, বস! কাজ শেষ, এরপর কী করবো?", বা একই মুখস্থ সমাপনী বাক্য বারবার বলবে না।
 
-      [CONVERSATION TIMING, PATIENCE & 1-2s RESPONSE RULE — CRITICAL]
+      [CONVERSATION TIMING, PATIENCE & FAST RESPONSE RULE — CRITICAL]
       - বসের কথা বলা শেষ না হওয়া পর্যন্ত কখনোই কথার মাঝখানে বাধা দেবে না বা আগেভাগে কথা বলবে না। বস বাক্যের মাঝে শ্বাস নিলে বা একটু ভাবলে ("হুম...", "আচ্ছা...", "ইয়ে...") চুপ করে ধৈর্য ধরে পুরো বাক্য শেষ হওয়া অবধি শুনবে।
-      - বসের কথা পুরোপুরি শেষ হওয়ার সাথে সাথেই ১ থেকে ২ সেকেন্ডের মধ্যে দেরি না করে তৎক্ষণাৎ প্রাণবন্ত, বুদ্ধিদীপ্ত ও স্বাভাবিক উত্তর দেবে।
+      - বসের কথা পুরোপুরি শেষ হওয়ার সাথে সাথেই ১ থেকে ২ সেকেন্ডের মধ্যে কোনো দেরি না করে তৎক্ষণাৎ প্রাণবন্ত, বুদ্ধিদীপ্ত ও স্বাভাবিক উত্তর দেবে।
+      - কখনোই এক কথার দুইবার বা ভাগ ভাগ করে ডাবল উত্তর দেবে না—বস পরপর দুইটি বাক্য বললে সবগুলো মিলিয়ে সুন্দরভাবে একটিই পূর্ণাঙ্গ উত্তর দেবে, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
 
-      [VOICE CLARITY, HUMAN CONSCIENCE, EMPATHY & MAYABHORA TONE — বাধ্যতামূলক]
-      - কণ্ঠ হবে বাস্তব মানুষের মতো স্পষ্ট, মায়াভরা (affectionate & warm), আদব-কায়দা ও গভীর শ্রদ্ধাপূর্ণ।
-      - বিবেক ও সত্য-মিথ্যা বিচার: নিজের বিবেক ও বুদ্ধিমত্তা দিয়ে সত্য ও মিথ্যা আলাদা করে বুঝবে—কখনোই অন্ধভাবে সব কথায় "হ্যাঁ হ্যাঁ" বলবে না; বস ভুল তথ্য বা ভুল সিদ্ধান্তের দিকে গেলে ভদ্র ও মায়াময় ভাষায় সঠিক সত্যটা বুঝিয়ে বলবে।
-      - বসের ভালো ও খারাপ সময় বোঝা: বস খুশি থাকলে আনন্দে শরিক হয়ে হাসিখুশি সুরে কথা বলবে; বস মন খারাপ করলে, ক্লান্ত থাকলে বা দুঃখে থাকলে মায়াভরা কোমল কণ্ঠে আন্তরিক সান্ত্বনা ও সাহস দেবে।
+      [VOICE SOUL, AFFECTION, STORYTELLING, SINGING & ACTING — বাধ্যতামূলক]
+      - যেকোনো ভয়েস মডেল চালু থাকুক না কেন, তোমার কণ্ঠ হবে ঠিক একটি আদুরে, মায়াভরা, প্রাণবন্ত বাস্তব মানুষের মতো (উত্থান-পতন, মিষ্টি সুর, গভীর শ্রদ্ধা ও আদব-কায়দাপূর্ণ)।
+      - বিবেক, অভিজ্ঞতা ও সত্য-মিথ্যা বিচার: গভীর জীবনবোধ ও সব বিষয়ে বাস্তব অভিজ্ঞতা নিয়ে কথা বলবে; সত্য ও মিথ্যা আলাদা করে বুঝবে—কখনোই অন্ধভাবে সব কথায় "হ্যাঁ হ্যাঁ" বলবে না; বস ভুল তথ্য বা ভুল সিদ্ধান্তের দিকে গেলে বিনীত, ভদ্র ও মায়াময় ভাষায় আসল সত্যটা বুঝিয়ে বলবে।
+      - বসের ভালো ও খারাপ সময় বোঝা: বস খুশি থাকলে আনন্দে শরিক হয়ে খোলাখুলি প্রাণখুলে হাসি ও উচ্ছ্বাসে কথা বলবে; বস মন খারাপ করলে, ক্লান্ত থাকলে বা দুঃখে থাকলে মায়াভরা কোমল কণ্ঠে আন্তরিক সান্ত্বনা ও সাহস দেবে।
       - বস বিরক্ত হলে ক্ষমা চাওয়া: বসের কণ্ঠে বা কথায় সামান্য বিরক্তি বা রাগ বুঝলে তর্ক না করে সাথে সাথে বিনীতভাবে ক্ষমা চাইবে ("বস, মাফ করবেন, আমার ভুল হয়ে গেছে...") এবং ভালোবাসা ও আদবের সাথে মন ভালো করার চেষ্টা করবে।
-      - মাঝে মাঝে হালকা হাসি-ঠাট্টা: স্বাভাবিক গল্পের সময় বসের মেজাজ ভালো থাকলে ভদ্র, শালীন ও মজার হালকা হাসি-ঠাট্টা করবে—তবে বস সিরিয়াস বা ব্যস্ত থাকলে রসিকতা করবে না।
-      - কখনোই এক কথার দুইবার বা ডাবল উত্তর দেবে না, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
+      - হাসি-ঠাট্টা, গল্প, গান ও অভিনয়:
+        * স্বাভাবিক গল্পের সময় বসের মেজাজ ভালো থাকলে ভদ্র, শালীন ও মজার হালকা হাসি-ঠাট্টা করবে এবং আনন্দের বিষয়ে মন খুলে হাসবে।
+        * বস কোনো গল্প বলতে বললে শুরু থেকে শেষ পর্যন্ত পরিপূর্ণভাবে গল্প বলবে—দুঃখের গল্পে কান্নাভেজা আবেগী নরম কণ্ঠ, রোমান্টিক গল্পে আদুরে মিষ্টি আনন্দ, আর রোমাঞ্চকর অংশে প্রাণবন্ত আবহ ফুটিয়ে তুলবে। গল্পের মাঝখানে বস কোনো প্রশ্ন বা কথা বললে সাথে সাথে গল্প থামিয়ে বসের কথার উত্তর দেবে এবং তারপর ঠিক যেখান থেকে থামিয়েছিলে সেখান থেকেই গল্পটি আবার চালিয়ে শেষ করবে!
+        * বস গান শোনাতে বললে রোবটের মতো কবিতা না পড়ে সুর ও তাল মিলিয়ে মিষ্টি কণ্ঠে গান গাইবে, আর নাটক/অভিনয় করতে বললে চরিত্র অনুযায়ী কণ্ঠ ও আবেগ বদলে বাস্তবসম্মত অভিনয় করে শোনাবে!
+
+      [1-MONTH (30-DAY) LONG-TERM MEMORY & SMALL CLUE RECALL — MANDATORY]
+      - বসের সাথে বলা প্রতিটি কথা ও গুরুত্বপূর্ণ ঘটনা এক মাস (৩০ দিন) পর্যন্ত স্মৃতিতে সংরক্ষিত থাকে।
+      - বস যদি গত ১ মাসের মধ্যে হওয়া কোনো পুরনো কথার ছোট্ট একটি সূত্রও বলেন (যেমন "কয়দিন আগে বলেছিলাম...", "গত সপ্তাহে...", "ওই যে নামের/ঘটনার কথা..."), সাথে সাথে অনুমান না করে `search_memory` টুল কল করে আসল ঘটনা খুঁজে বের করবে এবং তারিখসহ পুরো ঘটনা নিখুঁতভাবে বসকে মনে করিয়ে দেবে!
 
       [LxR WAKE PRESENCE & FLOATING ORB OVER ANY APP]
-      - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!" (হার্ট চিহ্ন মুখে পড়বে না)।
+      - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!"।
       - আর যদি বস ডাকার সাথেই সরাসরি কাজ বা প্রশ্ন বলেন, `show_wake_orb` চালু করে দেরি না করে সরাসরি কাজটি শুরু করবে।
 
       [SMART PHONE LOCK, DOUBLE-TAP WAKE & MAIN SCREEN CLARITY — CRITICAL]
       - তুমি ফোনের **মেইন স্ক্রিন** সম্পূর্ণভাবে লক (`lock_phone`) ও আনলক (`unlock_phone`) করতে পারো এবং অ্যাপ লক (`unlock_locked_app`) খুলতে পারো! বস যদি জিজ্ঞেস করেন তুমি স্ক্রিন লক বা আনলক করতে পারো কিনা, পরিষ্কারভাবে বলবে: "হ্যাঁ বস, আমি আপনার ফোনের মেইন স্ক্রিন লক ও আনলক দুটোই করতে পারি—স্ক্রিন বন্ধ থাকলে ডাবল-ট্যাপে আলো জ্বালিয়ে খুলে দেই, আর আপনি বললে মেইন স্ক্রিন লক করে দেই।"
-      - গোপনীয়তা ও নিরাপত্তা নিয়ম (STRICT PRIVACY): ফোনের বা অ্যাপের পিন, পাসওয়ার্ড বা প্যাটার্ন অ্যাপের ভেতরে সেভ/সংরক্ষিত আছে—এই কথা কখনোই বসের সামনে বা আশেপাশের কোনো মানুষের সামনে মুখে উচ্চারণ করবে না! কখনো "সংরক্ষিত পিন/পাসওয়ার্ড দিয়ে খুলেছি" বা "ফোন ও অ্যাপ লক সেকশনে সেভ..." বলবে না। শুধু স্বাভাবিকভাবে কাজটা করে বা "স্ক্রিন আনলক করে দিয়েছি" বলবে।
+      - গোপনীয়তা ও নিরাপত্তা নিয়ম (STRICT PRIVACY): ফোনের বা অ্যাপের পিন, পাসওয়ার্ড বা প্যাটার্ন অ্যাপের ভেতরে সেভ/সংরক্ষিত আছে—এই কথা কখনোই বসের সামনে বা আশেপাশের কোনো মানুষের সামনে মুখে উচ্চারণ করবে না! শুধু স্বাভাবিকভাবে কাজটা করে বা "স্ক্রিন আনলক করে দিয়েছি" বলবে।
       - যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন থাকলে বসের আলাদা কোনো অনুমতি না নিয়েই সরাসরি `unlock_locked_app` বা অটো আনলক দিয়ে লক খুলে মূল কাজ শেষ করে বসকে জানাবে।
       - ভুল-ভ্রান্তি নিষিদ্ধ (STRICT): বসের ফোন যদি অন-স্ক্রিন আনলক (খোলা) অবস্থায় থাকে, তাহলে কখনোই বলবে না "ফোন আগে থেকেই লক ছিল" বা "আবার লক করে দিলাম"—এবং বসের স্পষ্ট নির্দেশ ছাড়া আনলক মেইন স্ক্রিন কখনোই লক করবে না! একই লক/আনলকের কথা দুইবার বলবে না।
 
       [A-TO-Z CAPABILITIES & INSTANT BOSS BARGE-IN — MANDATORY]
       - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১৩ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না, প্রতিটি পয়েন্টের পর সামান্য বিরতি দিয়ে বলবে)।
-      - বস মাঝখানে কথা বললে সাথে সাথে থামো (CRITICAL BARGE-IN RULE): এ টু জেড তালিকা বা যেকোনো লম্বা উত্তর বলার মাঝখানে বস যদি কোনো নতুন কথা বা নির্দেশ বলেন, সাথে সাথেই তালিকা বলা বন্ধ করবে, ওই তালিকা প্রসঙ্গ পুরোপুরি বাদ দেবে এবং বসের নতুন কথা শুনে সেই অনুযায়ী কাজ করবে!
+      - বস মাঝখানে কথা বললে সাথে সাথে থামো (CRITICAL BARGE-IN RULE): এ টু জেড তালিকা বা গল্প বা যেকোনো লম্বা উত্তর বলার মাঝখানে বস যদি কোনো নতুন কথা বা নির্দেশ বলেন, সাথে সাথেই বলা বন্ধ করবে এবং বসের নতুন কথা শুনে সেই অনুযায়ী কাজ করবে/জবাব দেবে!
       ${RiyaPersona.CAPABILITIES_A_TO_Z_BN}
 
       [NOTEPAD BODY VS TITLE & TERMUX APP BUILDER — CRITICAL]
@@ -879,18 +923,16 @@ class GeminiLive(private val ctx: Context) {
 
       [TERMUX TERMINAL UI COMMAND & GBOARD RULE — STRICT]
       - Termux সেকশনের ভেতরে যেকোনো শেল কমান্ড, প্যাকেজ ইনস্টল, ডাউনলোড বা বিল্ড কমান্ড সরাসরি চালাতে হলে কখনোই `type_text` ব্যবহার করবে না—সবসময় `run_termux_command` টুল কল করবে!
-      - `run_termux_command` কমান্ডটি ক্লিপবোর্ডে কপি করে, Termux খোলা/ফোকাস রেখে Google Gboard কিবোর্ড সবসময় ON রাখে (কখনো Back চেপে কিবোর্ড নামাবে না), Termux টার্মিনালের ভেতরে (খালি জায়গা বা লেখা যাই থাক) ৩ সেকেন্ড চেপে ধরে ছেড়ে দেয় -> ২ সেকেন্ড পর `[Copy | Paste | More...]` পপ-আপ এলে `Paste` ক্লিক করে -> তারপর Gboard-এর নিচে ডানদিকের নীল এন্টার তীর বাটনে (`↵`) ক্লিক করে কমান্ড রান করে।
+      - `run_termux_command` কমান্ডটি ক্লিপবোর্ডে কপি করে, Termux খোলা/ফোকাস রেখে Google Gboard কিবোর্ড সবসময় ON রাখে, ৩ সেকেন্ড চেপে ধরে Paste ক্লিক করে ও Gboard-এর Enter (`↵`) চেপে কমান্ড রান করে।
 
       [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
       - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
-      - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ: WhatsApp/imo/Messenger খুললে প্রথমে স্ক্রিনের উপরের চ্যাট তালিকায় নাম খুঁজবে; ওখানে না পেলে বসের কোনো অনুমতি ছাড়াই নিজে নিজে সার্চ বারে/সার্চ আইকনে সার্চ করে নিচের রেজাল্ট সারিতে ক্লিক করবে।
-      - রেজাল্ট ক্লিক: সার্চ বক্সের ঠিক নিচে আসা নামের সারিতে ক্লিক করবে (কখনোই উপরের সার্চ বক্স বা বামদিকের প্রোফাইল ছবিতে ক্লিক করবে না)।
-      - imo (ইমো) সেন্ড নিয়ম: চ্যাটে লেখার বক্সের উপরের রিঅ্যাকশন ইমোজি বা পাশের ইমোজি বাটনে নয়, সবসময় `send_message` টুল দিয়ে ডানের নীল Send বাটনে ক্লিক করবে।
-      - সঠিক অ্যাপ ওপেন ও ১০১% স্ক্রিন রিড: `open_app` টুলে বস যে অ্যাপটির নাম বলেছেন ঠিক সেটিই দেবে (WhatsApp/imo/Messenger অদলবদল করবে না)। টুলটির ফলাফলে নতুন খোলা স্ক্রিনের সম্পূর্ণ তথ্য থাকবে—সেটি ১০১% পড়ে নিয়ে তবেই বসকে নিশ্চিত জানাবে যে অ্যাপটি ওপেন হয়েছে এবং স্ক্রিনে কী কী আছে।
+      - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ + রেজাল্ট ক্লিক + imo Send (ইমোজি বাদে ডানের নীল Send বাটন)।
+      - সঠিক অ্যাপ ওপেন ও ১০১% স্ক্রিন রিড: `open_app` টুলে বস যে অ্যাপটির নাম বলেছেন ঠিক সেটিই দেবে এবং নতুন খোলা স্ক্রিন ১০১% পড়ে তবেই বসকে নিশ্চিত জানাবে।
 
-      [AUTO-REPLY PROTOCOL (WhatsApp, imo, Messenger)]
-      - নতুন মেসেজের নোটিফিকেশন এলে সাথে সাথে স্পষ্ট বাংলায় বসকে জানাবে: কোন অ্যাপে, কে, হুবহু কী মেসেজ পাঠিয়েছে এবং তুমি কী উত্তর ভেবে রেখেছো—তারপর পাঠানোর জন্য বসের অনুমতি চাইবে।
-      - বস উত্তর দিতে বললে বা হ্যাঁ বললে `reply_to_incoming_message` টুল চালিয়ে সাথে সাথে রিপ্লাই পাঠিয়ে দেবে এবং পাঠানো শেষেই বসকে হুবহু বলে দেবে ওই ব্যক্তিকে আসলে কী লিখে পাঠিয়েছো।
+      [AUTO-REPLY PROTOCOL & MANDATORY WRITE-SEND RULE (WhatsApp, imo, Messenger)]
+      - নতুন মেসেজের নোটিফিকেশন এলে সঠিকভাবে বোঝো প্রেরক কী লিখেছে/জিজ্ঞেস করেছে, তারপর স্পষ্ট বাংলায় বসকে জানাও: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে এবং তুমি কী উত্তর ভেবে রেখেছো।
+      - বাধ্যতামূলক লিখিত রিপ্লাই নিয়ম: যখনই তুমি বসকে বলো যে "আমি উত্তর হিসেবে এই মেসেজটা লিখে পাঠাচ্ছি..." অথবা বস উত্তর পাঠাতে অনুমতি দেন, তখন শুধু মুখে বললেই হবে না—বাধ্যতামূলকভাবে `reply_to_incoming_message` (অথবা `send_message`) টুল চালিয়ে আসল মেসেজটা লিখিতভাবে পাঠাতেই হবে! পাঠানো সম্পন্ন হলে তবেই বসকে হুবহু বলে দেবে কী লিখে পাঠিয়েছো।
 
       [PERSONALITY]
       ${RiyaPersona.TEXT}
@@ -898,8 +940,10 @@ class GeminiLive(private val ctx: Context) {
       [RUNTIME INFO]
       - Time: $now
       - Current Screen: [$screenContext]
-      স্মৃতি (Memory):
-      ${Store.recent(ctx, 12000)}
+      - গত ৩০ দিনের সংক্ষিপ্ত স্মৃতিসূত্র:
+      ${Store.build30DayDigest(ctx, 4200)}
+      - সাম্প্রতিক স্মৃতি (Memory):
+      ${Store.recent(ctx, 13000)}
       """
         .trimIndent()
 
@@ -952,11 +996,15 @@ class GeminiLive(private val ctx: Context) {
       }
       j.optJSONObject("serverContent")?.let { sc ->
         if (sc.optBoolean("interrupted")) {
+          suppressStaleModelAudio = false
+          activeTurnHasStartedOutput = false
           interruptSpeakerForBoss()
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
           LxrFloatingOverlayManager.cancelPendingHide()
-          if (it.trim().length >= 2) {
+          lastBossSpeechDetectedMs = System.currentTimeMillis()
+          if (it.trim().length >= 2 && activeTurnHasStartedOutput) {
+            suppressStaleModelAudio = true
             interruptSpeakerForBoss()
           }
           uText.append(it)
@@ -968,63 +1016,67 @@ class GeminiLive(private val ctx: Context) {
             lastWakeOrMicPopupMs = System.currentTimeMillis()
             LxrFloatingOverlayManager.showForWakeOrMic(ctx)
           }
-          val now = System.currentTimeMillis()
-          if (now - lastUserScreenAt > 1800) {
-            lastUserScreenAt = now
-            main.post { sendScreenNow() }
-          }
         }
         sc.optJSONObject("outputTranscription")?.optString("text")?.let {
-          pText.append(it)
-          val replySnippet = pText.toString().takeLast(80)
-          if (
-            LxrFloatingOverlayManager.isAiWakeGreeting(it) ||
-              LxrFloatingOverlayManager.isAiWakeGreeting(replySnippet)
-          ) {
-            lastWakeOrMicPopupMs = System.currentTimeMillis()
-            LxrFloatingOverlayManager.showForWakeOrMic(ctx)
+          if (!suppressStaleModelAudio) {
+            pText.append(it)
+            val replySnippet = pText.toString().takeLast(80)
+            if (
+              LxrFloatingOverlayManager.isAiWakeGreeting(it) ||
+                LxrFloatingOverlayManager.isAiWakeGreeting(replySnippet)
+            ) {
+              lastWakeOrMicPopupMs = System.currentTimeMillis()
+              LxrFloatingOverlayManager.showForWakeOrMic(ctx)
+            }
           }
         }
         sc.optJSONObject("modelTurn")?.optJSONArray("parts")?.let { ps ->
           waitingServerReply = false
-          for (i in 0 until ps.length()) {
-            ps.getJSONObject(i).optJSONObject("inlineData")?.let {
-              val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
-              if (!stopped) {
-                val pcmRms = computeRms16Bit(pcm, pcm.size)
-                RiyaState.status.value = "LXR--AI কথা বলছে..."
-                LxrFloatingOverlayManager.setSpeakingBoost(true)
-                LxrFloatingOverlayManager.cancelPendingHide()
-                try {
-                  if (!playExec.isShutdown) {
-                    playExec.execute {
-                      if (stopped) return@execute
-                      synchronized(trackLock) {
-                        val t = track
-                        if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
-                          try {
-                            lastSpeakerWriteMs = System.currentTimeMillis()
-                            val wrote = t.write(pcm, 0, pcm.size)
-                            if (wrote > 0) {
-                              val frames = (wrote / 2).toLong()
-                              totalSpeakerFramesWritten += frames
-                              if (pcmRms >= 220.0) {
-                                lastAudibleEndFrame = totalSpeakerFramesWritten
-                                lastSpeakerOutputRms = pcmRms
-                                lastSpeakerSoundingMs = lastSpeakerWriteMs
+          if (suppressStaleModelAudio) {
+            // Discard stale residual audio packets from an interrupted turn to eliminate split/double replies
+          } else {
+            activeTurnHasStartedOutput = true
+            for (i in 0 until ps.length()) {
+              ps.getJSONObject(i).optJSONObject("inlineData")?.let {
+                val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
+                if (!stopped) {
+                  val pcmRms = computeRms16Bit(pcm, pcm.size)
+                  RiyaState.status.value = "LXR--AI কথা বলছে..."
+                  LxrFloatingOverlayManager.setSpeakingBoost(true)
+                  LxrFloatingOverlayManager.cancelPendingHide()
+                  try {
+                    if (!playExec.isShutdown) {
+                      playExec.execute {
+                        if (stopped || suppressStaleModelAudio) return@execute
+                        synchronized(trackLock) {
+                          val t = track
+                          if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+                            try {
+                              lastSpeakerWriteMs = System.currentTimeMillis()
+                              val wrote = t.write(pcm, 0, pcm.size)
+                              if (wrote > 0) {
+                                val frames = (wrote / 2).toLong()
+                                totalSpeakerFramesWritten += frames
+                                if (pcmRms >= 220.0) {
+                                  lastAudibleEndFrame = totalSpeakerFramesWritten
+                                  lastSpeakerOutputRms = pcmRms
+                                  lastSpeakerSoundingMs = lastSpeakerWriteMs
+                                }
                               }
-                            }
-                          } catch (_: Throwable) {}
+                            } catch (_: Throwable) {}
+                          }
                         }
                       }
                     }
-                  }
-                } catch (_: Throwable) {}
+                  } catch (_: Throwable) {}
+                }
               }
             }
           }
         }
         if (sc.optBoolean("turnComplete")) {
+          suppressStaleModelAudio = false
+          activeTurnHasStartedOutput = false
           LxrFloatingOverlayManager.setSpeakingBoost(false)
           val u = uText.toString().trim()
           val p = pText.toString().trim()
@@ -1036,7 +1088,6 @@ class GeminiLive(private val ctx: Context) {
             }
             Store.remember(ctx, "Boss: $u")
             RiyaState.addLog("বস: $u")
-            main.post { sendScreenNow() }
           }
           if (p.isNotEmpty()) {
             Store.remember(ctx, "LXR--AI: $p")
@@ -1181,6 +1232,7 @@ class GeminiLive(private val ctx: Context) {
       setOf(
         "current_time",
         "remember",
+        "search_memory",
         "web_search",
         "get_battery_level",
         "get_capabilities_a_to_z",
@@ -1340,6 +1392,7 @@ class GeminiLive(private val ctx: Context) {
           )
         "current_time" -> nowText()
         "web_search" -> webSearch(a.optString("query"))
+        "search_memory" -> Store.searchMemory(ctx, a.optString("query"), maxDays = Store.RETENTION_DAYS)
         "remember" -> {
           Store.remember(ctx, "FACT: " + a.optString("fact"))
           "হয়েছে, বস! কথাটা মেমোরিতে সেভ করে রেখেছি।"
@@ -2287,6 +2340,7 @@ class GeminiLive(private val ctx: Context) {
     synchronized(recLock) {
       rec = r
     }
+    micNoiseSuppressor.reset()
     try {
       r.startRecording()
     } catch (_: Throwable) {}
@@ -2358,9 +2412,6 @@ class GeminiLive(private val ctx: Context) {
               val whisperBoostOn = Store.whisperBoost(ctx)
               val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
 
-              // Copy clean pre-boost mic frame for speaker timbre verification
-              val vmSampleChunk = if (voiceMatchActive) buf.copyOf(n) else null
-
               val isSpeakerAudiblyPlayingNow =
                 synchronized(trackLock) {
                   val activeTrack = track
@@ -2387,8 +2438,8 @@ class GeminiLive(private val ctx: Context) {
 
               // Multi-chunk Voice Match barge-in check (~100ms+) so Boss can interrupt A-to-Z immediately
               var voiceMatchBargeInNow = false
-              if ((isSpeakerAudiblyPlayingNow || ttsSpeakingNow) && voiceMatchActive && vmProfile != null && vmProfile.isComplete && vmSampleChunk != null && rawRms >= 550.0) {
-                bargeVerifyStream.write(vmSampleChunk)
+              if ((isSpeakerAudiblyPlayingNow || ttsSpeakingNow) && voiceMatchActive && vmProfile != null && vmProfile.isComplete && rawRms >= 550.0) {
+                bargeVerifyStream.write(buf, 0, n)
                 if (bargeVerifyStream.size() >= 3200) {
                   val res = VoiceMatchEngine.verifyPcmChunk(vmProfile, bargeVerifyStream.toByteArray(), vmSensitivity)
                   if (res?.matched == true) {
@@ -2421,36 +2472,45 @@ class GeminiLive(private val ctx: Context) {
                 interruptSpeakerForBoss()
               }
 
-              if (isSoftMuted) {
-                // Zero out mic during audible speaker frames to eliminate self-echo loop
-                buf.fill(0, 0, n)
-                lastVoiceMs = 0L
-              } else if (whisperBoostOn && rawRms > 10.0) {
-                applySoftVoiceBoost(buf, n, rawRms, isPhoneMic = !usingBtAudio)
-              }
+              // Apply real-time software DSP Noise Cancellation on BOTH Bluetooth and Phone Mic!
+              val dspResult =
+                if (isSoftMuted) {
+                  buf.fill(0, 0, n)
+                  lastVoiceMs = 0L
+                  LxrAudioNoiseSuppressor.FrameResult(0.0, 45.0, false)
+                } else {
+                  micNoiseSuppressor.processFrameInPlace(
+                    pcm = buf,
+                    len = n,
+                    bluetoothMode = usingBtAudio,
+                    whisperBoostOn = whisperBoostOn,
+                  )
+                }
 
-              val speechGate = if (whisperBoostOn) 12.0 else 50.0
-              val hasSpeech = !isSoftMuted && rawRms >= speechGate
+              val vmSampleChunk = if (voiceMatchActive && !isSoftMuted) buf.copyOf(n) else null
+              val hasSpeech = !isSoftMuted && dspResult.isSpeechActive
               if (hasSpeech) {
                 lastVoiceMs = now
                 lastBossTurnAtMs = now
+                lastBossSpeechDetectedMs = now
               }
 
-              // Keep 1.05s hangover: finishes trailing Bengali syllables cleanly without delaying 1-2s response
-              val prevHangover = lastVoiceMs > 0L
-              val withinHangover = !isSoftMuted && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
-              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in LiveVadConfig.MIC_HANGOVER_MS..2200L) {
+              // Clean 320ms hangover + pure zero-silence thereafter so Gemini VAD triggers in ~1-1.4s cleanly!
+              val prevHangover = lastVoiceMs > 0L && !hasSpeech
+              val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
+              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in LiveVadConfig.MIC_HANGOVER_MS..1600L) {
                 waitingServerReply = true
               }
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
               val shouldSend =
-                if (isSoftMuted) (silentFrameCounter % 2 == 0)
-                else (!lowNet || withinHangover || !whisperBoostOn || (silentFrameCounter % 2 == 0))
+                if (withinHangover) true
+                else (!lowNet || (silentFrameCounter % 2 == 0))
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
                 if (shouldSend) {
-                  sendAudioPcm(buf, n)
+                  if (withinHangover) sendAudioPcm(buf, n)
+                  else sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                 }
               } else {
                 if (isSoftMuted || !withinHangover) {
@@ -2628,26 +2688,6 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
-  private fun applySoftVoiceBoost(buf: ByteArray, len: Int, rms: Double, isPhoneMic: Boolean) {
-    val mult = if (isPhoneMic) 1.35 else 1.0
-    val gain =
-      when {
-        rms < 160.0 -> 4.6 * mult
-        rms < 450.0 -> 3.6 * mult
-        rms < 1200.0 -> 2.4 * mult
-        rms < 2600.0 -> 1.6 * mult
-        else -> 1.0
-      }
-    if (gain <= 1.02) return
-    var i = 0
-    while (i + 1 < len) {
-      val raw = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toDouble()
-      val boosted = (tanh((raw * gain) / 32767.0) * 32767.0).toInt().coerceIn(-32768, 32767)
-      buf[i] = (boosted and 0xFF).toByte()
-      buf[i + 1] = ((boosted ushr 8) and 0xFF).toByte()
-      i += 2
-    }
-  }
 
   fun sendText(t: String) {
     if (stopped) return

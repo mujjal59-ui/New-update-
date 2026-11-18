@@ -555,6 +555,13 @@ fun RiyaChatDialog(close: () -> Unit) {
         val snap = RiyaAccessibilityService.instance?.readEntireScreenTree()
         val accOk = Keep.accessibilityOn(ctx)
         val settings = prefs.currentSettings()
+        val memMatches = Store.searchMemory(ctx, q, maxDays = Store.RETENTION_DAYS)
+        val memRecent = Store.recent(ctx, 2200)
+        val combinedMemory =
+          buildString {
+            if (memMatches.isNotBlank()) appendLine(memMatches)
+            if (memRecent.isNotBlank()) appendLine(memRecent)
+          }
         var finalReply = ""
         aiRepo
           .streamAssistantReply(
@@ -562,6 +569,7 @@ fun RiyaChatDialog(close: () -> Unit) {
             screenSummary = snap?.summaryLines?.take(12)?.joinToString(", ").orEmpty(),
             accessibilityActive = accOk,
             preferFastLowNet = Store.lowNetFastMode(ctx),
+            memoryContext = combinedMemory,
           )
           .collect { partial ->
             streamText = partial
