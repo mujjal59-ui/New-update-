@@ -41,6 +41,7 @@ class LxrAudioNoiseSuppressor(
   private var noiseFloorRms = 45.0
   private var currentGain = 1.0
   private var speechHangFrames = 0
+  private var consecutiveSpeechCandidates = 0
   private var initializedFloor = false
 
   fun reset(initialFloor: Double = 45.0) {
@@ -49,6 +50,7 @@ class LxrAudioNoiseSuppressor(
     noiseFloorRms = initialFloor
     currentGain = 1.0
     speechHangFrames = 0
+    consecutiveSpeechCandidates = 0
     initializedFloor = false
   }
 
@@ -99,42 +101,53 @@ class LxrAudioNoiseSuppressor(
     // Speech characteristics: clear energy over noise floor, non-flat crest, balanced speech ZCR
     val baseMinSpeech =
       when {
-        bluetoothMode && whisperBoostOn -> 46.0
-        bluetoothMode -> 65.0
-        whisperBoostOn -> 56.0
-        else -> 82.0
+        bluetoothMode && whisperBoostOn -> 52.0
+        bluetoothMode -> 72.0
+        whisperBoostOn -> 64.0
+        else -> 92.0
       }
-    val requiredSnr = if (whisperBoostOn) 1.75 else 2.05
+    val requiredSnr = if (whisperBoostOn) 1.85 else 2.20
     val snrThreshold = max(baseMinSpeech, noiseFloorRms * requiredSnr)
 
     // Broadband impulsive static or ultra-high-frequency hiss check
-    val speechLikeBand = zcrRate in 0.015..0.52 || rms > snrThreshold * 1.4
-    val rawSpeechDetected = rms >= snrThreshold && speechLikeBand
+    val speechLikeBand = zcrRate in 0.015..0.48 || rms > snrThreshold * 1.45
+    val candidate = rms >= snrThreshold && speechLikeBand
+    val strongSpeech = rms >= snrThreshold * 1.40 && speechLikeBand
+
+    if (candidate) {
+      consecutiveSpeechCandidates++
+    } else {
+      consecutiveSpeechCandidates = 0
+    }
+
+    val rawSpeechDetected =
+      strongSpeech ||
+        (candidate && (speechHangFrames > 0 || consecutiveSpeechCandidates >= 2))
 
     if (rawSpeechDetected) {
-      speechHangFrames = 3 // brief ~150ms syllable bridge so mid-word consonants aren't clipped
+      speechHangFrames = 2 // brief ~80ms syllable bridge without dragging end-of-speech latency
     } else if (speechHangFrames > 0) {
       speechHangFrames--
     }
     val isSpeechActive = rawSpeechDetected || speechHangFrames > 0
 
-    // Adapt stationary noise floor only during non-speech or low-crest steady hum
+    // Adapt stationary noise floor quickly when ambient noise rises (e.g. fan/traffic) so end-of-speech triggers cleanly
     if (!rawSpeechDetected) {
       noiseFloorRms =
         if (rms < noiseFloorRms) {
-          noiseFloorRms * 0.86 + rms * 0.14
+          noiseFloorRms * 0.84 + rms * 0.16
         } else {
-          val steadyStep = if (crestFactor < 3.6) 0.03 else 0.01
+          val steadyStep = if (crestFactor < 3.6) 0.09 else 0.03
           noiseFloorRms * (1.0 - steadyStep) + rms * steadyStep
-        }.coerceIn(15.0, 700.0)
+        }.coerceIn(15.0, 750.0)
     }
 
     // Compute desired frame gain:
-    // - Non-speech: suppress background noise cleanly (6% residual or 0 on deep quiet) so Gemini VAD immediately detects end-of-speech!
+    // - Non-speech: suppress background noise cleanly to silence so Gemini VAD triggers immediately!
     // - Speech: clean spectral subtraction factor * optional clarity boost
     val desiredGain =
       if (!isSpeechActive) {
-        if (rms < noiseFloorRms * 1.15) 0.0 else 0.08
+        if (rms < noiseFloorRms * 1.25) 0.0 else 0.06
       } else {
         val subtractRatio =
           ((rms - 0.60 * noiseFloorRms) / max(rms, 1.0)).coerceIn(0.45, 1.0)

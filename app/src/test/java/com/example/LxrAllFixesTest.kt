@@ -257,12 +257,12 @@ class LxrAllFixesTest {
     assertEquals("START_SENSITIVITY_HIGH", LiveVadConfig.START_SENSITIVITY)
     assertEquals("END_SENSITIVITY_HIGH", LiveVadConfig.END_SENSITIVITY)
     assertTrue(
-      "Silence window should respond fast (~1s) after denoised hangover",
-      LiveVadConfig.SILENCE_DURATION_MS in 850..1200,
+      "Silence window should respond fast (~0.6s) after denoised hangover",
+      LiveVadConfig.SILENCE_DURATION_MS in 500..750,
     )
     assertTrue(
-      "Mic hangover should stay crisp so total delay stays ~1-1.5s",
-      LiveVadConfig.MIC_HANGOVER_MS in 250L..500L,
+      "Mic hangover should stay crisp so total delay stays ~0.8-1.5s",
+      LiveVadConfig.MIC_HANGOVER_MS in 150L..350L,
     )
     val cfg = LiveVadConfig.buildRealtimeInputConfigJson().getJSONObject("automaticActivityDetection")
     assertFalse(cfg.getBoolean("disabled"))

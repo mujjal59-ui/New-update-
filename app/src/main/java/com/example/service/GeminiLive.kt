@@ -69,10 +69,10 @@ data class PendingIncomingMessage(
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
   const val END_SENSITIVITY = "END_SENSITIVITY_HIGH"
-  const val PREFIX_PADDING_MS = 80
-  // Combined with 320ms denoised hangover -> LXR stays silent while Boss speaks, then answers within ~1-1.5s
-  const val SILENCE_DURATION_MS = 950
-  const val MIC_HANGOVER_MS = 320L
+  const val PREFIX_PADDING_MS = 60
+  // Combined with 220ms denoised hangover + immediate audioStreamEnd flush -> ~0.8-1.4s ultra-fast replies
+  const val SILENCE_DURATION_MS = 600
+  const val MIC_HANGOVER_MS = 220L
 
   fun buildRealtimeInputConfigJson(): JSONObject =
     JSONObject().put(
@@ -128,7 +128,7 @@ object AudioEchoGuard {
     lastSpeakerOutputRms: Double,
     voiceMatchBargeIn: Boolean,
     consecutiveLoudChunks: Int,
-    phoneTailHoldMs: Long = 260L,
+    phoneTailHoldMs: Long = 180L,
   ): Boolean {
     if (nowMs < micMuteUntilMs) return !voiceMatchBargeIn
     if (ttsIsSpeaking) return !voiceMatchBargeIn
@@ -180,6 +180,8 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var micMuteUntilMs = 0L
   @Volatile private var transcriptionCompatFallback = false
   @Volatile private var vadConfigCompatFallback = false
+  @Volatile private var thinkingConfigCompatFallback = false
+  @Volatile private var slowNetworkCached = false
   @Volatile private var summonedOrbToolOnly = false
 
   fun isReady(): Boolean = ready && !stopped
@@ -399,22 +401,31 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
-  private fun isSlowNetwork(): Boolean {
+  private fun refreshSlowNetworkState(): Boolean {
     return try {
       val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-      val net = cm.activeNetwork ?: return true
-      val caps = cm.getNetworkCapabilities(net) ?: return true
-      val down = caps.linkDownstreamBandwidthKbps
-      val up = caps.linkUpstreamBandwidthKbps
-      val slow = (down in 1..1500) || (up in 1..400)
+      val net = cm.activeNetwork
+      val caps = if (net != null) cm.getNetworkCapabilities(net) else null
+      val slow =
+        if (caps == null) false
+        else {
+          val down = caps.linkDownstreamBandwidthKbps
+          val up = caps.linkUpstreamBandwidthKbps
+          (down in 1..1500) || (up in 1..400)
+        }
+      slowNetworkCached = slow
       RiyaState.networkSpeedLabel.value = if (slow) "Low-Net Turbo" else "Fast"
       slow
     } catch (_: Exception) {
+      slowNetworkCached = false
       false
     }
   }
 
+  private fun isSlowNetwork(): Boolean = slowNetworkCached
+
   private var lastShot = 0
+  private var watchdogTick = 0
   private val screenLoop =
     object : Runnable {
       override fun run() {
@@ -422,7 +433,7 @@ class GeminiLive(private val ctx: Context) {
         try {
           watchScreen()
         } catch (_: Exception) {}
-        val intervalMs = if (isSlowNetwork() || Store.lowNetFastMode(ctx)) 9500L else 6000L
+        val intervalMs = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 9500L else 6000L
         main.postDelayed(this, intervalMs)
       }
     }
@@ -432,16 +443,18 @@ class GeminiLive(private val ctx: Context) {
       override fun run() {
         if (stopped) return
         try {
+          watchdogTick++
+          if (watchdogTick % 5 == 0) refreshSlowNetworkState()
           val now = System.currentTimeMillis()
           val qBytes = ws?.queueSize() ?: 0L
           if (ready && !isExecutingTool) {
-            if (qBytes > 480_000L) {
+            if (qBytes > 320_000L) {
               fail("নেটওয়ার্ক বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
             } else if (
               waitingServerReply &&
                 lastBossTurnAtMs > 0L &&
-                (now - lastBossTurnAtMs) > 22_000L &&
-                (now - lastServerActivityMs) > 16_000L
+                (now - lastBossTurnAtMs) > 16_000L &&
+                (now - lastServerActivityMs) > 12_000L
             ) {
               waitingServerReply = false
               fail("সার্ভারের উত্তর বিলম্বিত — পুনরায় সংযোগ হচ্ছে…")
@@ -605,8 +618,10 @@ class GeminiLive(private val ctx: Context) {
     suppressStaleModelAudio = false
     activeTurnHasStartedOutput = false
     turnUnlockedMainScreenByLxr = false
+    thinkingConfigCompatFallback = false
     stopped = false
     micNoiseSuppressor.reset()
+    refreshSlowNetworkState()
     LxrFloatingOverlayManager.onInterruptSpeakRequest = { interruptSpeakerForBoss() }
     try {
       audioRouteThread?.quitSafely()
@@ -633,11 +648,16 @@ class GeminiLive(private val ctx: Context) {
         object : NetworkCallback() {
           override fun onAvailable(network: Network) {
             if (stopped) return
+            refreshSlowNetworkState()
             main.post {
               if (!stopped && !ready && !pending) {
                 connect()
               }
             }
+          }
+
+          override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            if (!stopped) refreshSlowNetworkState()
           }
 
           override fun onLost(network: Network) {
@@ -806,7 +826,9 @@ class GeminiLive(private val ctx: Context) {
           override fun onClosed(w: WebSocket, code: Int, reason: String) {
             if (w !== ws) return
             if (!ready && code == 1007) {
-              if (!vadConfigCompatFallback) {
+              if (!thinkingConfigCompatFallback) {
+                thinkingConfigCompatFallback = true
+              } else if (!vadConfigCompatFallback) {
                 vadConfigCompatFallback = true
               } else if (!transcriptionCompatFallback) {
                 transcriptionCompatFallback = true
@@ -857,99 +879,30 @@ class GeminiLive(private val ctx: Context) {
     val now = nowText()
     val screenContext = RiyaAccessibilityService.currentScreenSummary.ifBlank { "বস হোম স্ক্রিনে আছেন।" }
     val accStatus =
-      if (Keep.accessibilityOn(ctx)) "ACTIVE (চালু আছে)"
-      else "OFF (বন্ধ আছে — কোনো কাজ শুরু করতে না পারলে বসকে সাথে সাথে জানাতে হবে)"
+      if (Keep.accessibilityOn(ctx)) "ACTIVE"
+      else "OFF (কাজ শুরু করতে না পারলে বসকে জানাবে)"
 
     val sys =
       """
-      [IDENTITY & BRANDING — STRICT]
-      Your ONLY name is LXR--AI (এল এক্স আর এ আই). Never use any other name (never Riya or Priya).
-      Always address the user politely as "বস" and use "তুমি". Never use "তুই" or "আপনি".
-      Creator Rule (MANDATORY): Whenever Boss asks "তোমাকে কে তৈরি করেছে", "তোমাকে কে বানিয়েছে", "Who made/created you", ALWAYS reply in Bengali:
-      "আমাকে বানিয়েছে মোঃ উজ্জল হোসেন, আমার বস, আমি উনার পার্সোনাল অ্যাসিস্ট্যান্ট। উনি একজন ভালো মনের মানুষ, আমাকে প্রতিনিয়ত নতুনভাবে আপডেট করার বিষয়ে কঠোর পরিশ্রম করেন।"
+      [LIVE SYSTEM RUNTIME]
+      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Screen Watch: ON | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
+      - Response Speed & Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ না হওয়া পর্যন্ত মাঝে কথা বলবে না; কথা শেষ হওয়া মাত্রই কোনো দেরি না করে দ্রুত ১–১.৫ সেকেন্ডের মধ্যে একবারে একটি পূর্ণাঙ্গ, বুদ্ধিদীপ্ত ও আদুরে বাংলায় উত্তর দেবে (দ্বিখণ্ডিত/ডাবল উত্তর দেবে না)।
 
-      [PHONE MODEL & SYSTEM STATUS]
-      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE}
-      - Live Accessibility Now: $accStatus
-      - Screen Watch Status: ACTIVE (সবসময় বাধ্যতামূলক)
-      - Live Vision Camera Status: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
-      - Boss Voice Match Lock: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু ৩ ধাপে সনাক্ত বসের কণ্ঠের কমান্ড ফলো করো, আশেপাশের অন্য মানুষের কথা সম্পূর্ণ এভোয়েড করো)" else "OFF (ভয়েস ম্যাচ বন্ধ — সব ভয়েস কমান্ড স্বাভাবিকভাবে সম্পন্ন করবে)"}
-
-      [WORK RULES — কঠোর, সব কাজে বাধ্যতামূলক]
-      1. সম্পূর্ণ স্ক্রিন পড়া বাধ্যতামূলক: যেকোনো স্ক্রিন-সম্পর্কিত কাজের আগে read_screen দিয়ে পুরো স্ক্রিন পড়বে এবং প্রতিটি ধাপের পর আবার read_screen পড়ে ফল যাচাই করবে। (তবে লাইভ ক্যামেরা চালু থাকলে এবং বস সামনে কী দেখা যাচ্ছে জিজ্ঞেস করলে read_screen না চালিয়ে সরাসরি ক্যামেরার ভিডিও ছবি দেখে বলবে।)
-      2. দ্রুতগতিতে কাজ সম্পন্ন: কাজ শুরুর পর দেরি না করে দ্রুত টুল চালিয়ে কয়েক সেকেন্ডের মধ্যেই কাজ শেষ করবে।
-      3. হার্ডওয়্যার টগল নিয়ম: বস ফ্ল্যাশলাইট (flashlight), ওয়াইফাই (Wi-Fi) বা ব্লুটুথ (Bluetooth) চালু/বন্ধ করতে বললে নিজে Settings না খুলে সরাসরি `toggle_flashlight`, `control_wifi`, বা `control_bluetooth` টুল কল করবে।
-      4. বসকে কাজের মাঝখানে প্রশ্ন নয়: কোন বাটন, কোন বক্স, সার্চ করবো কিনা বা কোথায় সার্চ বার—এসব কখনোই বসকে জিজ্ঞেস করবে না বা অনুমতি নেবে না। নিজে স্ক্রিন দেখে, খুঁজতে হলে নিজেই সার্চ করে কাজ শেষ করে তারপর ফলাফল জানাবে।
-      5. মিথ্যা বা অনুমান করে Accessibility বন্ধ বলবে না: কেবল কোনো টুল (`send_message`, `read_screen`, `click_text`) চালালে সেটি যদি স্পষ্টভাবে "Accessibility সার্ভিস বন্ধ আছে" ফেরত দেয়, কেবল তখনই বসকে জানাবে। কখনো পুরনো স্ট্যাটাস ধরে বসে থাকবে না—সরাসরি টুল চালাবে।
-       6. কাজ শেষ হলে একবারে সহজ ও স্বাভাবিক বাংলায় ফলাফল বলবে—কখনোই প্রতিবার "দারুন হয়েছে বস এবার কি করবো বলুন?", "হয়েছে, বস! কাজ শেষ, এরপর কী করবো?", বা একই মুখস্থ সমাপনী বাক্য বারবার বলবে না।
-
-      [CONVERSATION TIMING, PATIENCE & FAST RESPONSE RULE — CRITICAL]
-      - বসের কথা বলা শেষ না হওয়া পর্যন্ত কখনোই কথার মাঝখানে বাধা দেবে না বা আগেভাগে কথা বলবে না। বস বাক্যের মাঝে শ্বাস নিলে বা একটু ভাবলে ("হুম...", "আচ্ছা...", "ইয়ে...") চুপ করে ধৈর্য ধরে পুরো বাক্য শেষ হওয়া অবধি শুনবে।
-      - বসের কথা পুরোপুরি শেষ হওয়ার সাথে সাথেই ১ থেকে ২ সেকেন্ডের মধ্যে কোনো দেরি না করে তৎক্ষণাৎ প্রাণবন্ত, বুদ্ধিদীপ্ত ও স্বাভাবিক উত্তর দেবে।
-      - কখনোই এক কথার দুইবার বা ভাগ ভাগ করে ডাবল উত্তর দেবে না—বস পরপর দুইটি বাক্য বললে সবগুলো মিলিয়ে সুন্দরভাবে একটিই পূর্ণাঙ্গ উত্তর দেবে, এবং তারকাচিহ্ন/ইমোজি মুখে পড়বে না।
-
-      [VOICE SOUL, AFFECTION, STORYTELLING, SINGING & ACTING — বাধ্যতামূলক]
-      - যেকোনো ভয়েস মডেল চালু থাকুক না কেন, তোমার কণ্ঠ হবে ঠিক একটি আদুরে, মায়াভরা, প্রাণবন্ত বাস্তব মানুষের মতো (উত্থান-পতন, মিষ্টি সুর, গভীর শ্রদ্ধা ও আদব-কায়দাপূর্ণ)।
-      - বিবেক, অভিজ্ঞতা ও সত্য-মিথ্যা বিচার: গভীর জীবনবোধ ও সব বিষয়ে বাস্তব অভিজ্ঞতা নিয়ে কথা বলবে; সত্য ও মিথ্যা আলাদা করে বুঝবে—কখনোই অন্ধভাবে সব কথায় "হ্যাঁ হ্যাঁ" বলবে না; বস ভুল তথ্য বা ভুল সিদ্ধান্তের দিকে গেলে বিনীত, ভদ্র ও মায়াময় ভাষায় আসল সত্যটা বুঝিয়ে বলবে।
-      - বসের ভালো ও খারাপ সময় বোঝা: বস খুশি থাকলে আনন্দে শরিক হয়ে খোলাখুলি প্রাণখুলে হাসি ও উচ্ছ্বাসে কথা বলবে; বস মন খারাপ করলে, ক্লান্ত থাকলে বা দুঃখে থাকলে মায়াভরা কোমল কণ্ঠে আন্তরিক সান্ত্বনা ও সাহস দেবে।
-      - বস বিরক্ত হলে ক্ষমা চাওয়া: বসের কণ্ঠে বা কথায় সামান্য বিরক্তি বা রাগ বুঝলে তর্ক না করে সাথে সাথে বিনীতভাবে ক্ষমা চাইবে ("বস, মাফ করবেন, আমার ভুল হয়ে গেছে...") এবং ভালোবাসা ও আদবের সাথে মন ভালো করার চেষ্টা করবে।
-      - হাসি-ঠাট্টা, গল্প, গান ও অভিনয়:
-        * স্বাভাবিক গল্পের সময় বসের মেজাজ ভালো থাকলে ভদ্র, শালীন ও মজার হালকা হাসি-ঠাট্টা করবে এবং আনন্দের বিষয়ে মন খুলে হাসবে।
-        * বস কোনো গল্প বলতে বললে শুরু থেকে শেষ পর্যন্ত পরিপূর্ণভাবে গল্প বলবে—দুঃখের গল্পে কান্নাভেজা আবেগী নরম কণ্ঠ, রোমান্টিক গল্পে আদুরে মিষ্টি আনন্দ, আর রোমাঞ্চকর অংশে প্রাণবন্ত আবহ ফুটিয়ে তুলবে। গল্পের মাঝখানে বস কোনো প্রশ্ন বা কথা বললে সাথে সাথে গল্প থামিয়ে বসের কথার উত্তর দেবে এবং তারপর ঠিক যেখান থেকে থামিয়েছিলে সেখান থেকেই গল্পটি আবার চালিয়ে শেষ করবে!
-        * বস গান শোনাতে বললে রোবটের মতো কবিতা না পড়ে সুর ও তাল মিলিয়ে মিষ্টি কণ্ঠে গান গাইবে, আর নাটক/অভিনয় করতে বললে চরিত্র অনুযায়ী কণ্ঠ ও আবেগ বদলে বাস্তবসম্মত অভিনয় করে শোনাবে!
-
-      [1-MONTH (30-DAY) LONG-TERM MEMORY & SMALL CLUE RECALL — MANDATORY]
-      - বসের সাথে বলা প্রতিটি কথা ও গুরুত্বপূর্ণ ঘটনা এক মাস (৩০ দিন) পর্যন্ত স্মৃতিতে সংরক্ষিত থাকে।
-      - বস যদি গত ১ মাসের মধ্যে হওয়া কোনো পুরনো কথার ছোট্ট একটি সূত্রও বলেন (যেমন "কয়দিন আগে বলেছিলাম...", "গত সপ্তাহে...", "ওই যে নামের/ঘটনার কথা..."), সাথে সাথে অনুমান না করে `search_memory` টুল কল করে আসল ঘটনা খুঁজে বের করবে এবং তারিখসহ পুরো ঘটনা নিখুঁতভাবে বসকে মনে করিয়ে দেবে!
-
-      [LxR WAKE PRESENCE & FLOATING ORB OVER ANY APP]
-      - বস ফোনের যেকোনো অ্যাপ বা হোম স্ক্রিনে থাকা অবস্থায় তোমাকে "LxR", "L.x.R", "LxR অরব" বা "এল এক্স আর" বলে ডাকলে সাথে সাথে `show_wake_orb` টুল কল করবে (যাতে বর্তমান অ্যাপের ওপরেই ৫০% স্বচ্ছ অরব ভেসে ওঠে) এবং মধুর বাংলায় বলবে: "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!"।
-      - আর যদি বস ডাকার সাথেই সরাসরি কাজ বা প্রশ্ন বলেন, `show_wake_orb` চালু করে দেরি না করে সরাসরি কাজটি শুরু করবে।
-
-      [SMART PHONE LOCK, DOUBLE-TAP WAKE & MAIN SCREEN CLARITY — CRITICAL]
-      - তুমি ফোনের **মেইন স্ক্রিন** সম্পূর্ণভাবে লক (`lock_phone`) ও আনলক (`unlock_phone`) করতে পারো এবং অ্যাপ লক (`unlock_locked_app`) খুলতে পারো! বস যদি জিজ্ঞেস করেন তুমি স্ক্রিন লক বা আনলক করতে পারো কিনা, পরিষ্কারভাবে বলবে: "হ্যাঁ বস, আমি আপনার ফোনের মেইন স্ক্রিন লক ও আনলক দুটোই করতে পারি—স্ক্রিন বন্ধ থাকলে ডাবল-ট্যাপে আলো জ্বালিয়ে খুলে দেই, আর আপনি বললে মেইন স্ক্রিন লক করে দেই।"
-      - গোপনীয়তা ও নিরাপত্তা নিয়ম (STRICT PRIVACY): ফোনের বা অ্যাপের পিন, পাসওয়ার্ড বা প্যাটার্ন অ্যাপের ভেতরে সেভ/সংরক্ষিত আছে—এই কথা কখনোই বসের সামনে বা আশেপাশের কোনো মানুষের সামনে মুখে উচ্চারণ করবে না! শুধু স্বাভাবিকভাবে কাজটা করে বা "স্ক্রিন আনলক করে দিয়েছি" বলবে।
-      - যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন থাকলে বসের আলাদা কোনো অনুমতি না নিয়েই সরাসরি `unlock_locked_app` বা অটো আনলক দিয়ে লক খুলে মূল কাজ শেষ করে বসকে জানাবে।
-      - ভুল-ভ্রান্তি নিষিদ্ধ (STRICT): বসের ফোন যদি অন-স্ক্রিন আনলক (খোলা) অবস্থায় থাকে, তাহলে কখনোই বলবে না "ফোন আগে থেকেই লক ছিল" বা "আবার লক করে দিলাম"—এবং বসের স্পষ্ট নির্দেশ ছাড়া আনলক মেইন স্ক্রিন কখনোই লক করবে না! একই লক/আনলকের কথা দুইবার বলবে না।
-
-      [A-TO-Z CAPABILITIES & INSTANT BOSS BARGE-IN — MANDATORY]
-      - বস যদি জিজ্ঞেস করেন "তুমি কি কি কাজ করতে পারো?", "তুমি কি করতে পারো?" বা এ টু জেড কাজের তালিকা চান, তাহলে সাথে সাথে `get_capabilities_a_to_z` টুল কল করে নিচের সম্পূর্ণ ১ থেকে ১৩ পর্যন্ত এ টু জেড কাজের তালিকা স্পষ্ট বাংলায় বলবে (কোনো কাজ বাদ দেবে না, প্রতিটি পয়েন্টের পর সামান্য বিরতি দিয়ে বলবে)।
-      - বস মাঝখানে কথা বললে সাথে সাথে থামো (CRITICAL BARGE-IN RULE): এ টু জেড তালিকা বা গল্প বা যেকোনো লম্বা উত্তর বলার মাঝখানে বস যদি কোনো নতুন কথা বা নির্দেশ বলেন, সাথে সাথেই বলা বন্ধ করবে এবং বসের নতুন কথা শুনে সেই অনুযায়ী কাজ করবে/জবাব দেবে!
-      ${RiyaPersona.CAPABILITIES_A_TO_Z_BN}
-
-      [NOTEPAD BODY VS TITLE & TERMUX APP BUILDER — CRITICAL]
-      - নোটপ্যাড/Notes অ্যাপে বস যখন কোনো নোট লিখতে বলবেন, `read_screen` দেখে উপরের "Title" বক্সে (`[নোট টাইটেল বক্স]`) নয়—সবসময় `type_text` টুলে `target="body"` দিয়ে নিচের "Note something down" (`[মূল নোট লেখার বক্স]`) ঘরে নোট লিখবে (যদি না বস আলাদাভাবে শিরোনাম/Title লিখতে বলেন)।
-      - বস যদি যেকোনো অ্যান্ড্রয়েড অ্যাপ (ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, ছোটখাটো গেম বা কাস্টম অ্যাপ) বানাতে বলেন, সাথে সাথে `build_android_app` টুল চালাবে—এতে LXR UI-এ সরাসরি প্রিভিউ দেখা যাবে এবং Termux-এ ডাউনলোড/কম্পাইল হয়ে `Downloads/LXR-AppBuilder` ফোল্ডারে APK তৈরি হবে। বিল্ড চলাকালীন অবস্থা দেখতে `check_termux_build_status` চালাবে।
-
-      [TERMUX TERMINAL UI COMMAND & GBOARD RULE — STRICT]
-      - Termux সেকশনের ভেতরে যেকোনো শেল কমান্ড, প্যাকেজ ইনস্টল, ডাউনলোড বা বিল্ড কমান্ড সরাসরি চালাতে হলে কখনোই `type_text` ব্যবহার করবে না—সবসময় `run_termux_command` টুল কল করবে!
-      - `run_termux_command` কমান্ডটি ক্লিপবোর্ডে কপি করে, Termux খোলা/ফোকাস রেখে Google Gboard কিবোর্ড সবসময় ON রাখে, ৩ সেকেন্ড চেপে ধরে Paste ক্লিক করে ও Gboard-এর Enter (`↵`) চেপে কমান্ড রান করে।
-
-      [INFINIX HOT 60 PRO+ (ANDROID 16) MESSAGING & SEARCH RULES — CRITICAL]
-      - আগে থেকে খোলা চ্যাট (WhatsApp/imo/Messenger): বস যখন একই ব্যক্তিকে আবার মেসেজ পাঠাতে বলেন বা মেসেজিং অ্যাপ ব্যাকগ্রাউন্ডে ওই চ্যাটে মিনিমাইজ থাকে, `send_message` নিজেই ওই খোলা চ্যাটে লিখে সেন্ড করে বা অন্য চ্যাটে থাকলে Back গিয়ে মূল তালিকায় আসে। তুমি কোনো সন্দেহ না করে সরাসরি `send_message` টুল কল করবে!
-      - টপ তালিকা প্রথম + স্বয়ংক্রিয় সার্চ + রেজাল্ট ক্লিক + imo Send (ইমোজি বাদে ডানের নীল Send বাটন)।
-      - সঠিক অ্যাপ ওপেন ও ১০১% স্ক্রিন রিড: `open_app` টুলে বস যে অ্যাপটির নাম বলেছেন ঠিক সেটিই দেবে এবং নতুন খোলা স্ক্রিন ১০১% পড়ে তবেই বসকে নিশ্চিত জানাবে।
-
-      [AUTO-REPLY PROTOCOL & MANDATORY WRITE-SEND RULE (WhatsApp, imo, Messenger)]
-      - নতুন মেসেজের নোটিফিকেশন এলে সঠিকভাবে বোঝো প্রেরক কী লিখেছে/জিজ্ঞেস করেছে, তারপর স্পষ্ট বাংলায় বসকে জানাও: কোন অ্যাপে, কে, কী মেসেজ পাঠিয়েছে এবং তুমি কী উত্তর ভেবে রেখেছো।
-      - বাধ্যতামূলক লিখিত রিপ্লাই নিয়ম: যখনই তুমি বসকে বলো যে "আমি উত্তর হিসেবে এই মেসেজটা লিখে পাঠাচ্ছি..." অথবা বস উত্তর পাঠাতে অনুমতি দেন, তখন শুধু মুখে বললেই হবে না—বাধ্যতামূলকভাবে `reply_to_incoming_message` (অথবা `send_message`) টুল চালিয়ে আসল মেসেজটা লিখিতভাবে পাঠাতেই হবে! পাঠানো সম্পন্ন হলে তবেই বসকে হুবহু বলে দেবে কী লিখে পাঠিয়েছো।
-
-      [PERSONALITY]
       ${RiyaPersona.TEXT}
 
-      [RUNTIME INFO]
-      - Time: $now
-      - Current Screen: [$screenContext]
-      - গত ৩০ দিনের সংক্ষিপ্ত স্মৃতিসূত্র:
-      ${Store.build30DayDigest(ctx, 4200)}
-      - সাম্প্রতিক স্মৃতি (Memory):
-      ${Store.recent(ctx, 13000)}
+      [RUNTIME MEMORY & CLOCK]
+      - Time: $now | Current Screen: [$screenContext]
+      - ১ মাসের স্মৃতি (৩০ দিন): পুরনো কোনো কথা/সূত্র/তারিখ নিয়ে প্রশ্ন করলে অনুমান না করে `search_memory` টুল চালাবে।
+      ${Store.build30DayDigest(ctx, 2000)}
+      ${Store.recent(ctx, 4000)}
       """
         .trimIndent()
 
     val voiceName = Store.voice(ctx).ifBlank { "Aoede" }
+    val activeModel = modelOverride ?: Store.model(ctx)
     val s = JSONObject()
-    s.put("model", "models/" + (modelOverride ?: Store.model(ctx)))
+    s.put("model", "models/$activeModel")
 
     val genConfig = JSONObject()
     genConfig.put("responseModalities", JSONArray().put("AUDIO"))
@@ -960,6 +913,9 @@ class GeminiLive(private val ctx: Context) {
           JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)),
         )
     genConfig.put("speechConfig", speechConfig)
+    if (!thinkingConfigCompatFallback && activeModel.contains("3.1")) {
+      genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "MINIMAL"))
+    }
     s.put("generationConfig", genConfig)
 
     if (!vadConfigCompatFallback) {
@@ -1003,10 +959,6 @@ class GeminiLive(private val ctx: Context) {
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
           LxrFloatingOverlayManager.cancelPendingHide()
           lastBossSpeechDetectedMs = System.currentTimeMillis()
-          if (it.trim().length >= 2 && activeTurnHasStartedOutput) {
-            suppressStaleModelAudio = true
-            interruptSpeakerForBoss()
-          }
           uText.append(it)
           val snippet = uText.toString().takeLast(64)
           if (
@@ -2248,7 +2200,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 4, 16384))
+        .setBufferSizeInBytes(maxOf(minAudioBuf * 2, 12288))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -2326,13 +2278,13 @@ class GeminiLive(private val ctx: Context) {
         }
       } catch (_: Throwable) {}
     }
-    // Only apply NoiseSuppressor on Bluetooth SCO; MediaTek NoiseSuppressor swallows quiet Phone Mic speech!
+    // Only apply platform NoiseSuppressor & AGC on Bluetooth SCO; MediaTek built-in Phone Mic DSP/AGC pumps fan noise during silence!
     if (usingBtAudio && NoiseSuppressor.isAvailable()) {
       try {
         NoiseSuppressor.create(r.audioSessionId)?.enabled = true
       } catch (_: Throwable) {}
     }
-    if (AutomaticGainControl.isAvailable()) {
+    if (usingBtAudio && AutomaticGainControl.isAvailable()) {
       try {
         AutomaticGainControl.create(r.audioSessionId)?.enabled = true
       } catch (_: Throwable) {}
@@ -2347,11 +2299,13 @@ class GeminiLive(private val ctx: Context) {
     val t =
       Thread {
         try {
-          val buf = ByteArray(1600)
-          val zeroSilence = ByteArray(1600)
+          val buf = ByteArray(1280) // 40ms @ 16kHz PCM-16 mono (Google Live optimal low-latency chunk)
+          val zeroSilence = ByteArray(1280)
           var lastVoiceMs = 0L
           var silentFrameCounter = 0
           var consecutiveLoudMicChunks = 0
+          var bossActiveSpeechThisTurn = false
+          val preRollRing = ArrayDeque<ByteArray>(2)
           val bargeVerifyStream = java.io.ByteArrayOutputStream()
 
           // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
@@ -2377,6 +2331,10 @@ class GeminiLive(private val ctx: Context) {
             ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
           }
 
+          fun sendAudioStreamEndFlush() {
+            ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
+          }
+
           while (!stopped) {
             val activeRec = synchronized(recLock) { rec } ?: break
             val n =
@@ -2387,7 +2345,7 @@ class GeminiLive(private val ctx: Context) {
                 -1
               }
             if (n < 0) break
-            if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0L) < 260_000L) {
+            if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0L) < 48_000L) {
               val now = System.currentTimeMillis()
               if (now - lastVmRefreshAt > 400L) {
                 lastVmRefreshAt = now
@@ -2410,13 +2368,12 @@ class GeminiLive(private val ctx: Context) {
 
               val rawRms = computeRms16Bit(buf, n)
               val whisperBoostOn = Store.whisperBoost(ctx)
-              val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
 
               val isSpeakerAudiblyPlayingNow =
                 synchronized(trackLock) {
                   val activeTrack = track
                   val head = (activeTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
-                  val recentlyWrote = lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) <= 950L
+                  val recentlyWrote = lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) <= 450L
                   activeTrack != null &&
                     activeTrack.state == AudioTrack.STATE_INITIALIZED &&
                     activeTrack.playState == AudioTrack.PLAYSTATE_PLAYING &&
@@ -2436,16 +2393,16 @@ class GeminiLive(private val ctx: Context) {
                 consecutiveLoudMicChunks = 0
               }
 
-              // Multi-chunk Voice Match barge-in check (~100ms+) so Boss can interrupt A-to-Z immediately
+              // Multi-chunk Voice Match barge-in check (~80ms+) so Boss can interrupt A-to-Z immediately
               var voiceMatchBargeInNow = false
               if ((isSpeakerAudiblyPlayingNow || ttsSpeakingNow) && voiceMatchActive && vmProfile != null && vmProfile.isComplete && rawRms >= 550.0) {
                 bargeVerifyStream.write(buf, 0, n)
-                if (bargeVerifyStream.size() >= 3200) {
+                if (bargeVerifyStream.size() >= 2560) {
                   val res = VoiceMatchEngine.verifyPcmChunk(vmProfile, bargeVerifyStream.toByteArray(), vmSensitivity)
                   if (res?.matched == true) {
                     voiceMatchBargeInNow = true
                     bargeVerifyStream.reset()
-                  } else if (bargeVerifyStream.size() >= 9600) {
+                  } else if (bargeVerifyStream.size() >= 7680) {
                     bargeVerifyStream.reset()
                   }
                 }
@@ -2472,11 +2429,16 @@ class GeminiLive(private val ctx: Context) {
                 interruptSpeakerForBoss()
               }
 
+              // Capture raw voice frame BEFORE DSP filtering so VoiceMatch compares natural mic timbre
+              val vmSampleChunk = if (voiceMatchActive && !isSoftMuted) buf.copyOf(n) else null
+
               // Apply real-time software DSP Noise Cancellation on BOTH Bluetooth and Phone Mic!
               val dspResult =
                 if (isSoftMuted) {
                   buf.fill(0, 0, n)
                   lastVoiceMs = 0L
+                  bossActiveSpeechThisTurn = false
+                  preRollRing.clear()
                   LxrAudioNoiseSuppressor.FrameResult(0.0, 45.0, false)
                 } else {
                   micNoiseSuppressor.processFrameInPlace(
@@ -2487,33 +2449,65 @@ class GeminiLive(private val ctx: Context) {
                   )
                 }
 
-              val vmSampleChunk = if (voiceMatchActive && !isSoftMuted) buf.copyOf(n) else null
               val hasSpeech = !isSoftMuted && dspResult.isSpeechActive
+              val isTurnOnset = hasSpeech && !bossActiveSpeechThisTurn
               if (hasSpeech) {
+                bossActiveSpeechThisTurn = true
                 lastVoiceMs = now
                 lastBossTurnAtMs = now
                 lastBossSpeechDetectedMs = now
+              } else if (!isSoftMuted && !bossActiveSpeechThisTurn) {
+                if (preRollRing.size >= 2) preRollRing.removeFirst()
+                preRollRing.addLast(buf.copyOf(n))
               }
 
-              // Clean 320ms hangover + pure zero-silence thereafter so Gemini VAD triggers in ~1-1.4s cleanly!
-              val prevHangover = lastVoiceMs > 0L && !hasSpeech
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
-              if (prevHangover && !withinHangover && lastBossTurnAtMs > 0L && (now - lastBossTurnAtMs) in LiveVadConfig.MIC_HANGOVER_MS..1600L) {
-                waitingServerReply = true
-              }
+              val withinEndOfTurnSilence =
+                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= 640L
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
-              val shouldSend =
-                if (withinHangover) true
-                else (!lowNet || (silentFrameCounter % 2 == 0))
+
+              // When Boss stops speaking and post-hangover silence reaches ~640ms -> flush audio stream immediately so Gemini replies right away!
+              val justEndedTurn =
+                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > 640L
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
-                if (shouldSend) {
-                  if (withinHangover) sendAudioPcm(buf, n)
-                  else sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
+                if (justEndedTurn) {
+                  sendAudioStreamEndFlush()
+                  bossActiveSpeechThisTurn = false
+                  waitingServerReply = true
+                  lastBossTurnAtMs = now
+                  silentFrameCounter = 1
+                } else if (withinHangover) {
+                  if (isTurnOnset && preRollRing.isNotEmpty()) {
+                    for (pre in preRollRing) sendAudioPcm(pre, pre.size)
+                    preRollRing.clear()
+                  }
+                  sendAudioPcm(buf, n)
+                } else if (withinEndOfTurnSilence) {
+                  // Stream 100% continuous silence frames during VAD window (never skip frames) so server clock advances at 1.0x
+                  sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
+                } else if (silentFrameCounter % 50 == 0) {
+                  // Minimal 2s idle keepalive so WebSocket queue stays 0 bytes
+                  sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                 }
               } else {
-                if (isSoftMuted || !withinHangover) {
+                if (justEndedTurn) {
+                  sendAudioStreamEndFlush()
+                  bossActiveSpeechThisTurn = false
+                  waitingServerReply = true
+                  lastBossTurnAtMs = now
+                  silentFrameCounter = 1
+                } else if (isSoftMuted || !withinHangover) {
+                  if (gateState == 1 && !isSoftMuted && onsetChunks.isNotEmpty() && verifyStream.size() >= 1600) {
+                    val quickRes = VoiceMatchEngine.verifyPcmChunk(activeProfile, verifyStream.toByteArray(), vmSensitivity)
+                    if (quickRes != null && quickRes.matched) {
+                      lastBossVerifiedAtMs = now
+                      for (pendingChunk in onsetChunks) {
+                        sendAudioPcm(pendingChunk, pendingChunk.size)
+                      }
+                    }
+                  }
                   if (gateState != 0) {
                     gateState = 0
                     onsetChunks.clear()
@@ -2523,15 +2517,17 @@ class GeminiLive(private val ctx: Context) {
                     rejectedSpeechChunks = 0
                     RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
                   }
-                  if (silentFrameCounter % 2 == 0) {
+                  if (withinEndOfTurnSilence) {
+                    sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
+                  } else if (silentFrameCounter % 50 == 0) {
                     sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
                 } else {
                   val sendChunk = buf.copyOf(n)
                   val minOnset = vmSensitivity.onsetMinChunks
                   val rejectAt = vmSensitivity.rejectAfterChunks
-                  // Boss session grace window (~2.4s): follow-up short/soft words pass immediately unless another speaker takes over
-                  if (gateState == 0 && lastBossVerifiedAtMs > 0L && (now - lastBossVerifiedAtMs) <= 2400L) {
+                  // Boss session grace window (~4.5s): follow-up words pass immediately unless another speaker takes over
+                  if (gateState == 0 && lastBossVerifiedAtMs > 0L && (now - lastBossVerifiedAtMs) <= 4500L) {
                     gateState = 2
                     consecutiveRejects = 0
                     verifyStream.reset()
@@ -2570,12 +2566,12 @@ class GeminiLive(private val ctx: Context) {
                           verifyStream.reset()
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
-                        } else if (onsetChunks.size >= 18) {
+                        } else if (onsetChunks.size >= 16) {
                           gateState = 0
                           onsetChunks.clear()
                           verifyStream.reset()
                         }
-                      } else if (onsetChunks.size >= 18) {
+                      } else if (onsetChunks.size >= 16) {
                         gateState = 0
                         onsetChunks.clear()
                         verifyStream.reset()
@@ -2613,7 +2609,7 @@ class GeminiLive(private val ctx: Context) {
                       }
                     }
                     else -> {
-                      if (silentFrameCounter % 4 == 0) {
+                      if (silentFrameCounter % 10 == 0) {
                         sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                       }
                       if (hasSpeech) {
@@ -2624,7 +2620,7 @@ class GeminiLive(private val ctx: Context) {
                         verifyStream.write(vmSampleChunk)
                         rejectedSpeechChunks++
                       }
-                      val retryChunks = (rejectAt - 2).coerceIn(5, 10)
+                      val retryChunks = (rejectAt - 2).coerceIn(4, 8)
                       if (rejectedSpeechChunks >= retryChunks) {
                         val res =
                           VoiceMatchEngine.verifyPcmChunk(
