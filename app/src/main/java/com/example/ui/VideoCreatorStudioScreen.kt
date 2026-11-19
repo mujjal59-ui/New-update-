@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -62,7 +64,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,11 +85,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.service.RiyaVoiceManager
 import com.example.video.DurationPreset
 import com.example.video.MotionChoreography
+import com.example.video.OpenMontageFrameworkBridge
 import com.example.video.PipelineRunStatus
 import com.example.video.ProductionToolTab
 import com.example.video.TalkingCharacterPreset
 import com.example.video.UserMediaKind
 import com.example.video.VideoAspectRatio
+import com.example.video.VideoProductionMode
 import com.example.video.VideoResolutionPreset
 import com.example.video.VideoStudioCatalog
 import com.example.video.VideoStudioUiState
@@ -243,6 +249,39 @@ fun VideoCreatorStudioScreen(
       onDismiss = { vm.setShowPreviewDialog(false) },
     )
   }
+
+  state.pendingPaidProviderConsentId?.let { pendingId ->
+    val provider = OpenMontageFrameworkBridge.findProvider(pendingId)
+    if (provider != null) {
+      AlertDialog(
+        onDismissRequest = { vm.declinePaidProviderConsent() },
+        containerColor = CYBER_SURFACE,
+        title = {
+          Text("Paid API অনুমতি প্রয়োজন (${provider.displayName})", color = CYBER_AMBER, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(provider.availabilityNoteBn, color = Color.White, fontSize = 12.sp)
+            Text("প্রয়োজনীয় API Key: ${provider.requiredEnvVar}", color = CYBER_CYAN, fontSize = 11.5.sp)
+            Text("আপনার স্পষ্ট অনুমতি ছাড়া LXR--AI কখনো কোনো Paid API ব্যবহার করে না।", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+          }
+        },
+        confirmButton = {
+          Button(
+            onClick = { vm.confirmPaidProviderConsent(provider.id) },
+            colors = ButtonDefaults.buttonColors(containerColor = CYBER_AMBER, contentColor = Color.Black),
+          ) {
+            Text("অনুমতি দিন", fontWeight = FontWeight.Bold)
+          }
+        },
+        dismissButton = {
+          TextButton(onClick = { vm.declinePaidProviderConsent() }) {
+            Text("ফ্রি মোডে থাকুন", color = CYBER_CYAN)
+          }
+        },
+      )
+    }
+  }
 }
 
 @Composable
@@ -317,12 +356,20 @@ private fun OneLinePromptCard(
 
     // Play-compliant Gallery Photo / Video / Screenshot / Audio Picker
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-      OutlinedButton(onClick = onPickVisuals, modifier = Modifier.weight(1f).testTag("pick_gallery_media_btn")) {
+      OutlinedButton(
+        onClick = onPickVisuals,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.weight(1f).testTag("pick_gallery_media_btn"),
+      ) {
         Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
         Text("+ ছবি/ভিডিও/স্ক্রিনশট", color = CYBER_AMBER, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      OutlinedButton(onClick = onPickAudio, modifier = Modifier.weight(1f).testTag("pick_custom_audio_btn")) {
+      OutlinedButton(
+        onClick = onPickAudio,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.weight(1f).testTag("pick_custom_audio_btn"),
+      ) {
         Icon(Icons.Filled.AudioFile, contentDescription = null, tint = Color(0xFFE879F9), modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
         Text("+ অডিও/ভয়েস", color = Color(0xFFE879F9), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -368,19 +415,46 @@ private fun OneLinePromptCard(
       }
     }
 
-    Button(
-      onClick = { vm.startFullPipeline() },
-      enabled = !isRunning,
-      modifier = Modifier.fillMaxWidth().testTag("generate_full_video_btn"),
-      colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
-    ) {
-      Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
-      Spacer(Modifier.width(8.dp))
-      Text(
-        if (isRunning) "রিয়েল MP4 ভিডিও তৈরি হচ্ছে..." else "সম্পূর্ণ রিয়েল ভিডিও তৈরি করুন (লিমিট নেই)",
-        fontWeight = FontWeight.Bold,
-        fontSize = 13.sp,
-      )
+    // Production Modes row (A. Real AI Video, B. Motion Graphics, C. Real Footage, Hybrid Pro)
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      VideoProductionMode.entries.forEach { mode ->
+        FilterChip(
+          selected = state.settings.productionMode == mode,
+          onClick = { vm.selectProductionMode(mode) },
+          modifier = Modifier.testTag("mode_chip_${mode.name}"),
+          label = { Text(mode.labelBn, fontSize = 10.5.sp) },
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = CYBER_BLUE,
+            selectedLabelColor = Color.White,
+          ),
+        )
+      }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+      Button(
+        onClick = { vm.startFullPipeline() },
+        enabled = !isRunning,
+        modifier = Modifier.weight(1f).testTag("generate_full_video_btn"),
+        colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
+      ) {
+        Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+          if (isRunning) "রিয়েল MP4 তৈরি হচ্ছে..." else "রিয়েল ভিডিও তৈরি করুন",
+          fontWeight = FontWeight.Bold,
+          fontSize = 12.5.sp,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      OutlinedButton(
+        onClick = { vm.launch30SecondShowcaseTest() },
+        enabled = !isRunning,
+        modifier = Modifier.testTag("test_30s_showcase_btn"),
+      ) {
+        Text("৩০সে. টেস্ট", color = CYBER_AMBER, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+      }
     }
   }
 }
@@ -575,6 +649,9 @@ private fun ToolGridCard(
 @Composable
 private fun OpenMontageIntegrationCard(state: VideoStudioUiState, vm: VideoStudioViewModel) {
   val cap = state.capabilityReport
+  var pexelsInput by remember(state.settings.pexelsApiKey) { mutableStateOf(state.settings.pexelsApiKey) }
+  var pixabayInput by remember(state.settings.pixabayApiKey) { mutableStateOf(state.settings.pixabayApiKey) }
+
   Column(
     modifier = Modifier
       .fillMaxWidth()
@@ -587,21 +664,61 @@ private fun OpenMontageIntegrationCard(state: VideoStudioUiState, vm: VideoStudi
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
       Icon(Icons.Filled.MovieFilter, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(18.dp))
       Spacer(Modifier.width(6.dp))
-      Text("৩. OPENMONTAGE FRAMEWORK (১০০% ফ্রি)", color = CYBER_AMBER, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+      Text("৩. OPENMONTAGE PROVIDER REGISTRY", color = CYBER_AMBER, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
       TextButton(onClick = { vm.setShowOpenMontageDetails(!state.showOpenMontageDetails) }) {
         Text(if (state.showOpenMontageDetails) "লুকান" else "বিস্তারিত", color = CYBER_CYAN, fontSize = 11.sp)
       }
     }
 
+    Text(cap.aiVideoApiDisclosureBn, color = CYBER_AMBER, fontSize = 11.sp)
     Text(cap.onDeviceEncoderNote, color = CYBER_GREEN, fontSize = 11.5.sp)
-    Text(cap.piperTtsNote, color = Color(0xFFE2E8F0), fontSize = 11.sp)
     Text(cap.ffmpegNote, color = Color(0xFFCBD5E1), fontSize = 11.sp)
+
+    // Honest Provider Registry Chips (Free Local / Free No-Key vs Paid API requiring Consent)
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      state.videoProviders.forEach { provider ->
+        val selected = state.settings.selectedVideoProviderId == provider.id
+        val isPaid = provider.billingTier.isPaidApi
+        FilterChip(
+          selected = selected,
+          onClick = { vm.requestSelectVideoProvider(provider.id) },
+          modifier = Modifier.testTag("provider_chip_${provider.id}"),
+          label = { Text("${provider.displayName.substringBefore(" (")} [${provider.billingTier.badgeText}]", fontSize = 10.sp) },
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = if (isPaid) CYBER_RED else CYBER_GREEN,
+            selectedLabelColor = Color.Black,
+          ),
+        )
+      }
+    }
 
     AnimatedVisibility(visible = state.showOpenMontageDetails) {
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Repo: ${cap.frameworkRepoUrl}", color = CYBER_CYAN, fontSize = 11.sp)
-        Text("Remotion নোট: ${cap.remotionNote}", color = CYBER_AMBER, fontSize = 11.sp)
-        Text("Stock Media নোট: ${cap.stockMediaNote}", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+        Text("Remotion/GSAP/Manim: ${cap.remotionNote}", color = CYBER_AMBER, fontSize = 11.sp)
+        Text("Real Footage: ${cap.stockMediaNote}", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+
+        OutlinedTextField(
+          value = pexelsInput,
+          onValueChange = {
+            pexelsInput = it
+            vm.updateFreeStockApiKeys(pexelsInput, pixabayInput)
+          },
+          label = { Text("ঐচ্ছিক ফ্রি Pexels API Key (ফ্রি স্টক HD ভিডিও)", fontSize = 10.5.sp) },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+          value = pixabayInput,
+          onValueChange = {
+            pixabayInput = it
+            vm.updateFreeStockApiKeys(pexelsInput, pixabayInput)
+          },
+          label = { Text("ঐচ্ছিক ফ্রি Pixabay API Key (ফ্রি স্টক ভিডিও)", fontSize = 10.5.sp) },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+        )
+
         state.activeProject?.pipelineYaml?.takeIf { it.isNotBlank() }?.let { yaml ->
           Box(
             modifier = Modifier

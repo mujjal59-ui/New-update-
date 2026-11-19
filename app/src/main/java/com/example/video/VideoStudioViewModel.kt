@@ -29,11 +29,17 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
   init {
     refreshCapabilities()
     loadBundledAssets()
+    _uiState.update { it.copy(videoProviders = OpenMontageFrameworkBridge.VIDEO_GENERATION_PROVIDER_REGISTRY) }
   }
 
   fun refreshCapabilities() {
     val report = OpenMontageFrameworkBridge.inspectCapabilities(ctx)
-    _uiState.update { it.copy(capabilityReport = report) }
+    _uiState.update {
+      it.copy(
+        capabilityReport = report,
+        videoProviders = OpenMontageFrameworkBridge.VIDEO_GENERATION_PROVIDER_REGISTRY,
+      )
+    }
   }
 
   fun loadBundledAssets() {
@@ -72,6 +78,49 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
 
   fun clearSelectedBundledAssets() {
     _uiState.update { it.copy(selectedBundledAssetFiles = emptyList()) }
+  }
+
+  fun selectProductionMode(mode: VideoProductionMode) {
+    updateSettings { it.copy(productionMode = mode) }
+  }
+
+  fun requestSelectVideoProvider(providerId: String) {
+    val entry = OpenMontageFrameworkBridge.findProvider(providerId) ?: return
+    if (entry.billingTier.isPaidApi && !_uiState.value.settings.paidProviderConsentGranted) {
+      _uiState.update { it.copy(pendingPaidProviderConsentId = providerId) }
+    } else {
+      updateSettings { it.copy(selectedVideoProviderId = providerId) }
+    }
+  }
+
+  fun confirmPaidProviderConsent(providerId: String, pexelsKey: String = "", pixabayKey: String = "") {
+    updateSettings { st ->
+      st.copy(
+        selectedVideoProviderId = providerId,
+        paidProviderConsentGranted = true,
+        pexelsApiKey = pexelsKey.ifBlank { st.pexelsApiKey },
+        pixabayApiKey = pixabayKey.ifBlank { st.pixabayApiKey },
+      )
+    }
+    _uiState.update {
+      it.copy(
+        pendingPaidProviderConsentId = null,
+        lastActionBanner = "অনুমতি নিশ্চিত হয়েছে: $providerId নির্বাচিত (API Key প্রয়োজন হবে)।",
+      )
+    }
+  }
+
+  fun declinePaidProviderConsent() {
+    _uiState.update {
+      it.copy(
+        pendingPaidProviderConsentId = null,
+        lastActionBanner = "ফ্রি-ফার্স্ট নীতি সক্রিয়: কোনো Paid API ব্যবহার করা হয়নি।",
+      )
+    }
+  }
+
+  fun updateFreeStockApiKeys(pexelsKey: String, pixabayKey: String) {
+    updateSettings { it.copy(pexelsApiKey = pexelsKey.trim(), pixabayApiKey = pixabayKey.trim()) }
   }
 
   fun selectMotionChoreography(motion: MotionChoreography) {
@@ -128,6 +177,26 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
     pipelineJob = viewModelScope.launch(Dispatchers.IO) {
       runPipelineInternal(startFromStageIndex = 0, allowNetworkCloudTry = allowNetworkCloudTry)
     }
+  }
+
+  fun launch30SecondShowcaseTest(allowNetworkCloudTry: Boolean = true) {
+    _uiState.update {
+      it.copy(
+        promptInput = "সৌরশক্তি ও ভবিষ্যতের পরিবেশ: দুটি চরিত্র হেঁটে-দৌড়ে বাংলা ও ইংরেজিতে কথা বলছে, সাথে 3D অ্যানিমেটেড চার্ট, কাইনেটিক টাইপোগ্রাফি ও প্রাকৃতিক দৃশ্য!",
+        selectedVideoType = VideoType.ANIMATION,
+        selectedDurationPreset = DurationPreset.SHORT_15_60S,
+        customDurationSec = 30,
+        settings = it.settings.copy(
+          productionMode = VideoProductionMode.HYBRID_ALL_THREE,
+          subtitlesEnabled = true,
+          backgroundMusicEnabled = true,
+          voiceoverEnabled = true,
+          lipSyncEnabled = true,
+          preferredMotionStyle = MotionChoreography.AUTO,
+        ),
+      )
+    }
+    startFullPipeline(allowNetworkCloudTry = allowNetworkCloudTry)
   }
 
   fun pausePipeline() {
@@ -282,17 +351,25 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { it.copy(activeProject = workingProj) }
       }
 
-      // Stage 5: Visual & Animation Scene Artwork Generation
+      // Stage 5: Free Real Stock Footage + Motion Graphics + Animated Character Preview Frames
       currentStage = PipelineStage.IMAGE_VISUAL_GEN
       checkpointWaitIfPaused()
-      updateStageProgress(currentStage, completed, script = 1f, scene = 0.8f, image = 0.4f, msg = "৫/১২: AI অ্যানিমেশন দৃশ্য ও চরিত্রের ফ্রেম তৈরি হচ্ছে...")
+      updateStageProgress(currentStage, completed, script = 1f, scene = 0.8f, image = 0.35f, msg = "৫/১২: ফ্রি স্টক ভিডিও, আর্টিকুলেটেড চরিত্র ও মোশন গ্রাফিক্স প্রস্তুত হচ্ছে...")
+      val scenesWithStock = VideoScriptAndMediaGenerator.attachRealStockFootageToScenes(
+        context = ctx,
+        scenes = workingProj.scenes,
+        settings = workingProj.settings,
+        allowNetworkCloudTry = allowNetworkCloudTry,
+      )
+      workingProj = workingProj.copy(scenes = scenesWithStock)
       val framePaths = AndroidVideoRendererAndExporter.renderSceneThumbnails(ctx, workingProj)
       completed.add(PipelineStage.IMAGE_VISUAL_GEN)
+      val stockHits = scenesWithStock.count { it.realFootageSourceLabel.isNotBlank() }
       workingProj = workingProj.copy(
         previewFramePaths = framePaths,
-        logs = workingProj.logs + "[Visuals] Rendered ${framePaths.size} animated scene canvases",
+        logs = workingProj.logs + "[Visuals] Rendered ${framePaths.size} animated scenes • Real free stock matched: $stockHits",
       )
-      updateStageProgress(currentStage, completed, script = 1f, scene = 0.9f, image = 1f, msg = "৫/১২: দৃশ্যসমূহের ভিজ্যুয়াল ও অ্যানিমেশন ফ্রেম প্রস্তুত ✓")
+      updateStageProgress(currentStage, completed, script = 1f, scene = 0.9f, image = 1f, msg = "৫/১২: চলমান দৃশ্য ও মোশন গ্রাফিক্স ফ্রেম প্রস্তুত ✓")
       _uiState.update { it.copy(activeProject = workingProj) }
 
       // Stage 6: Free Voiceover Generation (7 Google Voice Models + Offline Piper/Formant Fallback)
@@ -375,10 +452,17 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       }
       completed.add(PipelineStage.FINAL_RENDER)
 
-      // Stage 12: Multi-format Export (MP4, TXT, WAV, SRT, OpenMontage ZIP)
+      // Stage 12: Video Quality Gate Verification + Multi-format Export
       currentStage = PipelineStage.MP4_EXPORT
       checkpointWaitIfPaused()
-      updateStageProgress(currentStage, completed, script = 1f, scene = 1f, image = 1f, voice = 1f, editing = 1f, rendering = 0.92f, msg = "১২/১২: Downloads/LXR-VideoStudio ফোল্ডারে সব ফাইল সেভ হচ্ছে...")
+      updateStageProgress(currentStage, completed, script = 1f, scene = 1f, image = 1f, voice = 1f, editing = 1f, rendering = 0.90f, msg = "১২/১২: Quality Gate মোশন যাচাই ও ফাইল এক্সপোর্ট হচ্ছে...")
+      val qualityReport = VideoQualityGate.evaluateRenderedVideo(
+        context = ctx,
+        project = workingProj,
+        mp4File = mp4Outcome.mp4File,
+        voicePcm = voiceRes.pcm24kMono,
+        sampleRate = voiceRes.sampleRate,
+      )
       val voiceWavBytes = VideoScriptAndMediaGenerator.encodePcm16MonoToWavBytes(
         voiceRes.pcm24kMono,
         voiceRes.sampleRate,
@@ -398,8 +482,11 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       val termuxPath = File(artifacts.workspaceDirPath, "lxr_openmontage_termux.sh")
       val finalProj = workingProj.copy(
         artifacts = artifacts,
+        qualityReport = qualityReport,
         termuxScript = if (termuxPath.exists()) termuxPath.readText(Charsets.UTF_8) else "",
-        logs = workingProj.logs + "[Export] Saved MP4 (${artifacts.mp4SizeBytes / 1024} KB) + TXT + WAV + SRT + OpenMontage ZIP to ${artifacts.publicDownloadFolderLabel}",
+        logs = workingProj.logs +
+          "[QualityGate] ${qualityReport.verdictBn}" +
+          "[Export] Saved MP4 (${artifacts.mp4SizeBytes / 1024} KB) + TXT + WAV + SRT + OpenMontage ZIP to ${artifacts.publicDownloadFolderLabel}",
       )
 
       _uiState.update { st ->
@@ -416,10 +503,10 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
             sceneProgress = 1f,
             editingProgress = 1f,
             renderingProgress = 1f,
-            statusMessageBn = "ভিডিও তৈরি সম্পন্ন! ${artifacts.publicDownloadFolderLabel}-এ সেভ হয়েছে ✓",
+            statusMessageBn = "${qualityReport.verdictBn} • ${artifacts.publicDownloadFolderLabel}",
             completedStages = completed,
           ),
-          lastActionBanner = "ভিডিও, স্ক্রিপ্ট, ভয়েস, সাবটাইটেল ও প্রজেক্ট সেভ হয়েছে ✓",
+          lastActionBanner = qualityReport.verdictBn,
         )
       }
     } catch (c: CancellationException) {

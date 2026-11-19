@@ -14,17 +14,145 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-// Integrates the OpenMontage architecture (https://github.com/Open-Montage-app/OpenMontage):
+// Aligns with upstream OpenMontage architecture (https://github.com/OpenMontageInc/OpenMontage):
+// - tools/provider_routing.py + tools/provider_pricing.py (truthful Paid vs Free-first provider registry)
 // - pipeline_defs (12-stage checkpointed production YAML workflows)
 // - skills markdown (Director, Scriptwriter, Character Designer, Voice Director, Editor)
-// - checkpoint.py + openmontage_runner.py (FFmpeg + Piper TTS + Free stock)
-// - remotion/OpenMontageVideo.tsx + package.json
-// - Termux bash execution with automatic on-device MediaCodec/Canvas fallback
+// - Remotion (.tsx), GSAP HyperFrames (.html), Manim (.py), & Termux FFmpeg + on-device 24fps H.264/AAC
 object OpenMontageFrameworkBridge {
 
-  const val OPENMONTAGE_REPO = "https://github.com/Open-Montage-app/OpenMontage"
+  const val OPENMONTAGE_REPO = "https://github.com/OpenMontageInc/OpenMontage"
   private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
   private const val TERMUX_ACTION_RUN = "com.termux.RUN_COMMAND"
+
+  // Honest registry aligned with OpenMontage provider_pricing.py & video provider tools.
+  // NEVER marks a Paid API or GPU-only cloud endpoint as Free.
+  val VIDEO_GENERATION_PROVIDER_REGISTRY: List<OpenMontageVideoProviderEntry> = listOf(
+    OpenMontageVideoProviderEntry(
+      id = "lxr_articulated_24fps",
+      displayName = "LXR 24fps Articulated & Motion Engine",
+      openMontageToolName = "on_device_canvas_24fps_h264",
+      billingTier = ProviderBillingTier.FREE_ON_DEVICE,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "",
+      availabilityNoteBn = "ফোনেই ১০০% ফ্রি ও অফলাইন: ২৪fps আর্টিকুলেটেড চরিত্র, লিপ-সিঙ্ক, মোশন গ্রাফিক্স ও H.264/AAC MP4 রেন্ডার",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "stock_wikimedia_ia_nasa",
+      displayName = "Wikimedia Commons + Internet Archive + NASA",
+      openMontageToolName = "stock_sources/{wikimedia,archive_org,nasa}",
+      billingTier = ProviderBillingTier.FREE_NO_KEY,
+      supportsTextToVideo = false,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "",
+      availabilityNoteBn = "কোনো API Key ছাড়াই ১০০% ফ্রি বাস্তব ভিডিও/ফুটেজ ও পাবলিক ডোমেইন মিডিয়া সোর্স",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "stock_pexels_pixabay",
+      displayName = "Pexels & Pixabay Free Stock Video",
+      openMontageToolName = "pexels_video / pixabay_video",
+      billingTier = ProviderBillingTier.FREE_STOCK_KEY,
+      supportsTextToVideo = false,
+      supportsImageToVideo = false,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "PEXELS_API_KEY / PIXABAY_API_KEY",
+      availabilityNoteBn = "বিনামূল্যে Pexels বা Pixabay API Key দিলে রিয়েলস্টিক HD স্টক ভিডিও ক্লিপ যুক্ত হবে",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "veo",
+      displayName = "Google Veo (veo_video.py)",
+      openMontageToolName = "veo_video",
+      billingTier = ProviderBillingTier.PAID_API,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = false,
+      requiredEnvVar = "GOOGLE_API_KEY / FAL_KEY",
+      availabilityNoteBn = "Paid API (~$0.15-$0.40/sec): ব্যবহারের আগে আপনার অনুমতি ও বিলিং API Key প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "kling",
+      displayName = "Kling Video (kling_video.py)",
+      openMontageToolName = "kling_video",
+      billingTier = ProviderBillingTier.PAID_API,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "KLING_API_KEY / FAL_KEY",
+      availabilityNoteBn = "Paid API (~$0.07-$0.14/sec): ব্যবহারের আগে আপনার অনুমতি ও API Key প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "runway",
+      displayName = "Runway Gen-3 / Gen-4 (runway_video.py)",
+      openMontageToolName = "runway_video",
+      billingTier = ProviderBillingTier.PAID_API,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "RUNWAY_API_KEY",
+      availabilityNoteBn = "Paid API (~$0.05-$0.10/sec): ব্যবহারের আগে আপনার অনুমতি ও API Key প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "hailuo",
+      displayName = "Hailuo / MiniMax Video (minimax_video.py)",
+      openMontageToolName = "minimax_video",
+      billingTier = ProviderBillingTier.PAID_API,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = false,
+      requiredEnvVar = "MINIMAX_API_KEY / FAL_KEY",
+      availabilityNoteBn = "Paid API (~$0.05/sec): ব্যবহারের আগে আপনার অনুমতি ও API Key প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "seedance",
+      displayName = "ByteDance Seedance (seedance_video.py)",
+      openMontageToolName = "seedance_video",
+      billingTier = ProviderBillingTier.PAID_API,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = false,
+      requiredEnvVar = "ARK_API_KEY / FAL_KEY",
+      availabilityNoteBn = "Paid API (~$0.04-$0.08/sec): ব্যবহারের আগে আপনার অনুমতি ও API Key প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "wan",
+      displayName = "Wan 2.1 / 2.2 (wan_video.py)",
+      openMontageToolName = "wan_video",
+      billingTier = ProviderBillingTier.OPEN_WEIGHT_GPU_OR_PAID,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = false,
+      requiredEnvVar = "FAL_KEY / REPLICATE_API_TOKEN (অথবা 16GB+ VRAM GPU)",
+      availabilityNoteBn = "ওপেন-ওয়েট মডেল, কিন্তু Android ফোনে সরাসরি চলে না — Desktop GPU বা Paid Cloud API লাগে",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "ltx_video",
+      displayName = "LTX Video (ltx_api_video.py / ltx_video_local.py)",
+      openMontageToolName = "ltx_video",
+      billingTier = ProviderBillingTier.OPEN_WEIGHT_GPU_OR_PAID,
+      supportsTextToVideo = true,
+      supportsImageToVideo = true,
+      supportsVideoToVideo = true,
+      requiredEnvVar = "LTX_API_KEY / FAL_KEY (অথবা 12GB+ VRAM GPU)",
+      availabilityNoteBn = "ওপেন-ওয়েট মডেল (Desktop GPU diffusers প্রয়োজন), ক্লাউড API Paid — অনুমতির প্রয়োজন",
+    ),
+    OpenMontageVideoProviderEntry(
+      id = "hunyuan_video",
+      displayName = "Tencent Hunyuan Video (hunyuan_video.py)",
+      openMontageToolName = "hunyuan_video",
+      billingTier = ProviderBillingTier.OPEN_WEIGHT_GPU_OR_PAID,
+      supportsTextToVideo = true,
+      supportsImageToVideo = false,
+      supportsVideoToVideo = false,
+      requiredEnvVar = "FAL_KEY / REPLICATE_API_TOKEN (অথবা 24GB+ VRAM GPU)",
+      availabilityNoteBn = "ওপেন-ওয়েট মডেল (24GB+ VRAM GPU প্রয়োজন), ক্লাউড API Paid — অনুমতির প্রয়োজন",
+    ),
+  )
+
+  fun findProvider(providerId: String): OpenMontageVideoProviderEntry? =
+    VIDEO_GENERATION_PROVIDER_REGISTRY.firstOrNull { it.id == providerId }
 
   fun inspectCapabilities(context: Context): OpenMontageCapabilityReport {
     val termuxInstalled = TermuxBuildBridge.isPackageInstalled(context, TermuxBuildBridge.TERMUX_PACKAGE)
@@ -33,16 +161,16 @@ object OpenMontageFrameworkBridge {
 
     val encoderNote =
       if (hasHardwareH264) {
-        "Android MediaCodec H.264/AVC + MediaMuxer + Canvas 100% ফ্রি ও অফলাইন প্রস্তুত ✓"
+        "Android MediaCodec H.264/AVC (EGL PTS-Synced 24fps) + Articulated Rig প্রস্তুত ✓"
       } else {
         "ISO-BMFF পোর্টেবল MP4 কম্পোজিটর ও OpenMontage স্ক্রিপ্ট প্রস্তুত ✓"
       }
 
     val ffmpegNote =
       if (termuxInstalled) {
-        "Termux পাওয়া গেছে ✓ — 'pkg install ffmpeg python piper' দিয়ে দ্রুত FFmpeg রেন্ডারিং চালানো যাবে (না থাকলে অন-ডিভাইস রেন্ডারিং চলবে)।"
+        "Termux পাওয়া গেছে ✓ — 'pkg install ffmpeg python manim' দিয়ে ডেস্কটপ-মানের FFmpeg + Manim চালানো যাবে।"
       } else {
-        "Termux ঐচ্ছিক — ফ্রি অন-ডিভাইস MediaCodec + Canvas রেন্ডারার ডিফল্টভাবে সক্রিয় ✓।"
+        "Termux ঐচ্ছিক — ফ্রি অন-ডিভাইস 24fps MediaCodec + Articulated + Motion Graphics রেন্ডারার সক্রিয় ✓।"
       }
 
     return OpenMontageCapabilityReport(
@@ -68,23 +196,33 @@ object OpenMontageFrameworkBridge {
     val w = if (project.settings.resolution.is1080p) project.settings.aspectRatio.width1080 else project.settings.aspectRatio.width720
     val h = if (project.settings.resolution.is1080p) project.settings.aspectRatio.height1080 else project.settings.aspectRatio.height720
     val typeLabel = project.customTypeLabel.ifBlank { project.videoType.labelEn }
+    val provider = findProvider(project.settings.selectedVideoProviderId)
+    val paidAllowed = project.settings.paidProviderConsentGranted && (provider?.billingTier?.isPaidApi == true)
     return buildString {
-      appendLine("# OpenMontage Agentic Production Pipeline (100% Free-Only Mode)")
+      appendLine("# OpenMontage Agentic Production Pipeline (Free-First Architecture)")
       appendLine("# Upstream Framework: $OPENMONTAGE_REPO")
       appendLine("name: \"${project.slug}\"")
       appendLine("title: \"${project.title.replace("\"", "'")}\"")
       appendLine("video_type: \"$typeLabel\"")
+      appendLine("production_mode: \"${project.settings.productionMode.name}\"")
       appendLine("aspect_ratio: \"${project.settings.aspectRatio.ratioTag}\"")
       appendLine("resolution: \"${w}x${h}\"")
       appendLine("fps: 24")
-      appendLine("free_only_policy: true")
-      appendLine("paid_apis_allowed: false")
+      appendLine("free_only_policy: ${!paidAllowed}")
+      appendLine("paid_apis_allowed: $paidAllowed")
+      appendLine("selected_video_provider: \"${project.settings.selectedVideoProviderId}\"")
+      appendLine("motion_graphics_engines: [\"remotion\", \"gsap_hyperframes\", \"manim\", \"ffmpeg\"]")
       appendLine("providers:")
       appendLine("  llm_script: [\"firebase_ai_free\", \"lxr_offline_storyboard\"]")
       appendLine("  voice_over: [\"gemini_free_tts(${project.settings.selectedVoiceId})\", \"piper_tts_local\", \"lxr_formant_synth\"]")
-      appendLine("  visuals: [\"lxr_vector_2d_3d_canvas\", \"wikimedia_cc0_free_stock\", \"ffmpeg_ken_burns\"]")
+      appendLine("  video_generation: [\"lxr_articulated_24fps\", \"wikimedia_ia_nasa_free_stock\", \"ffmpeg_compose\"]")
       appendLine("  music_sfx: [\"procedural_cc0_ambient_wav\", \"synthetic_transition_sfx\"]")
-      appendLine("  compositor: [\"android_mediacodec_muxer\", \"ffmpeg_cli\", \"remotion_export_bundle\"]")
+      appendLine("  compositor: [\"android_mediacodec_egl_pts\", \"ffmpeg_cli\", \"remotion_export_bundle\", \"manim_py\", \"gsap_hyperframes\"]")
+      appendLine("quality_gate:")
+      appendLine("  reject_static_slideshow: true")
+      appendLine("  verify_lip_sync_variance: true")
+      appendLine("  verify_av_sync: true")
+      appendLine("  verify_resolution_and_black_frames: true")
       appendLine("stages:")
       PipelineStage.entries.forEach { st ->
         appendLine("  - id: ${st.key}")
@@ -101,27 +239,31 @@ object OpenMontageFrameworkBridge {
     "skills/storywriter.md" to """
       # OpenMontage Skill: Storywriter (Bengali + English Free Studio)
       - Convert one-line prompt into engaging hook, rising curiosity, visual payoff, and inspiring outro.
-      - Break narration into crisp scene beats suitable for exact subtitle synchronization.
+      - Break narration into crisp scene beats suitable for exact subtitle synchronization and multi-character dialogue.
     """.trimIndent(),
     "skills/scene_director.md" to """
       # OpenMontage Skill: Scene & Camera Director
-      - Apply 9:16 portrait or 16:9 widescreen framing.
-      - Use Image-to-Video motion (Ken Burns zoom/pan), particle layers, and smooth transitions (${TransitionEffect.entries.joinToString { it.ffmpegFilter }}).
+      - Apply 9:16 portrait or 16:9 widescreen framing with parallax skies, moving background vehicles/clouds, and dynamic camera motion.
+      - Combine Real AI Character Animation, Motion Graphics, and Real Moving Stock Footage with ${TransitionEffect.entries.joinToString { it.ffmpegFilter }}.
     """.trimIndent(),
     "skills/character_designer.md" to """
-      # OpenMontage Skill: Character Designer
-      - Maintain consistent character palette, facial expressions, and role attributes across scenes.
-      - Map each character to a complementary voice model (Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat).
+      # OpenMontage Skill: Articulated Character & Multi-Actor Designer
+      - Render multi-joint body, breathing torso, tracking eyes, blinking lids, facial expressions, hand gestures, walking/running leg cycles.
+      - Support two-character conversational interaction and audio-driven lip-sync across Bengali & English speech.
     """.trimIndent(),
     "skills/voice_director.md" to """
       # OpenMontage Skill: Free Voice Director
-      - Try free Gemini TTS voices (Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat) if free quota active.
-      - NEVER call Paid APIs. Auto-fallback to Piper TTS (Termux) or LXR Phonetic Synth WAV.
+      - Try free Gemini TTS voices (Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat) when quota is active.
+      - NEVER call Paid APIs without explicit permission. Auto-fallback to Piper TTS (Termux) or LXR Phonetic Synth WAV.
+    """.trimIndent(),
+    "skills/motion_graphics_director.md" to """
+      # OpenMontage Skill: Motion Graphics (Remotion + GSAP/HyperFrames + Manim)
+      - Produce kinetic typography, animated 3D charts, step infographics, animated maps/timelines, lower-thirds, and intro/outro cards synced to audio beats.
     """.trimIndent(),
     "skills/editor_compositor.md" to """
-      # OpenMontage Skill: Timeline Editor & Compositor
-      - Sync voice WAV + procedural ambient BGM WAV + transition chimes + UTF-8 SRT subtitles.
-      - Render playable MP4 via Android MediaCodec/MediaMuxer or Termux FFmpeg.
+      # OpenMontage Skill: Timeline Editor, Compositor & Quality Gate
+      - Sync 24fps EGL-timestamped H.264 frames with voice WAV + BGM WAV + transition SFX + UTF-8 SRT subtitles.
+      - Run Video Quality Gate to verify real inter-frame motion and reject frozen slideshow output.
     """.trimIndent(),
   )
 
@@ -129,7 +271,7 @@ object OpenMontageFrameworkBridge {
     val w = if (project.settings.resolution.is1080p) project.settings.aspectRatio.width1080 else project.settings.aspectRatio.width720
     val h = if (project.settings.resolution.is1080p) project.settings.aspectRatio.height1080 else project.settings.aspectRatio.height720
     val sceneEntries = project.scenes.joinToString(",\n") { sc ->
-      "  { index: ${sc.index}, title: ${JSONObject.quote(sc.title)}, text: ${JSONObject.quote(sc.overlayHeadline)}, subtitle: ${JSONObject.quote(sc.narrationText)}, durationSec: ${sc.effectiveDurationSec}, effect: ${JSONObject.quote(sc.effectTag)} }"
+      "  { index: ${sc.index}, title: ${JSONObject.quote(sc.title)}, text: ${JSONObject.quote(sc.overlayHeadline)}, subtitle: ${JSONObject.quote(sc.narrationText)}, durationSec: ${sc.effectiveDurationSec}, effect: ${JSONObject.quote(sc.effectTag)}, motionGraphic: ${JSONObject.quote(sc.motionGraphicKind.name)} }"
     }
     return """
       import React from 'react';
@@ -140,6 +282,7 @@ object OpenMontageFrameworkBridge {
         width: $w,
         height: $h,
         fps: 24,
+        mode: ${JSONObject.quote(project.settings.productionMode.name)},
         framework: "OpenMontage + LXR--AI Studio",
       };
 
@@ -156,14 +299,17 @@ object OpenMontageFrameworkBridge {
               const durationFrames = Math.max(24, Math.round(scene.durationSec * 24));
               const start = offset;
               offset += durationFrames;
-              const opacity = interpolate(frame - start, [0, 12, durationFrames - 10, durationFrames], [0, 1, 1, 0], {
+              const local = frame - start;
+              const opacity = interpolate(local, [0, 12, durationFrames - 10, durationFrames], [0, 1, 1, 0], {
                 extrapolateLeft: 'clamp',
                 extrapolateRight: 'clamp',
               });
+              const slideY = interpolate(local, [0, 14], [32, 0], { extrapolateRight: 'clamp' });
               return (
                 <Sequence key={scene.index} from={start} durationInFrames={durationFrames}>
-                  <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', opacity, padding: 48 }}>
-                    <h1 style={{ fontSize: 52, color: '#00E5FF', textAlign: 'center' }}>{scene.text}</h1>
+                  <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', opacity, padding: 48, transform: `translateY(${'$'}{slideY}px)` }}>
+                    <div style={{ fontSize: 18, color: '#FACC15', letterSpacing: 2 }}>{scene.motionGraphic}</div>
+                    <h1 style={{ fontSize: 52, color: '#00E5FF', textAlign: 'center', marginTop: 12 }}>{scene.text}</h1>
                     <p style={{ fontSize: 30, color: '#FFFFFF', textAlign: 'center', marginTop: 24 }}>{scene.subtitle}</p>
                   </AbsoluteFill>
                 </Sequence>
@@ -172,6 +318,82 @@ object OpenMontageFrameworkBridge {
           </AbsoluteFill>
         );
       };
+    """.trimIndent()
+  }
+
+  fun buildManimMotionScript(project: VideoProject): String {
+    val firstChart = project.scenes.firstOrNull { it.chartValues.isNotEmpty() }
+    val vals = (firstChart?.chartValues?.takeIf { it.isNotEmpty() } ?: listOf(0.45f, 0.72f, 0.94f))
+      .joinToString(", ") { String.format(java.util.Locale.US, "%.2f", it * 100f) }
+    return """
+      # OpenMontage Manim Motion Graphics Scene (for Termux/Desktop Manim CE render)
+      # Upstream: $OPENMONTAGE_REPO
+      from manim import *
+
+      class LxrExplainerScene(Scene):
+          def construct(self):
+              title = Text(${JSONObject.quote(project.title.take(40))}, font_size=36, color=TEAL)
+              self.play(Write(title))
+              self.play(title.animate.to_edge(UP))
+
+              chart = BarChart(values=[$vals], y_range=[0, 100, 20], x_length=7, y_length=4)
+              self.play(Create(chart), run_time=1.8)
+              self.wait(1.0)
+              outro = Text("LXR--AI OpenMontage Studio", font_size=28, color=YELLOW)
+              self.play(FadeIn(outro.to_edge(DOWN)))
+              self.wait(0.8)
+    """.trimIndent()
+  }
+
+  fun buildGsapHyperframesHtml(project: VideoProject): String {
+    val scenesJson = JSONArray().apply {
+      project.scenes.forEach { sc ->
+        put(
+          JSONObject()
+            .put("index", sc.index)
+            .put("headline", sc.overlayHeadline)
+            .put("narration", sc.narrationText)
+            .put("kind", sc.motionGraphicKind.name)
+            .put("duration", sc.effectiveDurationSec)
+        )
+      }
+    }
+    return """
+      <!doctype html>
+      <html lang="bn">
+      <head>
+        <meta charset="utf-8" />
+        <title>${project.title}</title>
+        <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+        <style>
+          body { margin: 0; background: #050818; color: #f8fafc; font-family: system-ui, sans-serif; display: grid; place-items: center; height: 100vh; overflow: hidden; }
+          .stage { width: 88vw; max-width: 960px; padding: 36px; border: 2px solid #00e5ff; border-radius: 20px; background: linear-gradient(135deg, #0b1335, #111827); }
+          .badge { color: #facc15; font-weight: 700; letter-spacing: 1px; font-size: 14px; }
+          h1 { color: #00e5ff; margin: 10px 0; font-size: 38px; }
+          p { font-size: 22px; line-height: 1.45; }
+        </style>
+      </head>
+      <body>
+        <div class="stage">
+          <div class="badge" id="badge">OPENMONTAGE HYPERFRAMES GSAP</div>
+          <h1 id="headline">${project.title}</h1>
+          <p id="narration"></p>
+        </div>
+        <script>
+          const SCENES = $scenesJson;
+          const tl = gsap.timeline({ repeat: -1 });
+          SCENES.forEach(sc => {
+            tl.call(() => {
+              document.getElementById('badge').textContent = 'SCENE ' + sc.index + ' • ' + sc.kind;
+              document.getElementById('headline').textContent = sc.headline;
+              document.getElementById('narration').textContent = sc.narration;
+            })
+            .fromTo('.stage', { y: 30, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: 'power3.out' })
+            .to('.stage', { opacity: 1, duration: Math.max(1.5, sc.duration - 0.6) });
+          });
+        </script>
+      </body>
+      </html>
     """.trimIndent()
   }
 
@@ -198,6 +420,7 @@ object OpenMontageFrameworkBridge {
             "ffmpeg": shutil.which("ffmpeg") is not None,
             "ffprobe": shutil.which("ffprobe") is not None,
             "piper": shutil.which("piper") is not None,
+            "manim": shutil.which("manim") is not None,
             "node": shutil.which("node") is not None,
         }
 
@@ -208,7 +431,6 @@ object OpenMontageFrameworkBridge {
         out_mp4 = os.path.join(PROJECT_DIR, "${project.slug}_ffmpeg.mp4")
         frames_txt = os.path.join(PROJECT_DIR, "frames_concat.txt")
         voice_wav = os.path.join(PROJECT_DIR, "voiceover.wav")
-        srt_file = os.path.join(PROJECT_DIR, "subtitles.srt")
 
         if tools["piper"] and os.path.exists("script.txt") and not os.path.exists(voice_wav):
             print("[LXR-OpenMontage] Generating free offline Piper TTS...")
@@ -222,7 +444,7 @@ object OpenMontageFrameworkBridge {
             subprocess.run(cmd, check=False)
             save_checkpoint("ffmpeg_compose")
         else:
-            print("[LXR-OpenMontage] Android native MP4 already rendered; FFmpeg binary not installed in current shell.")
+            print("[LXR-OpenMontage] Android native 24fps MP4 already rendered.")
 
     if __name__ == "__main__":
         main()
@@ -232,12 +454,11 @@ object OpenMontageFrameworkBridge {
     #!/data/data/com.termux/files/usr/bin/bash
     set +e
     WORKDIR="$downloadDirPath"
-    echo "=== LXR--AI OpenMontage Termux Studio (100% Free Pipeline) ==="
+    echo "=== LXR--AI OpenMontage Termux Studio (Free-First Pipeline) ==="
     echo "Repo: $OPENMONTAGE_REPO"
     mkdir -p "${'$'}WORKDIR"
     cd "${'$'}WORKDIR" || exit 1
 
-    # Install free open-source tools if missing (no paid APIs)
     for tool in ffmpeg python git; do
       if ! command -v "${'$'}tool" >/dev/null 2>&1; then
         echo "[Setup] Installing ${'$'}tool via pkg..."
@@ -245,16 +466,8 @@ object OpenMontageFrameworkBridge {
       fi
     done
 
-    # Clone OpenMontage reference repo cleanly if not present
     if [ ! -d "${'$'}HOME/OpenMontage" ]; then
       git clone --depth 1 "$OPENMONTAGE_REPO" "${'$'}HOME/OpenMontage" 2>/dev/null || echo "[Info] Offline mode: using bundled LXR OpenMontage runner."
-    fi
-
-    # Notice about Remotion headless browser limitation on Android Termux
-    if command -v node >/dev/null 2>&1; then
-      echo "[Info] Node.js detected. Remotion source bundle ready at remotion/OpenMontageVideo.tsx (note: Chromium render on unrooted Android Termux needs proot-distro)."
-    else
-      echo "[Info] FFmpeg + Piper + Python OpenMontage pipeline active (no paid API)."
     fi
 
     if [ -f "openmontage_runner.py" ]; then
@@ -277,7 +490,10 @@ object OpenMontageFrameworkBridge {
     root.put("projectId", project.id)
     root.put("slug", project.slug)
     root.put("framework", OPENMONTAGE_REPO)
-    root.put("freeOnlyMode", true)
+    root.put("productionMode", project.settings.productionMode.name)
+    root.put("selectedVideoProvider", project.settings.selectedVideoProviderId)
+    root.put("paidApiConsentGranted", project.settings.paidProviderConsentGranted)
+    root.put("freeOnlyMode", !project.settings.paidProviderConsentGranted)
     root.put("completedStages", JSONArray(completedStages.map { it.key }))
     return root.toString(2)
   }

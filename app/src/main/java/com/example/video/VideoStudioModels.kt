@@ -9,41 +9,102 @@ enum class VideoType(
   val pipelineYamlName: String,
   val defaultMood: String,
 ) {
-  ANIMATION("Animation", "Animation", "animation_studio.yaml", "Wonder & Playful"),
-  ANIMATION_2D("2D Animation", "2D Animation", "2d_vector_animation.yaml", "Bright & Story"),
-  ANIMATION_3D_STYLE("3D Style Animation", "3D Style Animation", "3d_depth_animation.yaml", "Cosmic & Epic"),
-  CARTOON("Cartoon Video", "Cartoon Video", "cartoon_adventure.yaml", "Cheerful Cartoon"),
-  STORYTELLING("Storytelling Video", "Storytelling Video", "storytelling_arc.yaml", "Warm Narrative"),
-  DRAMA_SERIAL("নাটক ও সিরিয়াল", "Drama & Serial", "drama_serial.yaml", "Emotional Drama"),
-  FASHION_360("৩৬০° ফ্যাশন ও মডেল", "360 Fashion Showcase", "fashion_360.yaml", "Runway 360 Glam"),
-  MOTION_GRAPHICS("মোশন গ্রাফিক্স", "Motion Graphics", "motion_graphics.yaml", "Dynamic Kinetic"),
-  TALKING_PRODUCE("কথা বলা ফল/সবজি/ফুল", "Talking Produce & Flower", "talking_characters.yaml", "Playful Expressive"),
-  EDUCATIONAL("Educational Video", "Educational Video", "educational_explainer.yaml", "Curious & Clear"),
-  DOCUMENTARY("Documentary", "Documentary", "documentary_deep.yaml", "Atmospheric Doc"),
-  EXPLAINER("Explainer Video", "Explainer Video", "explainer_motion.yaml", "Clean Modern"),
-  SHORT_VIDEO("Short Video", "Short Video", "short_vertical.yaml", "Punchy Energy"),
-  YOUTUBE_SHORTS("YouTube Shorts", "YouTube Shorts", "youtube_shorts_9_16.yaml", "Fast Hook"),
-  YOUTUBE_FULL("YouTube Full Video", "YouTube Full Video", "youtube_full_16_9.yaml", "Engaging YouTube"),
+  ANIMATION("Animation", "Animation", "animated-music-video.yaml", "Wonder & Playful"),
+  ANIMATION_2D("2D Animation", "2D Animation", "character-animation.yaml", "Bright & Story"),
+  ANIMATION_3D_STYLE("3D Style Animation", "3D Style Animation", "hybrid.yaml", "Cosmic & Epic"),
+  CARTOON("Cartoon Video", "Cartoon Video", "character-animation.yaml", "Cheerful Cartoon"),
+  STORYTELLING("Storytelling Video", "Storytelling Video", "narrative-arc.yaml", "Warm Narrative"),
+  DRAMA_SERIAL("নাটক ও সিরিয়াল", "Drama & Serial", "cinematic.yaml", "Emotional Drama"),
+  FASHION_360("৩৬০° ফ্যাশন ও মডেল", "360 Fashion Showcase", "showcase-360.yaml", "Runway 360 Glam"),
+  MOTION_GRAPHICS("মোশন গ্রাফিক্স", "Motion Graphics", "explain-concept.yaml", "Dynamic Kinetic"),
+  TALKING_PRODUCE("কথা বলা ফল/সবজি/ফুল", "Talking Produce & Flower", "talking-head.yaml", "Playful Expressive"),
+  EDUCATIONAL("Educational Video", "Educational Video", "explain-concept.yaml", "Curious & Clear"),
+  DOCUMENTARY("Documentary", "Documentary", "documentary-montage.yaml", "Atmospheric Doc"),
+  EXPLAINER("Explainer Video", "Explainer Video", "explain-concept.yaml", "Clean Modern"),
+  SHORT_VIDEO("Short Video", "Short Video", "clip-factory.yaml", "Punchy Energy"),
+  YOUTUBE_SHORTS("YouTube Shorts", "YouTube Shorts", "clip-factory.yaml", "Fast Hook"),
+  YOUTUBE_FULL("YouTube Full Video", "YouTube Full Video", "hybrid.yaml", "Engaging YouTube"),
   CINEMATIC("Cinematic Video", "Cinematic Video", "cinematic.yaml", "Cinematic Drama"),
-  MOTIVATIONAL("Motivational Video", "Motivational Video", "motivational_rise.yaml", "Inspiring Rise"),
-  VOICEOVER("Voiceover Video", "Voiceover Video", "voiceover_essay.yaml", "Calm Voice Focus"),
-  PROMOTIONAL("Promotional Video", "Promotional Video", "promo_showcase.yaml", "Bold Promo"),
-  CUSTOM("Custom Video Type", "Custom Type", "custom_openmontage.yaml", "Adaptive Freeflow"),
+  MOTIVATIONAL("Motivational Video", "Motivational Video", "cinematic.yaml", "Inspiring Rise"),
+  VOICEOVER("Voiceover Video", "Voiceover Video", "documentary-montage.yaml", "Calm Voice Focus"),
+  PROMOTIONAL("Promotional Video", "Promotional Video", "screen-demo.yaml", "Bold Promo"),
+  CUSTOM("Custom Video Type", "Custom Type", "hybrid.yaml", "Adaptive Freeflow"),
 }
+
+enum class VideoProductionMode(
+  val labelBn: String,
+  val badgeEn: String,
+  val descriptionBn: String,
+) {
+  REAL_AI_VIDEO(
+    "A. Real AI Video",
+    "REAL AI VIDEO",
+    "চলমান চরিত্র, হাঁটা-দৌড়ানো, হাতের ইশারা, লিপ-সিঙ্ক ও সিনেম্যাটিক ক্যামেরা মোশন",
+  ),
+  MOTION_GRAPHICS(
+    "B. Motion Graphics",
+    "MOTION GRAPHICS",
+    "কাইনেটিক টাইপোগ্রাফি, অ্যানিমেটেড চার্ট, ম্যাপ, টাইমলাইন, ইনফোগ্রাফিক্স ও লোয়ার-থার্ড",
+  ),
+  REAL_FOOTAGE(
+    "C. Real Footage",
+    "REAL FOOTAGE",
+    "ফ্রি স্টক ভিডিও (Wikimedia, Internet Archive, NASA, গ্যালারি ক্লিপ) ও বাস্তব দৃশ্য",
+  ),
+  HYBRID_ALL_THREE(
+    "সব ৩টি (Hybrid Pro)",
+    "HYBRID A+B+C",
+    "YouTube প্রফেশনাল মান: চরিত্র অ্যানিমেশন + মোশন গ্রাফিক্স + রিয়েল স্টক ফুটেজ একসাথে",
+  ),
+}
+
+enum class ProviderBillingTier(
+  val labelBn: String,
+  val isPaidApi: Boolean,
+  val badgeText: String,
+) {
+  FREE_ON_DEVICE("১০০% ফ্রি • অন-ডিভাইস", false, "FREE LOCAL"),
+  FREE_NO_KEY("১০০% ফ্রি • Key ছাড়াই", false, "FREE NO KEY"),
+  FREE_STOCK_KEY("ফ্রি স্টক (ফ্রি Key ঐচ্ছিক)", false, "FREE API KEY"),
+  OPEN_WEIGHT_GPU_OR_PAID("ওপেন-ওয়েট (Desktop GPU) / Paid Cloud", true, "GPU / PAID"),
+  PAID_API("পেইড API • অনুমতির প্রয়োজন", true, "PAID API"),
+}
+
+data class OpenMontageVideoProviderEntry(
+  val id: String,
+  val displayName: String,
+  val openMontageToolName: String,
+  val billingTier: ProviderBillingTier,
+  val supportsTextToVideo: Boolean,
+  val supportsImageToVideo: Boolean,
+  val supportsVideoToVideo: Boolean,
+  val requiredEnvVar: String,
+  val availabilityNoteBn: String,
+)
 
 enum class MotionChoreography(val labelBn: String, val key: String) {
   AUTO("অটো স্মার্ট মোশন", "auto"),
   TALKING_LIPSYNC("মুখ নাড়িয়ে কথা বলা (Lip-Sync)", "talking"),
   WALKING("হাঁটাচলা (Walking)", "walking"),
+  RUNNING("দৌড়ানো ও গতি (Running)", "running"),
   DANCING("নাচানাচি (Dancing)", "dancing"),
   FASHION_360_SPIN("৩৬০° ফ্যাশন ঘূর্ণন", "fashion_360"),
   MOTION_GRAPHICS("মোশন গ্রাফিক্স ও কাইনেটিক", "motion_graphics"),
   DRAMA_CINEMATIC("নাটক ও সিরিয়াল সিনেমাটিক", "drama_cinematic"),
 }
 
+enum class MotionGraphicKind(val labelBn: String) {
+  NONE("সাধারণ দৃশ্য"),
+  KINETIC_TYPOGRAPHY("কাইনেটিক টাইপোগ্রাফি"),
+  ANIMATED_CHART("অ্যানিমেটেড চার্ট ও ডেটা"),
+  INFOGRAPHIC_STEPS("ইনফোগ্রাফিক ও মুভিং আইকন"),
+  ANIMATED_MAP_TIMELINE("অ্যানিমেটেড ম্যাপ ও টাইমলাইন"),
+  LOWER_THIRD("প্রফেশনাল লোয়ার-থার্ড ও ইন্ট্রো"),
+}
+
 enum class TalkingCharacterPreset(val labelBn: String, val key: String) {
   AUTO("বিষয় অনুযায়ী অটো চরিত্র", "auto"),
-  BUNDLED_3D("৩ডি কার্টুন ও গ্রামের মানুষ", "bundled_3d"),
+  BUNDLED_3D("মানুষ ও ৩ডি চরিত্র (Articulated)", "bundled_3d"),
   CAULIFLOWER("কথা বলা ফুলকপি (Cauliflower)", "cauliflower"),
   CABBAGE("কথা বলা পাতাকপি (Cabbage)", "cabbage"),
   BANANA("কথা বলা কলা (Banana)", "banana"),
@@ -74,9 +135,9 @@ enum class DurationPreset(
   val defaultSeconds: Int,
   val recommendedScenes: Int,
 ) {
-  SHORT_15_60S("১৫–৬০ সেকেন্ড (Shorts)", 24, 4),
-  ANIMATION_3_5M("৩–৫ মিনিট (Animation)", 180, 6),
-  YOUTUBE_ADAPTIVE("YouTube ভিডিও (৯০ সেকেন্ড)", 90, 5),
+  SHORT_15_60S("১৫–৬০ সেকেন্ড (Shorts)", 30, 5),
+  ANIMATION_3_5M("৩–৫ মিনিট (Animation)", 180, 8),
+  YOUTUBE_ADAPTIVE("YouTube ভিডিও (৯০ সেকেন্ড)", 90, 6),
   CUSTOM("কাস্টম (আনলিমিটেড)", 45, 5),
 }
 
@@ -98,11 +159,11 @@ enum class VideoResolutionPreset(val label: String, val is1080p: Boolean) {
 }
 
 enum class TransitionEffect(val labelBn: String, val ffmpegFilter: String) {
-  FADE("Smooth Fade", "fade"),
-  SLIDE("Cinematic Slide", "slideleft"),
-  ZOOM("Ken Burns Zoom", "smoothleft"),
-  WIPE("Cyber Wipe", "wipeleft"),
-  CUT("Clean Cut", "cut"),
+  FADE("Cinematic Crossfade", "fade"),
+  SLIDE("Smooth Slide", "slideleft"),
+  ZOOM("Dolly Zoom Blend", "smoothleft"),
+  WIPE("Dynamic Wipe", "wipeleft"),
+  CUT("Clean Rhythm Cut", "cut"),
 }
 
 enum class ProductionToolTab(val titleBn: String, val badgeEn: String) {
@@ -113,18 +174,18 @@ enum class ProductionToolTab(val titleBn: String, val badgeEn: String) {
 }
 
 enum class PipelineStage(val stepNumber: Int, val titleBn: String, val key: String) {
-  TOPIC_ANALYSIS(1, "১. টপিক ও ধারণা বিশ্লেষণ", "topic_analysis"),
-  SCRIPT_GENERATION(2, "২. সম্পূর্ণ স্ক্রিপ্ট তৈরি", "script_generation"),
-  SCENE_PLANNING(3, "৩. দৃশ্য (Scene) পরিকল্পনা", "scene_planning"),
-  CHARACTER_PLANNING(4, "৪. চরিত্র (Character) ও লিপ-সিঙ্ক ডিজাইন", "character_planning"),
-  IMAGE_VISUAL_GEN(5, "৫. ইমেজ/ভিডিও ও অ্যানিমেশন দৃশ্য ম্যাচিং", "image_visual_gen"),
+  TOPIC_ANALYSIS(1, "১. টপিক ও OpenMontage পরিকল্পনা", "topic_analysis"),
+  SCRIPT_GENERATION(2, "২. সম্পূর্ণ স্ক্রিপ্ট ও সংলাপ তৈরি", "script_generation"),
+  SCENE_PLANNING(3, "৩. মাল্টি-দৃশ্য ও ক্যামেরা প্ল্যানিং", "scene_planning"),
+  CHARACTER_PLANNING(4, "৪. চরিত্র অ্যানিমেশন ও লিপ-সিঙ্ক ডিজাইন", "character_planning"),
+  IMAGE_VISUAL_GEN(5, "৫. রিয়েল ফুটেজ, ৩ডি ও মোশন গ্রাফিক্স", "image_visual_gen"),
   VOICEOVER_GEN(6, "৬. স্পষ্ট ভয়েসওভার ও কণ্ঠ নির্বাচন", "voiceover_gen"),
   BACKGROUND_MUSIC(7, "৭. কপিরাইট-মুক্ত ব্যাকগ্রাউন্ড মিউজিক", "background_music"),
   SUBTITLE_GEN(8, "৮. সাবটাইটেল (.SRT) তৈরি", "subtitle_gen"),
-  SCENE_EDITING(9, "৯. টাইমলাইন, মোশন ও ৩৬০° এডিটিং", "scene_editing"),
-  AUDIO_SYNC(10, "১০. লিপ-সিঙ্ক ও অডিও সিঙ্ক", "audio_sync"),
-  FINAL_RENDER(11, "১১. রিয়েল H.264/AAC MP4 রেন্ডারিং", "final_render"),
-  MP4_EXPORT(12, "১২. Downloads ফোল্ডারে এক্সপোর্ট", "mp4_export"),
+  SCENE_EDITING(9, "৯. Remotion/GSAP/Manim/FFmpeg কম্পোজিশন", "scene_editing"),
+  AUDIO_SYNC(10, "১০. লিপ-সিঙ্ক ও অডিও-ভিডিও সিঙ্ক", "audio_sync"),
+  FINAL_RENDER(11, "১১. ২৪fps রিয়েল H.264/AAC MP4 রেন্ডারিং", "final_render"),
+  MP4_EXPORT(12, "১২. Quality Gate যাচাই ও এক্সপোর্ট", "mp4_export"),
 }
 
 enum class PipelineRunStatus(val labelBn: String) {
@@ -137,11 +198,11 @@ enum class PipelineRunStatus(val labelBn: String) {
 }
 
 enum class VisualSourceKind(val labelBn: String) {
-  AI_SCENE_ART("AI Scene Art"),
+  AI_SCENE_ART("Articulated AI Scene"),
   ANIMATED_2D_VECTOR("2D/Talking Character"),
-  DEPTH_3D_STYLE("3D Asset + Motion"),
-  IMAGE_TO_VIDEO_MOTION("Image-to-Video Motion"),
-  FREE_STOCK_OPEN_MEDIA("User Photo/Video/Asset"),
+  DEPTH_3D_STYLE("3D Multi-Object Rig"),
+  IMAGE_TO_VIDEO_MOTION("Motion Graphics Layer"),
+  FREE_STOCK_OPEN_MEDIA("Real Moving Footage"),
 }
 
 data class CharacterProfile(
@@ -179,6 +240,14 @@ data class VideoScenePlan(
   val userMediaIsVideo: Boolean = false,
   val motionStyle: MotionChoreography = MotionChoreography.AUTO,
   val characterPreset: TalkingCharacterPreset = TalkingCharacterPreset.AUTO,
+  val productionMode: VideoProductionMode = VideoProductionMode.HYBRID_ALL_THREE,
+  val motionGraphicKind: MotionGraphicKind = MotionGraphicKind.NONE,
+  val secondaryCharacterName: String = "",
+  val secondaryCharacterPreset: TalkingCharacterPreset = TalkingCharacterPreset.AUTO,
+  val realFootagePath: String = "",
+  val realFootageSourceLabel: String = "",
+  val chartValues: List<Float> = emptyList(),
+  val chartLabels: List<String> = emptyList(),
 ) {
   val effectiveDurationSec: Float
     get() = (trimEndSec - trimStartSec).coerceAtLeast(1.5f)
@@ -199,6 +268,24 @@ data class GoogleVoiceCatalogItem(
   val emotionalProfile: String,
 )
 
+data class VideoQualityCheckItem(
+  val id: String,
+  val titleBn: String,
+  val passed: Boolean,
+  val detailBn: String,
+)
+
+data class VideoQualityReport(
+  val approved: Boolean,
+  val isSlideshowDetected: Boolean,
+  val scorePercent: Int,
+  val averageMotionDelta: Float,
+  val audioDurationSec: Float,
+  val videoDurationSec: Float,
+  val verdictBn: String,
+  val checks: List<VideoQualityCheckItem>,
+)
+
 object VideoStudioCatalog {
   val GOOGLE_VOICES: List<GoogleVoiceCatalogItem> = listOf(
     GoogleVoiceCatalogItem("Aoede", "Aoede", VoiceGender.FEMALE, "শিশু-বান্ধব, গল্প ও মিষ্টি নারী কণ্ঠ", "Warm & Joyful"),
@@ -213,12 +300,13 @@ object VideoStudioCatalog {
   fun voiceIds(): List<String> = Store.VOICE_OPTIONS.map { it.id }
 
   const val DEFAULT_EXAMPLE_PROMPT =
-    "একটি সুন্দর শিক্ষামূলক অ্যানিমেশন ভিডিও তৈরি করো, যেখানে কথা বলা ফুলকপি ও আপেল শিশুদের সাথে গ্রামে নেচে-গেয়ে মজার গল্প শেখাচ্ছে।"
+    "একটি প্রফেশনাল অ্যানিমেশন ও মোশন গ্রাফিক্স ভিডিও তৈরি করো, যেখানে দুটি চরিত্র হেঁটে ও কথা বলে ভবিষ্যতের সৌরশক্তি ও প্রকৃতির রহস্য ব্যাখ্যা করছে।"
 }
 
 data class ProductionSettings(
   val aspectRatio: VideoAspectRatio = VideoAspectRatio.LANDSCAPE_16_9,
   val resolution: VideoResolutionPreset = VideoResolutionPreset.HD_720P,
+  val productionMode: VideoProductionMode = VideoProductionMode.HYBRID_ALL_THREE,
   val subtitlesEnabled: Boolean = true,
   val backgroundMusicEnabled: Boolean = true,
   val voiceoverEnabled: Boolean = true,
@@ -233,6 +321,10 @@ data class ProductionSettings(
   val preferredEmotionalTone: String = "Warm & Expressive",
   val preferredMotionStyle: MotionChoreography = MotionChoreography.AUTO,
   val preferredCharacterPreset: TalkingCharacterPreset = TalkingCharacterPreset.AUTO,
+  val selectedVideoProviderId: String = "lxr_articulated_24fps",
+  val paidProviderConsentGranted: Boolean = false,
+  val pexelsApiKey: String = "",
+  val pixabayApiKey: String = "",
 )
 
 data class StudioProgressState(
@@ -244,7 +336,7 @@ data class StudioProgressState(
   val sceneProgress: Float = 0f,
   val editingProgress: Float = 0f,
   val renderingProgress: Float = 0f,
-  val statusMessageBn: String = "সীমাহীন ভিডিও তৈরি — প্রম্পট লিখুন বা ছবি/ভিডিও যোগ করে চাপুন!",
+  val statusMessageBn: String = "OpenMontage Studio প্রস্তুত — মোড বা প্রম্পট দিয়ে রিয়েল ভিডিও তৈরি করুন!",
   val completedStages: Set<PipelineStage> = emptySet(),
   val failedStage: PipelineStage? = null,
   val errorMessage: String? = null,
@@ -273,15 +365,17 @@ data class ExportedVideoArtifacts(
 )
 
 data class OpenMontageCapabilityReport(
-  val frameworkRepoUrl: String = "https://github.com/Open-Montage-app/OpenMontage",
+  val frameworkRepoUrl: String = "https://github.com/OpenMontageInc/OpenMontage",
   val onDeviceEncoderAvailable: Boolean = true,
-  val onDeviceEncoderNote: String = "Android MediaCodec Hardware Surface H.264/AAC MP4 + 60+ 3D Assets প্রস্তুত ✓ (আনলিমিটেড)",
+  val onDeviceEncoderNote: String = "Android MediaCodec H.264/AAC (EGL PTS-Synced 24fps) + Articulated Rig প্রস্তুত ✓",
   val termuxInstalled: Boolean = false,
   val termuxRunPermGranted: Boolean = false,
-  val ffmpegNote: String = "Termux FFmpeg + অন-ডিভাইস GPU Surface MP4 রেন্ডার সক্রিয় ✓।",
-  val piperTtsNote: String = "পেইড API নয় — ফ্রি Google Voice বা এক্সপ্রেসিভ LXR বাংলা/ইংরেজি ভয়েস ব্যবহৃত হয় ✓।",
-  val remotionNote: String = "Remotion কম্পোজিশন এক্সপোর্ট হয়; অ্যান্ড্রয়েডে নেটিভ Canvas + MediaCodec অটো-ব্যবহৃত হয়।",
-  val stockMediaNote: String = "বিল্ট-ইন ৬০+ ৩ডি/গ্রাম/নাচ/ক্যারেক্টার ইমেজ + আপনার গ্যালারির ছবি/ভিডিও/স্ক্রিনশট সম্পূর্ণ সমর্থিত ✓।",
+  val ffmpegNote: String = "Termux FFmpeg + Manim + Remotion/GSAP + অন-ডিভাইস 24fps MP4 রেন্ডার সক্রিয় ✓।",
+  val piperTtsNote: String = "Free-First নীতি: Gemini Free Voice / Piper TTS / LXR Formant — কোনো Paid API অনুমতি ছাড়া চলে না ✓।",
+  val remotionNote: String = "Remotion (.tsx), GSAP HyperFrames (.html) ও Manim (.py) বান্ডিল প্রতিটি প্রজেক্টে এক্সপোর্ট হয়।",
+  val stockMediaNote: String = "ফ্রি রিয়েল ফুটেজ (Wikimedia Commons, Internet Archive, NASA) + আপনার গ্যালারি মিডিয়া + ৬০ অ্যাসেট সক্রিয় ✓।",
+  val aiVideoApiDisclosureBn: String =
+    "গুরুত্বপূর্ণ: Google Veo, Kling, Runway, Hailuo, Seedance হলো Paid API; Wan/LTX/Hunyuan-এর জন্য Desktop GPU লাগে। ফ্রি অবস্থায় অন-ডিভাইস 24fps আর্টিকুলেটেড অ্যানিমেশন, মোশন গ্রাফিক্স ও ফ্রি স্টক ভিডিও ব্যবহৃত হয়।",
 )
 
 data class VideoProject(
@@ -292,7 +386,7 @@ data class VideoProject(
   val videoType: VideoType = VideoType.ANIMATION,
   val customTypeLabel: String = "",
   val durationPreset: DurationPreset = DurationPreset.SHORT_15_60S,
-  val customDurationSeconds: Int = 24,
+  val customDurationSeconds: Int = 30,
   val topicAnalysisSummary: String = "",
   val fullScriptText: String = "",
   val characters: List<CharacterProfile> = emptyList(),
@@ -303,6 +397,7 @@ data class VideoProject(
   val bgmWavPath: String = "",
   val settings: ProductionSettings = ProductionSettings(),
   val artifacts: ExportedVideoArtifacts = ExportedVideoArtifacts(),
+  val qualityReport: VideoQualityReport? = null,
   val pipelineYaml: String = "",
   val remotionTsx: String = "",
   val termuxScript: String = "",
@@ -315,12 +410,14 @@ data class VideoStudioUiState(
   val selectedVideoType: VideoType = VideoType.ANIMATION,
   val customVideoTypeInput: String = "",
   val selectedDurationPreset: DurationPreset = DurationPreset.SHORT_15_60S,
-  val customDurationSec: Int = 24,
+  val customDurationSec: Int = 30,
   val selectedToolTab: ProductionToolTab = ProductionToolTab.SCRIPT,
   val settings: ProductionSettings = ProductionSettings(),
   val bundledAssets: List<StudioAssetEntry> = emptyList(),
   val selectedBundledAssetFiles: List<String> = emptyList(),
   val userMediaItems: List<UserMediaItem> = emptyList(),
+  val videoProviders: List<OpenMontageVideoProviderEntry> = emptyList(),
+  val pendingPaidProviderConsentId: String? = null,
   val totalVideosCreatedCount: Int = 0,
   val activeProject: VideoProject? = null,
   val savedProjects: List<VideoProject> = emptyList(),

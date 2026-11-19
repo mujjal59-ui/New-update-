@@ -430,25 +430,42 @@ fun ToolCardImageVisualPanel(
       )
     }
 
-    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       project.scenes.forEachIndexed { idx, sc ->
-        FilterChip(
-          selected = idx == safeIdx,
-          onClick = { vm.selectPreviewScene(idx) },
-          label = { Text("Scene ${sc.index}", fontSize = 11.sp) },
-        )
+        val pPath = project.previewFramePaths.getOrNull(idx)
+        val thumbBmp = remember(pPath) { pPath?.let { File(it) }?.takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.absolutePath) } }
+        Column(
+          modifier = Modifier
+            .width(98.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (idx == safeIdx) CYBER_CYAN.copy(alpha = 0.2f) else Color(0xFF0E1530))
+            .border(1.2.dp, if (idx == safeIdx) CYBER_CYAN else Color(0xFF283459), RoundedCornerShape(10.dp))
+            .clickable { vm.selectPreviewScene(idx) }
+            .padding(4.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+          if (thumbBmp != null) {
+            Image(
+              bitmap = thumbBmp.asImageBitmap(),
+              contentDescription = "Scene ${sc.index} Thumbnail",
+              contentScale = ContentScale.Crop,
+              modifier = Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(6.dp)),
+            )
+          }
+          Text("Scene ${sc.index}", color = if (idx == safeIdx) CYBER_CYAN else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
       }
     }
 
     val activeSc = project.scenes.getOrNull(safeIdx)
     if (activeSc != null) {
       Text(
-        "মোশন: ${activeSc.motionStyle.labelBn} • চরিত্র: ${activeSc.characterPreset.labelBn}",
+        "মোশন: ${activeSc.motionStyle.labelBn} • গ্রাফিক্স: ${activeSc.motionGraphicKind.labelBn}",
         color = CYBER_CYAN,
         fontSize = 11.5.sp,
       )
       Text(
-        "মিডিয়া/অ্যাসেট: ${activeSc.matchedAssetFile.ifBlank { activeSc.userMediaPath.substringAfterLast('/') }}",
+        "সোর্স: ${activeSc.realFootageSourceLabel.ifBlank { activeSc.matchedAssetFile.ifBlank { activeSc.userMediaPath.substringAfterLast('/') } }}",
         color = Color(0xFFCBD5E1),
         fontSize = 11.sp,
       )
@@ -607,6 +624,34 @@ fun ProgressDashboardCard(
           Icon(Icons.Filled.Refresh, contentDescription = "Retry", modifier = Modifier.size(16.dp))
           Spacer(Modifier.width(4.dp))
           Text("Retry", fontSize = 11.5.sp)
+        }
+      }
+    }
+
+    project?.qualityReport?.let { qr ->
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("video_quality_gate_card")
+          .clip(RoundedCornerShape(12.dp))
+          .background(if (qr.approved) CYBER_GREEN.copy(alpha = 0.12f) else CYBER_RED.copy(alpha = 0.14f))
+          .border(1.dp, if (qr.approved) CYBER_GREEN else CYBER_RED, RoundedCornerShape(12.dp))
+          .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          "VIDEO QUALITY GATE: ${qr.scorePercent}% • ${if (qr.isSlideshowDetected) "SLIDESHOW REJECTED" else "REAL MOTION VERIFIED"}",
+          color = if (qr.approved) CYBER_GREEN else CYBER_RED,
+          fontWeight = FontWeight.Bold,
+          fontSize = 12.sp,
+        )
+        Text(qr.verdictBn, color = Color.White, fontSize = 11.sp)
+        qr.checks.forEach { chk ->
+          Text(
+            "${if (chk.passed) "✓" else "✕"} ${chk.titleBn}: ${chk.detailBn}",
+            color = if (chk.passed) Color(0xFFBBF7D0) else Color(0xFFFCA5A5),
+            fontSize = 10.5.sp,
+          )
         }
       }
     }

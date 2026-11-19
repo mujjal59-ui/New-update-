@@ -208,6 +208,8 @@ object VideoScriptAndMediaGenerator {
         val userMedia = visualUserItems.getOrNull(i % visualUserItems.size.coerceAtLeast(1))
         val charPreset = detectCharacterPreset(prompt, "$nar $dlg", settings, i)
         val motionStyle = detectMotionChoreography(prompt, s.optString("motion"), videoType, settings, i)
+        val gfxKind = assignMotionGraphicKind(settings.productionMode, motionStyle, i)
+        val secondaryName = characters.getOrNull((i + 1) % characters.size.coerceAtLeast(1))?.name.orEmpty()
         add(
           VideoScenePlan(
             index = i + 1,
@@ -219,7 +221,11 @@ object VideoScriptAndMediaGenerator {
             emotionalTone = s.optString("emotion", "Expressive"),
             visualPrompt = s.optString("visualPrompt", "Animated scene frame"),
             themeKeyword = s.optString("themeKeyword", inferThemeKeyword(prompt, i)),
-            visualSource = if (userMedia != null) VisualSourceKind.FREE_STOCK_OPEN_MEDIA else VisualSourceKind.DEPTH_3D_STYLE,
+            visualSource = when {
+              userMedia != null -> VisualSourceKind.FREE_STOCK_OPEN_MEDIA
+              settings.productionMode == VideoProductionMode.MOTION_GRAPHICS -> VisualSourceKind.IMAGE_TO_VIDEO_MOTION
+              else -> VisualSourceKind.DEPTH_3D_STYLE
+            },
             effectTag = motionStyle.labelBn,
             overlayHeadline = s.optString("headline", "Scene ${i + 1}"),
             durationSec = perSceneSec,
@@ -233,6 +239,11 @@ object VideoScriptAndMediaGenerator {
             userMediaIsVideo = userMedia?.kind == UserMediaKind.VIDEO,
             motionStyle = motionStyle,
             characterPreset = charPreset,
+            productionMode = settings.productionMode,
+            motionGraphicKind = gfxKind,
+            secondaryCharacterName = if (secondaryName != s.optString("character", characters.first().name)) secondaryName else "",
+            chartValues = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf(0.36f, 0.58f, 0.79f, 0.94f) else emptyList(),
+            chartLabels = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf("Phase 1", "Phase 2", "Phase 3", "Peak") else emptyList(),
           )
         )
       }
@@ -283,6 +294,45 @@ object VideoScriptAndMediaGenerator {
     return TalkingCharacterPreset.BUNDLED_3D
   }
 
+  private fun assignMotionGraphicKind(
+    mode: VideoProductionMode,
+    motion: MotionChoreography,
+    sceneIdx: Int,
+  ): MotionGraphicKind {
+    return when {
+      mode == VideoProductionMode.MOTION_GRAPHICS || motion == MotionChoreography.MOTION_GRAPHICS ->
+        listOf(
+          MotionGraphicKind.KINETIC_TYPOGRAPHY,
+          MotionGraphicKind.ANIMATED_CHART,
+          MotionGraphicKind.INFOGRAPHIC_STEPS,
+          MotionGraphicKind.ANIMATED_MAP_TIMELINE,
+        )[sceneIdx % 4]
+      mode == VideoProductionMode.HYBRID_ALL_THREE ->
+        listOf(
+          MotionGraphicKind.KINETIC_TYPOGRAPHY,
+          MotionGraphicKind.ANIMATED_CHART,
+          MotionGraphicKind.INFOGRAPHIC_STEPS,
+          MotionGraphicKind.ANIMATED_MAP_TIMELINE,
+          MotionGraphicKind.LOWER_THIRD,
+        )[sceneIdx % 5]
+      mode == VideoProductionMode.REAL_FOOTAGE -> MotionGraphicKind.LOWER_THIRD
+      else -> if (sceneIdx == 0) MotionGraphicKind.KINETIC_TYPOGRAPHY else MotionGraphicKind.LOWER_THIRD
+    }
+  }
+
+  fun attachRealStockFootageToScenes(
+    context: Context,
+    scenes: List<VideoScenePlan>,
+    settings: ProductionSettings,
+    allowNetworkCloudTry: Boolean,
+  ): List<VideoScenePlan> {
+    if (!allowNetworkCloudTry) return scenes
+    val needsRealFootage = settings.productionMode == VideoProductionMode.REAL_FOOTAGE ||
+      settings.productionMode == VideoProductionMode.HYBRID_ALL_THREE
+    if (!needsRealFootage) return scenes
+    return FreeStockMediaFetcher.fetchClipsForScenes(context, scenes, settings)
+  }
+
   private fun detectMotionChoreography(
     prompt: String,
     rawHint: String,
@@ -293,14 +343,19 @@ object VideoScriptAndMediaGenerator {
     if (settings.preferredMotionStyle != MotionChoreography.AUTO) {
       return settings.preferredMotionStyle
     }
+    if (settings.productionMode == VideoProductionMode.MOTION_GRAPHICS) {
+      return MotionChoreography.MOTION_GRAPHICS
+    }
     val q = "$prompt $rawHint ${videoType.labelEn}".lowercase()
     return when {
       videoType == VideoType.FASHION_360 || q.contains("৩৬০") || q.contains("360") || q.contains("ফ্যাশন") || q.contains("fashion") ->
         MotionChoreography.FASHION_360_SPIN
-      videoType == VideoType.MOTION_GRAPHICS || q.contains("মোশন") || q.contains("motion") ->
+      videoType == VideoType.MOTION_GRAPHICS || q.contains("মোশন") || q.contains("চার্ট") || q.contains("motion") ->
         MotionChoreography.MOTION_GRAPHICS
       videoType == VideoType.DRAMA_SERIAL || q.contains("নাটক") || q.contains("সিরিয়াল") || q.contains("drama") || q.contains("serial") ->
         if (sceneIdx % 2 == 0) MotionChoreography.DRAMA_CINEMATIC else MotionChoreography.TALKING_LIPSYNC
+      q.contains("দৌড়") || q.contains("run") || q.contains("রকেট") ->
+        MotionChoreography.RUNNING
       q.contains("নাচ") || q.contains("dance") || q.contains("গান") ->
         if (sceneIdx % 3 == 0) MotionChoreography.TALKING_LIPSYNC else MotionChoreography.DANCING
       q.contains("হাঁট") || q.contains("walk") ->
@@ -309,8 +364,8 @@ object VideoScriptAndMediaGenerator {
         listOf(
           MotionChoreography.TALKING_LIPSYNC,
           MotionChoreography.WALKING,
-          MotionChoreography.DANCING,
-          MotionChoreography.FASHION_360_SPIN,
+          MotionChoreography.RUNNING,
+          MotionChoreography.MOTION_GRAPHICS,
         )[sceneIdx % 4]
     }
   }
@@ -433,6 +488,8 @@ object VideoScriptAndMediaGenerator {
       val userMedia = if (visualUserItems.isNotEmpty()) visualUserItems[idx % visualUserItems.size] else null
       val charPreset = detectCharacterPreset(prompt, "$narration $dialogue", settings, idx)
       val motionStyle = detectMotionChoreography(prompt, scTitle, videoType, settings, idx)
+      val gfxKind = assignMotionGraphicKind(settings.productionMode, motionStyle, idx)
+      val companionName = characters.getOrNull((idx + 1) % characters.size.coerceAtLeast(1))?.name.orEmpty()
 
       VideoScenePlan(
         index = idx + 1,
@@ -446,11 +503,12 @@ object VideoScriptAndMediaGenerator {
         themeKeyword = themeKey,
         visualSource = when {
           userMedia != null -> VisualSourceKind.FREE_STOCK_OPEN_MEDIA
+          settings.productionMode == VideoProductionMode.MOTION_GRAPHICS -> VisualSourceKind.IMAGE_TO_VIDEO_MOTION
           charPreset in setOf(TalkingCharacterPreset.CAULIFLOWER, TalkingCharacterPreset.CABBAGE, TalkingCharacterPreset.BANANA, TalkingCharacterPreset.APPLE, TalkingCharacterPreset.FLOWER, TalkingCharacterPreset.FINGER) ->
             VisualSourceKind.ANIMATED_2D_VECTOR
           else -> VisualSourceKind.DEPTH_3D_STYLE
         },
-        effectTag = "${motionStyle.labelBn} • ${charPreset.labelBn}",
+        effectTag = "${motionStyle.labelBn} • ${gfxKind.labelBn}",
         overlayHeadline = scTitle.substringAfter(": ").take(30),
         durationSec = perSceneSec,
         trimStartSec = 0f,
@@ -463,12 +521,17 @@ object VideoScriptAndMediaGenerator {
         userMediaIsVideo = userMedia?.kind == UserMediaKind.VIDEO,
         motionStyle = motionStyle,
         characterPreset = charPreset,
+        productionMode = settings.productionMode,
+        motionGraphicKind = gfxKind,
+        secondaryCharacterName = if (companionName != charProfile.name) companionName else "",
+        chartValues = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf(0.38f, 0.62f, 0.81f, 0.96f) else emptyList(),
+        chartLabels = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf("2023", "2024", "2025", "2026") else emptyList(),
       )
     }
 
     val title = "$typeTitle: ${prompt.take(36)}"
     val analysis =
-      "বিষয় বিশ্লেষণ: '$prompt' — $typeTitle ফরম্যাটে ${scenes.size}টি ডায়নামিক দৃশ্য (${targetTotalSec}s), ${characters.size}টি কথা বলা/হাঁটা-নাচা চরিত্র ও ${visualUserItems.size}টি কাস্টম মিডিয়াসহ প্রস্তুত।"
+      "বিষয় বিশ্লেষণ: '$prompt' — ${settings.productionMode.labelBn} মোডে ${scenes.size}টি ডায়নামিক দৃশ্য (${targetTotalSec}s), ${characters.size}টি চলমান/লিপ-সিঙ্ক চরিত্র ও মোশন গ্রাফিক্সসহ প্রস্তুত।"
     val scriptText = formatFullScriptText(title, analysis, characters, scenes)
 
     return GeneratedStoryBlueprint(

@@ -10,7 +10,6 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
-import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -21,11 +20,13 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Real-time animated Canvas compositor for LXR--AI Video Studio:
- * - Audio-amplitude driven lip-sync mouth movement
- * - Talking Fruit / Vegetable / Flower / Finger characters (ফুলকপি, পাতাকপি, কলা, আপেল, ফুল, আঙ্গুল)
- * - 60 Bundled 3D/Cartoon/Village/Forest assets + User Gallery Photos, Videos & Screenshots
- * - Walking, Dancing, 360° Fashion Turntable Spin, Drama/Serial & Motion Graphics choreography
+ * Real-time 24fps Animated Canvas Compositor for LXR--AI Video Studio:
+ * - Real Moving Video Clips (realFootagePath / User Video via MediaMetadataRetriever timestamps)
+ * - Articulated Multi-Joint Characters (walking, running, hand gestures, blinking, gaze, 2-actor interaction)
+ * - Audio-amplitude driven lip-sync across Bengali & English speech
+ * - Talking Produce / Fruit / Flower / Finger characters (ফুলকপি, পাতাকপি, কলা, আপেল, ফুল, আঙ্গুল)
+ * - YouTube-Grade Motion Graphics Layer (Kinetic Typography, 3D Charts, Infographics, Maps, Lower-Thirds)
+ * - Parallax Sky/Clouds/Birds/Particles & Smooth Scene Transitions
  */
 object AdvancedCharacterAnimator {
 
@@ -55,7 +56,6 @@ object AdvancedCharacterAnimator {
       i += 2
     }
     val rms = if (count > 0) sqrt(sumSq / count) else 0.0
-    // Normalize 16-bit speech RMS (~600..9000) cleanly to 0..1 mouth openness
     val normalized = ((rms - 420.0) / 5200.0).toFloat().coerceIn(0f, 1f)
     val articulator = (0.72f + 0.28f * sin(timeSec * 19.0).toFloat())
     return (normalized * articulator).coerceIn(0f, 1f)
@@ -76,10 +76,22 @@ object AdvancedCharacterAnimator {
     val h = height.toFloat()
     val scale = minOf(w, h) / 720f
     val motion = resolveEffectiveMotion(scene)
+    val mode = scene.productionMode
     val cx = w * 0.5f
     val cy = h * 0.48f
 
-    // 1. Background Layer (User Video Clip / User Photo / Bundled Village-Forest Scene / Stylized Sky)
+    // Scene intro/outro camera transform for smooth scene transition feel
+    val enterAlpha = if (framePhase < 0.07f) (framePhase / 0.07f).coerceIn(0f, 1f) else 1f
+    val slideShiftX = when (scene.transition) {
+      TransitionEffect.SLIDE -> if (framePhase < 0.12f) (1f - framePhase / 0.12f) * w * 0.25f else 0f
+      TransitionEffect.WIPE -> if (framePhase < 0.10f) -(1f - framePhase / 0.10f) * w * 0.2f else 0f
+      else -> 0f
+    }
+
+    canvas.save()
+    if (slideShiftX != 0f) canvas.translate(slideShiftX, 0f)
+
+    // 1. Dynamic Environment / Real Footage Video Clip / User Photo / Parallax Hills & Sky
     drawBackgroundLayer(
       context = context,
       canvas = canvas,
@@ -92,98 +104,95 @@ object AdvancedCharacterAnimator {
       motion = motion,
     )
 
-    // 2. Motion Graphics / Runway Glow / Atmospheric Particles
-    drawAtmosphereAndMotionOverlay(
-      canvas = canvas,
-      scene = scene,
-      w = w,
-      h = h,
-      scale = scale,
-      phase = framePhase,
-      globalTimeSec = globalTimeSec,
-      motion = motion,
-      mouthOpen = mouthOpen,
-    )
+    // Moving environmental props (clouds, birds, sunbeam sweep, sparkles)
+    drawDynamicEnvironmentObjects(canvas, scene, w, h, scale, framePhase, globalTimeSec)
 
-    // 3. Foreground Character / 3D Model / User Portrait / Talking Cauliflower-Apple-Banana-Flower-Finger
-    val preset = scene.characterPreset
-    val isProduceChar = preset in setOf(
-      TalkingCharacterPreset.CAULIFLOWER,
-      TalkingCharacterPreset.CABBAGE,
-      TalkingCharacterPreset.BANANA,
-      TalkingCharacterPreset.APPLE,
-      TalkingCharacterPreset.FLOWER,
-      TalkingCharacterPreset.FINGER,
-    )
-
-    if (isProduceChar) {
-      drawTalkingProduceCharacter(
+    // 2. Motion Graphics Layer (dominant in MOTION_GRAPHICS mode, integrated overlay in HYBRID_ALL_THREE)
+    if (mode == VideoProductionMode.MOTION_GRAPHICS ||
+      mode == VideoProductionMode.HYBRID_ALL_THREE ||
+      motion == MotionChoreography.MOTION_GRAPHICS ||
+      scene.motionGraphicKind != MotionGraphicKind.NONE
+    ) {
+      MotionGraphicsRenderer.drawMotionGraphicsLayer(
         canvas = canvas,
-        preset = preset,
-        motion = motion,
-        cx = cx,
-        cy = cy + 16f * scale,
-        scale = scale * 1.15f,
+        scene = scene,
+        w = w,
+        h = h,
+        scale = scale,
         phase = framePhase,
         globalTimeSec = globalTimeSec,
         mouthOpen = mouthOpen,
       )
-    } else if (scene.userMediaPath.isNotBlank()) {
-      // User Photo/Video already fills canvas in background, add optional foreground 360 or talking card accent
-      if (motion == MotionChoreography.FASHION_360_SPIN) {
-        val userBmp =
-          if (scene.userMediaIsVideo) {
-            val durMs = (scene.effectiveDurationSec * 1000f).toLong().coerceAtLeast(2000L)
-            val vidUs = ((framePhase * durMs).toLong()) * 1000L
-            StudioMediaLibrary.extractVideoFrameAtTime(scene.userMediaPath, vidUs, maxDim = 720)
-          } else {
-            StudioMediaLibrary.loadStudioBitmap(context, filePath = scene.userMediaPath, maxDim = 720)
-          }
-        if (userBmp != null) {
-          drawChoreographedBitmap(canvas, userBmp, cx, cy, w * 0.68f, h * 0.64f, scale, framePhase, motion, mouthOpen, isSprite = false)
-        }
-      }
-    } else if (scene.matchedAssetFile.isNotBlank() && context != null) {
-      val fgBmp = StudioMediaLibrary.loadStudioBitmap(
-        context = context,
-        assetFileName = scene.matchedAssetFile,
-        maxDim = 760,
-        stripLightBackgroundIfSprite = true,
-      )
-      if (fgBmp != null) {
-        val isSprite = scene.matchedAssetFile.contains("_01_") || scene.matchedAssetFile.contains("_02_") ||
-          scene.matchedAssetFile.contains("_05_") || scene.matchedAssetFile.contains("_06_") ||
-          scene.matchedAssetFile.contains("_10_") || scene.matchedAssetFile.contains("_15_") ||
-          scene.matchedAssetFile.contains("_16_") || scene.matchedAssetFile.contains("_17_") ||
-          scene.matchedAssetFile.contains("_19_") || scene.matchedAssetFile.contains("_35_") ||
-          scene.matchedAssetFile.contains("_36_") || scene.matchedAssetFile.contains("_37_") ||
-          scene.matchedAssetFile.contains("_38_") || scene.matchedAssetFile.contains("_46_") ||
-          scene.matchedAssetFile.contains("_50_") || scene.matchedAssetFile.contains("_51_") ||
-          scene.matchedAssetFile.contains("_52_") || scene.matchedAssetFile.contains("_53_") ||
-          scene.matchedAssetFile.contains("_54_") || scene.matchedAssetFile.contains("_55_") ||
-          scene.matchedAssetFile.contains("_56_")
-
-        drawChoreographedBitmap(
-          canvas = canvas,
-          bmp = fgBmp,
-          cx = cx,
-          cy = cy + 10f * scale,
-          boxW = if (isSprite) w * 0.64f else w * 0.86f,
-          boxH = if (isSprite) h * 0.68f else h * 0.74f,
-          scale = scale,
-          phase = framePhase,
-          motion = motion,
-          mouthOpen = mouthOpen,
-          isSprite = isSprite,
-        )
-      } else {
-        drawStylizedFallbackCenterpiece(canvas, scene, cx, cy, scale, framePhase, mouthOpen, motion)
-      }
-    } else {
-      drawStylizedFallbackCenterpiece(canvas, scene, cx, cy, scale, framePhase, mouthOpen, motion)
     }
 
-    // 4. Drama / Serial Letterbox Bars + Active Character Name & Lip-Sync Voice Pill
+    // 3. Foreground Characters / Multi-Actor Rig / 360 Showcase / Talking Produce
+    val drawCharacters = mode != VideoProductionMode.MOTION_GRAPHICS ||
+      scene.characterPreset in producePresetSet() ||
+      scene.motionStyle == MotionChoreography.TALKING_LIPSYNC
+
+    if (drawCharacters) {
+      val preset = scene.characterPreset
+      val isProduceChar = preset in producePresetSet()
+      val actorCenterX =
+        if (mode == VideoProductionMode.HYBRID_ALL_THREE && scene.motionGraphicKind in setOf(MotionGraphicKind.INFOGRAPHIC_STEPS, MotionGraphicKind.ANIMATED_CHART)) {
+          w * 0.26f
+        } else cx
+
+      when {
+        isProduceChar -> {
+          drawTalkingProduceCharacter(
+            canvas = canvas,
+            preset = preset,
+            motion = motion,
+            cx = actorCenterX,
+            cy = cy + 16f * scale,
+            scale = scale * 1.12f,
+            phase = framePhase,
+            globalTimeSec = globalTimeSec,
+            mouthOpen = mouthOpen,
+          )
+        }
+        scene.userMediaPath.isNotBlank() && motion == MotionChoreography.FASHION_360_SPIN -> {
+          val userBmp =
+            if (scene.userMediaIsVideo) {
+              val durMs = (scene.effectiveDurationSec * 1000f).toLong().coerceAtLeast(2000L)
+              val vidUs = ((framePhase * durMs).toLong()) * 1000L
+              StudioMediaLibrary.extractVideoFrameAtTime(scene.userMediaPath, vidUs, maxDim = 720)
+            } else {
+              StudioMediaLibrary.loadStudioBitmap(context, filePath = scene.userMediaPath, maxDim = 720)
+            }
+          if (userBmp != null) {
+            drawChoreographedBitmap(canvas, userBmp, cx, cy, w * 0.68f, h * 0.64f, scale, framePhase, motion, mouthOpen, isSprite = false)
+          }
+        }
+        else -> {
+          // Real articulated multi-joint actors (walking, running, conversing, lip-syncing!)
+          ArticulatedCharacterRenderer.drawArticulatedSceneCast(
+            canvas = canvas,
+            scene = scene,
+            cx = actorCenterX,
+            cy = cy + 8f * scale,
+            scale = scale * (if (mode == VideoProductionMode.HYBRID_ALL_THREE) 0.92f else 1.05f),
+            phase = framePhase,
+            globalTimeSec = globalTimeSec,
+            mouthOpen = mouthOpen,
+            motion = motion,
+          )
+
+          // If user specifically picked a bundled 3D asset, also blend a subtle corner reference frame
+          if (scene.matchedAssetFile.isNotBlank() && context != null && motion == MotionChoreography.FASHION_360_SPIN) {
+            val fgBmp = StudioMediaLibrary.loadStudioBitmap(context, assetFileName = scene.matchedAssetFile, maxDim = 420, stripLightBackgroundIfSprite = true)
+            if (fgBmp != null) {
+              drawChoreographedBitmap(canvas, fgBmp, w * 0.80f, h * 0.45f, w * 0.28f, h * 0.42f, scale * 0.7f, framePhase, motion, mouthOpen, isSprite = true)
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Drama / Serial Letterbox Bars + Atmospheric Particles + Dialogue & Subtitles
+    drawAtmosphereAndMotionOverlay(canvas, scene, w, h, scale, framePhase, globalTimeSec, motion, mouthOpen)
+
     if (motion == MotionChoreography.DRAMA_CINEMATIC) {
       val barPaint = Paint().apply { color = Color.BLACK }
       canvas.drawRect(0f, 0f, w, h * 0.055f, barPaint)
@@ -200,17 +209,37 @@ object AdvancedCharacterAnimator {
       mouthOpen = mouthOpen,
       showSubtitles = showSubtitles,
     )
+
+    // Smooth Fade transition veil at very start/end of scene clip
+    if (scene.transition == TransitionEffect.FADE && enterAlpha < 0.99f) {
+      val fadePaint = Paint().apply {
+        color = Color.argb(((1f - enterAlpha) * 210f).toInt().coerceIn(0, 220), 4, 8, 22)
+      }
+      canvas.drawRect(0f, 0f, w, h, fadePaint)
+    }
+
+    canvas.restore()
   }
+
+  private fun producePresetSet() = setOf(
+    TalkingCharacterPreset.CAULIFLOWER,
+    TalkingCharacterPreset.CABBAGE,
+    TalkingCharacterPreset.BANANA,
+    TalkingCharacterPreset.APPLE,
+    TalkingCharacterPreset.FLOWER,
+    TalkingCharacterPreset.FINGER,
+  )
 
   private fun resolveEffectiveMotion(scene: VideoScenePlan): MotionChoreography {
     if (scene.motionStyle != MotionChoreography.AUTO) return scene.motionStyle
     val combined = "${scene.title} ${scene.narrationText} ${scene.visualPrompt}".lowercase()
     return when {
       combined.contains("৩৬০") || combined.contains("360") || combined.contains("ফ্যাশন") || combined.contains("fashion") -> MotionChoreography.FASHION_360_SPIN
-      combined.contains("নাচ") || combined.contains("dance") || combined.contains("গান") -> MotionChoreography.DANCING
+      combined.contains("দৌড়") || combined.contains("run") || combined.contains("রকেট") -> MotionChoreography.RUNNING
       combined.contains("হাঁট") || combined.contains("walk") || combined.contains("রাস্তা") -> MotionChoreography.WALKING
+      combined.contains("নাচ") || combined.contains("dance") || combined.contains("গান") -> MotionChoreography.DANCING
       combined.contains("নাটক") || combined.contains("সিরিয়াল") || combined.contains("drama") || combined.contains("serial") -> MotionChoreography.DRAMA_CINEMATIC
-      combined.contains("মোশন") || combined.contains("গ্রাফিক্স") || combined.contains("motion") -> MotionChoreography.MOTION_GRAPHICS
+      combined.contains("মোশন") || combined.contains("গ্রাফিক্স") || combined.contains("চার্ট") || combined.contains("motion") -> MotionChoreography.MOTION_GRAPHICS
       else -> MotionChoreography.TALKING_LIPSYNC
     }
   }
@@ -227,63 +256,118 @@ object AdvancedCharacterAnimator {
     motion: MotionChoreography,
   ) {
     val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    val userBmp: Bitmap? =
-      if (scene.userMediaPath.isNotBlank()) {
-        if (scene.userMediaIsVideo) {
-          val vidUs = ((globalTimeSec * 1_000_000f).toLong()) % 30_000_000L
-          StudioMediaLibrary.extractVideoFrameAtTime(scene.userMediaPath, vidUs, maxDim = 760)
-        } else {
-          StudioMediaLibrary.loadStudioBitmap(context, filePath = scene.userMediaPath, maxDim = 760)
-        }
-      } else null
 
-    if (userBmp != null) {
-      drawFullBleedKenBurns(canvas, userBmp, w, h, phase, zoomDelta = 0.14f)
-      // Subtle readability tint
-      bgPaint.color = Color.argb(48, 4, 8, 22)
+    // Priority A: Real moving video footage (from FreeStockMediaFetcher or User Video clip)
+    val videoClipPath = when {
+      scene.realFootagePath.isNotBlank() -> scene.realFootagePath
+      scene.userMediaIsVideo && scene.userMediaPath.isNotBlank() -> scene.userMediaPath
+      else -> ""
+    }
+    if (videoClipPath.isNotBlank()) {
+      val vidUs = ((globalTimeSec * 1_000_000f).toLong()) % 30_000_000L
+      val vidFrame = StudioMediaLibrary.extractVideoFrameAtTime(videoClipPath, vidUs, maxDim = 760)
+      if (vidFrame != null) {
+        drawFullBleedKenBurns(canvas, vidFrame, w, h, phase, zoomDelta = 0.08f)
+        bgPaint.color = Color.argb(46, 4, 8, 22)
+        canvas.drawRect(0f, 0f, w, h, bgPaint)
+        return
+      }
+    }
+
+    // Priority B: User photo (only as backdrop layer, overlaid by animated characters & motion graphics)
+    val userImg =
+      if (scene.userMediaPath.isNotBlank() && !scene.userMediaIsVideo) {
+        StudioMediaLibrary.loadStudioBitmap(context, filePath = scene.userMediaPath, maxDim = 760)
+      } else null
+    if (userImg != null) {
+      drawFullBleedKenBurns(canvas, userImg, w, h, phase, zoomDelta = 0.14f)
+      bgPaint.color = Color.argb(62, 4, 8, 22)
       canvas.drawRect(0f, 0f, w, h, bgPaint)
       return
     }
 
+    // Priority C: Bundled scene background art
     val bgAsset = scene.backgroundAssetFile.ifBlank { scene.matchedAssetFile }
     val bgBmp =
-      if (context != null && bgAsset.isNotBlank() && motion != MotionChoreography.MOTION_GRAPHICS) {
+      if (context != null && bgAsset.isNotBlank() && scene.productionMode != VideoProductionMode.MOTION_GRAPHICS) {
         StudioMediaLibrary.loadStudioBitmap(context, assetFileName = bgAsset, maxDim = 760)
       } else null
 
     if (bgBmp != null) {
       drawFullBleedKenBurns(canvas, bgBmp, w, h, phase, zoomDelta = 0.12f)
-      // Depth vignette so foreground character pops cleanly
-      bgPaint.shader = LinearGradient(0f, 0f, 0f, h, Color.argb(55, 6, 10, 26), Color.argb(120, 4, 8, 20), Shader.TileMode.CLAMP)
+      bgPaint.shader = LinearGradient(0f, 0f, 0f, h, Color.argb(60, 6, 10, 26), Color.argb(130, 4, 8, 20), Shader.TileMode.CLAMP)
       canvas.drawRect(0f, 0f, w, h, bgPaint)
       bgPaint.shader = null
     } else {
-      val (topCol, botCol) = when (motion) {
-        MotionChoreography.FASHION_360_SPIN -> Color.rgb(34, 8, 56) to Color.rgb(8, 12, 32)
-        MotionChoreography.DANCING -> Color.rgb(22, 12, 64) to Color.rgb(4, 24, 48)
-        MotionChoreography.MOTION_GRAPHICS -> Color.rgb(6, 20, 56) to Color.rgb(2, 6, 24)
-        MotionChoreography.DRAMA_CINEMATIC -> Color.rgb(26, 14, 24) to Color.rgb(6, 6, 16)
+      val (topCol, botCol) = when {
+        scene.productionMode == VideoProductionMode.MOTION_GRAPHICS || motion == MotionChoreography.MOTION_GRAPHICS ->
+          Color.rgb(6, 18, 52) to Color.rgb(3, 7, 22)
+        motion == MotionChoreography.FASHION_360_SPIN -> Color.rgb(36, 10, 58) to Color.rgb(8, 12, 32)
+        motion == MotionChoreography.DANCING -> Color.rgb(22, 12, 64) to Color.rgb(4, 24, 48)
+        motion == MotionChoreography.DRAMA_CINEMATIC -> Color.rgb(28, 14, 24) to Color.rgb(6, 6, 16)
         else -> when (scene.themeKeyword) {
-          "village", "produce_story" -> Color.rgb(16, 68, 46) to Color.rgb(6, 28, 24)
+          "village", "produce_story" -> Color.rgb(14, 72, 52) to Color.rgb(5, 28, 22)
           "rocket_launch" -> Color.rgb(18, 12, 54) to Color.rgb(2, 4, 16)
           "solar_system" -> Color.rgb(6, 16, 48) to Color.rgb(2, 4, 16)
           "planet_earth" -> Color.rgb(4, 28, 56) to Color.rgb(2, 4, 16)
-          else -> Color.rgb(10, 18, 48) to Color.rgb(2, 5, 18)
+          else -> Color.rgb(10, 22, 54) to Color.rgb(3, 6, 20)
         }
       }
-      canvas.drawColor(topCol)
       bgPaint.shader = LinearGradient(0f, 0f, 0f, h, topCol, botCol, Shader.TileMode.CLAMP)
       canvas.drawRect(0f, 0f, w, h, bgPaint)
       bgPaint.shader = null
 
-      // Scenic sun & rolling grass stage for produce / village stories
-      if (scene.themeKeyword.contains("village") || scene.themeKeyword.contains("produce")) {
-        val hillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(22, 101, 52) }
-        val drift = sin(phase * PI * 2.0).toFloat() * 18f * scale
-        canvas.drawOval(RectF(-w * 0.2f + drift, h * 0.68f, w * 0.65f + drift, h * 1.15f), hillPaint)
-        hillPaint.color = Color.rgb(21, 128, 61)
-        canvas.drawOval(RectF(w * 0.35f - drift, h * 0.72f, w * 1.2f - drift, h * 1.15f), hillPaint)
+      val hillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(180, 22, 101, 52) }
+      val drift = sin(phase * PI * 2.0).toFloat() * 26f * scale
+      canvas.drawOval(RectF(-w * 0.25f + drift, h * 0.68f, w * 0.65f + drift, h * 1.15f), hillPaint)
+      hillPaint.color = Color.argb(180, 21, 128, 61)
+      canvas.drawOval(RectF(w * 0.35f - drift, h * 0.72f, w * 1.25f - drift, h * 1.15f), hillPaint)
+    }
+  }
+
+  private fun drawDynamicEnvironmentObjects(
+    canvas: Canvas,
+    scene: VideoScenePlan,
+    w: Float,
+    h: Float,
+    scale: Float,
+    phase: Float,
+    globalTimeSec: Float,
+  ) {
+    // Soft sunbeam / studio spotlight cone moving across background
+    val spotX = w * (0.25f + 0.5f * sin(globalTimeSec * 0.65).toFloat())
+    val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      shader = RadialGradient(spotX, h * 0.14f, w * 0.52f, Color.argb(46, 253, 224, 71), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    }
+    canvas.drawCircle(spotX, h * 0.14f, w * 0.52f, beamPaint)
+
+    // Drifting clouds in upper sky band
+    val cloudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(48, 226, 232, 240) }
+    for (c in 0 until 3) {
+      val cx = ((phase * 0.35f + c * 0.38f) % 1.2f - 0.1f) * w
+      val cy = h * (0.17f + c * 0.055f)
+      canvas.drawOval(RectF(cx - 52f * scale, cy - 14f * scale, cx + 52f * scale, cy + 16f * scale), cloudPaint)
+      canvas.drawCircle(cx - 22f * scale, cy - 8f * scale, 18f * scale, cloudPaint)
+      canvas.drawCircle(cx + 16f * scale, cy - 10f * scale, 22f * scale, cloudPaint)
+    }
+
+    // Animated birds / drones / celestial orbiters moving across sky
+    val birdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      style = Paint.Style.STROKE
+      strokeWidth = 2.5f * scale
+      strokeCap = Paint.Cap.ROUND
+      color = Color.argb(175, 224, 247, 250)
+    }
+    for (b in 0 until 2) {
+      val bx = (((globalTimeSec * 0.14f + b * 0.48f) % 1.15f) - 0.05f) * w
+      val by = h * (0.22f + b * 0.06f) + sin(globalTimeSec * 4.5 + b).toFloat() * 8f * scale
+      val flap = sin(globalTimeSec * 12.0 + b).toFloat() * 7f * scale
+      val p = Path().apply {
+        moveTo(bx - 12f * scale, by - flap)
+        quadTo(bx - 6f * scale, by - 6f * scale, bx, by)
+        quadTo(bx + 6f * scale, by - 6f * scale, bx + 12f * scale, by - flap)
       }
+      canvas.drawPath(p, birdPaint)
     }
   }
 
@@ -296,7 +380,7 @@ object AdvancedCharacterAnimator {
     zoomDelta: Float,
   ) {
     val baseScale = maxOf(w / bmp.width, h / bmp.height)
-    val zoom = baseScale * (1.03f + zoomDelta * sin(phase * PI).toFloat())
+    val zoom = baseScale * (1.04f + zoomDelta * sin(phase * PI).toFloat())
     val scaledW = bmp.width * zoom
     val scaledH = bmp.height * zoom
     val panX = ((w - scaledW) * 0.5f) + sin(phase * 2.0 * PI).toFloat() * (scaledW - w) * 0.28f
@@ -334,6 +418,13 @@ object AdvancedCharacterAnimator {
     var pulseScale = 1.0f
 
     when (motion) {
+      MotionChoreography.RUNNING -> {
+        val runCycle = sin(phase * 12.0 * PI).toFloat()
+        offsetX = (phase - 0.5f) * boxW * 0.72f
+        offsetY = -abs(runCycle) * 28f * scale
+        rotZ = 9f + runCycle * 6f
+        pulseScale = 1.0f + 0.04f * runCycle
+      }
       MotionChoreography.WALKING -> {
         val walkCycle = sin(phase * 6.0 * PI).toFloat()
         offsetX = (phase - 0.5f) * boxW * 0.55f
@@ -353,49 +444,11 @@ object AdvancedCharacterAnimator {
         offsetY = sin(phase * 4.0 * PI).toFloat() * 10f * scale
         pulseScale = 1.0f + 0.04f * cos(phase * 2.0 * PI).toFloat()
       }
-      MotionChoreography.MOTION_GRAPHICS -> {
-        offsetX = sin(phase * 2.0 * PI).toFloat() * 26f * scale
-        offsetY = cos(phase * 4.0 * PI).toFloat() * 14f * scale
-        pulseScale = 0.94f + 0.12f * phase
-      }
       else -> {
-        // Lifelike talking breath + expressive speaker energy synced to audio amplitude
         offsetY = sin(phase * 4.0 * PI).toFloat() * 9f * scale - mouthOpen * 8f * scale
         rotZ = sin(phase * 2.0 * PI).toFloat() * (1.8f + mouthOpen * 2.4f)
         pulseScale = 1.0f + mouthOpen * 0.045f
       }
-    }
-
-    // Ground shadow under character
-    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.argb(115, 0, 0, 0)
-    }
-    canvas.drawOval(
-      RectF(
-        cx + offsetX - drawW * 0.28f,
-        cy + drawH * 0.45f,
-        cx + offsetX + drawW * 0.28f,
-        cy + drawH * 0.52f,
-      ),
-      shadowPaint,
-    )
-
-    // Runway glow pedestal for 360 Fashion or Dancing
-    if (motion == MotionChoreography.FASHION_360_SPIN || motion == MotionChoreography.DANCING) {
-      val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 4f * scale
-        color = Color.argb(200, 0, 229, 255)
-      }
-      canvas.drawOval(
-        RectF(
-          cx + offsetX - drawW * 0.42f,
-          cy + drawH * 0.40f,
-          cx + offsetX + drawW * 0.42f,
-          cy + drawH * 0.53f,
-        ),
-        ringPaint,
-      )
     }
 
     canvas.save()
@@ -430,27 +483,8 @@ object AdvancedCharacterAnimator {
       canvas.drawBitmap(bmp, null, dst, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
     }
     canvas.restore()
-
-    if (motion == MotionChoreography.FASHION_360_SPIN) {
-      val deg = ((rotY3D % 360f) + 360f).toInt() % 360
-      val pillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 15, 23, 42) }
-      val txtP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(250, 204, 21)
-        textSize = 20f * scale
-        typeface = Typeface.DEFAULT_BOLD
-        textAlign = Paint.Align.CENTER
-      }
-      val pill = RectF(cx - 88f * scale, cy + drawH * 0.43f, cx + 88f * scale, cy + drawH * 0.43f + 34f * scale)
-      canvas.drawRoundRect(pill, 16f * scale, 16f * scale, pillP)
-      canvas.drawText("360° VIEW • ${deg}°", cx, pill.centerY() + 7f * scale, txtP)
-    }
   }
 
-  /**
-   * Renders rich expressive animated characters for:
-   * - ফুলকপি (CAULIFLOWER), পাতাকপি (CABBAGE), কলা (BANANA), আপেল (APPLE), ফুল (FLOWER), আঙ্গুল (FINGER)
-   * with blinking eyes, eyebrows, animated talking mouth (lip-sync), waving arms & dancing/walking feet!
-   */
   fun drawTalkingProduceCharacter(
     canvas: Canvas,
     preset: TalkingCharacterPreset,
@@ -462,14 +496,21 @@ object AdvancedCharacterAnimator {
     globalTimeSec: Float,
     mouthOpen: Float,
   ) {
-    val walkSwing = sin(phase * 8.0 * PI).toFloat()
+    val freq = if (motion == MotionChoreography.RUNNING) 14.0 else 8.0
+    val walkSwing = sin(phase * freq * PI).toFloat()
     val bounceY = when (motion) {
+      MotionChoreography.RUNNING -> -abs(walkSwing) * 26f * scale
       MotionChoreography.WALKING -> -abs(walkSwing) * 18f * scale
       MotionChoreography.DANCING -> -abs(sin(phase * 10.0 * PI).toFloat()) * 26f * scale
       else -> sin(phase * 4.0 * PI).toFloat() * 8f * scale
     }
-    val walkX = if (motion == MotionChoreography.WALKING) (phase - 0.5f) * 160f * scale else 0f
+    val walkX = when (motion) {
+      MotionChoreography.RUNNING -> (phase - 0.5f) * 210f * scale
+      MotionChoreography.WALKING -> (phase - 0.5f) * 160f * scale
+      else -> 0f
+    }
     val tiltDeg = when (motion) {
+      MotionChoreography.RUNNING -> 10f + walkSwing * 5f
       MotionChoreography.DANCING -> sin(phase * 8.0 * PI).toFloat() * 9f
       MotionChoreography.WALKING -> walkSwing * 4f
       else -> sin(phase * 2.0 * PI).toFloat() * 2.5f
@@ -489,7 +530,6 @@ object AdvancedCharacterAnimator {
     }
     canvas.rotate(tiltDeg)
 
-    // Animated Cartoon Legs / Shoes
     val legPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
       color = Color.rgb(30, 41, 59)
       strokeWidth = 12f * scale
@@ -503,20 +543,17 @@ object AdvancedCharacterAnimator {
     canvas.drawOval(RectF(-62f * scale, leftFootY - 8f * scale, -22f * scale, leftFootY + 14f * scale), shoePaint)
     canvas.drawOval(RectF(22f * scale, rightFootY - 8f * scale, 62f * scale, rightFootY + 14f * scale), shoePaint)
 
-    // Animated Waving Arms
-    val armWaveL = sin(phase * 8.0 * PI).toFloat() * 34f * scale
-    val armWaveR = cos(phase * 8.0 * PI).toFloat() * 34f * scale
+    val armWaveL = sin(phase * freq * PI).toFloat() * 34f * scale
+    val armWaveR = cos(phase * freq * PI).toFloat() * 34f * scale
     val handPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(254, 240, 138) }
     canvas.drawLine(-72f * scale, 8f * scale, -124f * scale, -18f * scale + armWaveL, legPaint)
     canvas.drawCircle(-124f * scale, -18f * scale + armWaveL, 14f * scale, handPaint)
     canvas.drawLine(72f * scale, 8f * scale, 124f * scale, -22f * scale + armWaveR, legPaint)
     canvas.drawCircle(124f * scale, -22f * scale + armWaveR, 14f * scale, handPaint)
 
-    // Draw specific body silhouette & theme colors
     var faceOffsetY = -10f * scale
     when (preset) {
       TalkingCharacterPreset.CAULIFLOWER -> {
-        // Outer crisp green cabbage/cauliflower leaves collar
         val leafPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(34, 197, 94) }
         val darkLeaf = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(21, 128, 61) }
         for (a in listOf(-140.0, -105.0, -75.0, -40.0, 40.0, 75.0, 105.0, 140.0)) {
@@ -525,7 +562,6 @@ object AdvancedCharacterAnimator {
           val ly = (cos(rad) * 72f + 35f).toFloat() * scale
           canvas.drawCircle(lx, ly, 36f * scale, if (a < 0) leafPaint else darkLeaf)
         }
-        // Creamy scalloped cauliflower floret crown
         val floretPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
           shader = RadialGradient(-18f * scale, -40f * scale, 125f * scale, Color.rgb(255, 253, 240), Color.rgb(226, 232, 200), Shader.TileMode.CLAMP)
         }
@@ -592,12 +628,10 @@ object AdvancedCharacterAnimator {
         canvas.drawCircle(0f, 0f, 68f * scale, centerPaint)
       }
       TalkingCharacterPreset.FINGER -> {
-        // Anthropomorphic Cute Cartoon Finger Character
         val palmPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
           shader = LinearGradient(-55f * scale, -120f * scale, 55f * scale, 100f * scale, Color.rgb(255, 224, 189), Color.rgb(244, 180, 135), Shader.TileMode.CLAMP)
         }
         canvas.drawRoundRect(RectF(-56f * scale, -135f * scale, 56f * scale, 95f * scale), 56f * scale, 56f * scale, palmPaint)
-        // Glossy fingernail at top
         val nailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 241, 242) }
         canvas.drawRoundRect(RectF(-34f * scale, -122f * scale, 34f * scale, -78f * scale), 26f * scale, 26f * scale, nailPaint)
         faceOffsetY = -14f * scale
@@ -605,7 +639,6 @@ object AdvancedCharacterAnimator {
       else -> Unit
     }
 
-    // Expressive Blinking Eyes + Rosy Cheeks + Real-Time Lip-Sync Mouth
     val isBlinking = ((globalTimeSec * 0.8f) % 3.2f) > 3.04f
     val eyeW = 14f * scale
     val eyeH = if (isBlinking) 2.5f * scale else 16f * scale
@@ -629,7 +662,6 @@ object AdvancedCharacterAnimator {
       canvas.drawLine(16f * scale, faceOffsetY - 22f * scale, 40f * scale, faceOffsetY - 22f * scale, blinkLine)
     }
 
-    // Animated Lip-Synced Mouth (closed smile -> wide talking mouth w/ tongue!)
     val openHeight = (6f + mouthOpen * 28f) * scale
     val mouthBox = RectF(-24f * scale, faceOffsetY + 6f * scale, 24f * scale, faceOffsetY + 6f * scale + openHeight)
     val lipOuter = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(127, 29, 29) }
@@ -640,9 +672,7 @@ object AdvancedCharacterAnimator {
       canvas.drawArc(RectF(-22f * scale, faceOffsetY + 2f * scale, 22f * scale, faceOffsetY + 22f * scale), 15f, 150f, false, lipStroke)
     } else {
       canvas.drawOval(mouthBox, lipOuter)
-      // Upper teeth
       canvas.drawRoundRect(RectF(-16f * scale, mouthBox.top + 2f * scale, 16f * scale, mouthBox.top + 8f * scale), 4f * scale, 4f * scale, whitePaint)
-      // Animated tongue
       if (mouthOpen > 0.25f) {
         canvas.drawOval(RectF(-12f * scale, mouthBox.centerY(), 12f * scale, mouthBox.bottom - 2f * scale), tonguePaint)
       }
@@ -664,35 +694,13 @@ object AdvancedCharacterAnimator {
     mouthOpen: Float,
   ) {
     val particlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    // Floating golden fireflies / sparkles / music notes
     val isDance = motion == MotionChoreography.DANCING
-    val isMotionGfx = motion == MotionChoreography.MOTION_GRAPHICS
 
-    if (isMotionGfx) {
-      val ringP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 3f * scale
-      }
-      for (i in 0 until 3) {
-        val rad = ((0.18f + 0.12f * i + phase * 0.25f) % 0.6f) * minOf(w, h)
-        ringP.color = Color.argb(120 - i * 30, 0, 229, 255)
-        canvas.drawCircle(w * 0.5f, h * 0.48f, rad, ringP)
-      }
-      // Animated Neon Equalizer Bars driven by live voice amplitude
-      val barP = Paint(Paint.ANTI_ALIAS_FLAG)
-      for (b in 0 until 12) {
-        val bx = w * 0.14f + b * (w * 0.065f)
-        val barH = (18f + (0.25f + mouthOpen) * 70f * abs(sin(globalTimeSec * 8.0 + b * 0.7)).toFloat()) * scale
-        barP.color = if (b % 2 == 0) Color.argb(180, 0, 229, 255) else Color.argb(180, 232, 121, 249)
-        canvas.drawRoundRect(RectF(bx, h * 0.75f - barH, bx + 12f * scale, h * 0.75f), 6f * scale, 6f * scale, barP)
-      }
-    }
-
-    for (i in 0 until 26) {
+    for (i in 0 until 24) {
       val px = (((i * 211 + 59) % 1000) / 1000f) * w
-      val driftY = (((i * 317 + 73) % 1000) / 1000f) * h * 0.85f - (phase * 40f * scale)
+      val driftY = (((i * 317 + 73) % 1000) / 1000f) * h * 0.85f - (phase * 48f * scale)
       val py = ((driftY % h) + h) % h
-      val alpha = (95 + 145 * abs(sin(phase * 2.0 * PI + i)).toFloat()).toInt().coerceIn(40, 245)
+      val alpha = (90 + 145 * abs(sin(phase * 2.0 * PI + i)).toFloat()).toInt().coerceIn(35, 240)
       if (isDance && i % 4 == 0) {
         particlePaint.color = Color.argb(alpha, 250, 204, 21)
         particlePaint.textSize = 26f * scale
@@ -702,37 +710,6 @@ object AdvancedCharacterAnimator {
         canvas.drawCircle(px, py, (2.2f + (i % 3) * 1.4f) * scale, particlePaint)
       }
     }
-  }
-
-  private fun drawStylizedFallbackCenterpiece(
-    canvas: Canvas,
-    scene: VideoScenePlan,
-    cx: Float,
-    cy: Float,
-    scale: Float,
-    phase: Float,
-    mouthOpen: Float,
-    motion: MotionChoreography,
-  ) {
-    // Rich astronaut / kid / storyteller character with animated mouth!
-    val bobY = sin(phase * 4.0 * PI).toFloat() * 14f * scale
-    val walkX = if (motion == MotionChoreography.WALKING) (phase - 0.5f) * 140f * scale else 0f
-    val x = cx + walkX
-    val y = cy + bobY
-
-    val suitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(226, 232, 240) }
-    canvas.drawRoundRect(RectF(x - 56f * scale, y + 32f * scale, x + 56f * scale, y + 148f * scale), 28f * scale, 28f * scale, suitPaint)
-    val helmetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 229, 255) }
-    canvas.drawCircle(x, y - 30f * scale, 64f * scale, helmetPaint)
-    val visorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 23, 42) }
-    canvas.drawCircle(x, y - 28f * scale, 48f * scale, visorPaint)
-    val eyePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(56, 189, 248) }
-    canvas.drawCircle(x - 16f * scale, y - 36f * scale, 7f * scale, eyePaint)
-    canvas.drawCircle(x + 16f * scale, y - 36f * scale, 7f * scale, eyePaint)
-
-    val mouthH = (5f + mouthOpen * 18f) * scale
-    val smilePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(250, 204, 21) }
-    canvas.drawOval(RectF(x - 16f * scale, y - 16f * scale, x + 16f * scale, y - 16f * scale + mouthH), smilePaint)
   }
 
   private fun drawSceneHudAndSubtitles(
@@ -758,18 +735,17 @@ object AdvancedCharacterAnimator {
 
     val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
       color = Color.rgb(0, 229, 255)
-      textSize = 23f * scale
+      textSize = 22f * scale
       typeface = Typeface.DEFAULT_BOLD
       textAlign = Paint.Align.CENTER
     }
     canvas.drawText(
-      "Scene ${scene.index}: ${scene.overlayHeadline.take(32)}",
+      "Scene ${scene.index} • ${scene.productionMode.badgeEn}: ${scene.overlayHeadline.take(28)}",
       w * 0.5f,
       topRect.centerY() + 8f * scale,
       titlePaint,
     )
 
-    // Speaking Character & Dialogue Bubble with live voice wave indicator
     if (scene.characterName.isNotBlank() && scene.dialogueLine.isNotBlank()) {
       val dlgRect = RectF(w * 0.08f, h * 0.69f, w * 0.92f, h * 0.775f)
       badgePaint.color = Color.argb(190, 22, 16, 48)

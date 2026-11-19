@@ -13,15 +13,25 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLExt
+import android.opengl.EGLSurface
+import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.view.Surface
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
@@ -119,7 +129,7 @@ object AndroidVideoRendererAndExporter {
     if (surfaceResult.isSuccess && outFile.exists() && outFile.length() > 4096L) {
       return RenderOutcome(
         mp4File = outFile,
-        engineLabel = "Android MediaCodec Surface H.264/AAC MP4 (${encodeW}x${encodeH} • 18fps)",
+        engineLabel = "Android MediaCodec EGL PTS H.264/AAC MP4 (${encodeW}x${encodeH} • 24fps)",
       )
     }
 
@@ -194,11 +204,11 @@ object AndroidVideoRendererAndExporter {
     includeAudio: Boolean,
     onProgress: (Float) -> Unit,
   ) {
-    val fps = 18
+    val fps = 24
     val codecInfo = findAvcEncoderInfo() ?: error("No AVC encoder available")
     val vFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
       setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-      setInteger(MediaFormat.KEY_BIT_RATE, 2_800_000)
+      setInteger(MediaFormat.KEY_BIT_RATE, 3_400_000)
       setInteger(MediaFormat.KEY_FRAME_RATE, fps)
       setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
     }
@@ -207,6 +217,7 @@ object AndroidVideoRendererAndExporter {
     vCodec.configure(vFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
     val inputSurface = vCodec.createInputSurface()
     vCodec.start()
+    val eglBlitter = runCatching { EglSurfaceFrameBlitter(inputSurface, width, height) }.getOrNull()
 
     // Standard 44100Hz AAC works reliably across all Android vendor encoders
     val aacRate = 44100
@@ -303,21 +314,37 @@ object AndroidVideoRendererAndExporter {
                 )
               } else 0.35f
 
-            val canvas = inputSurface.lockCanvas(null)
-            try {
-              AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(
-                context = context,
-                canvas = canvas,
+            val ptsNs = frameIndex.toLong() * frameDurationUs * 1_000L
+            if (eglBlitter != null) {
+              val frameBmp = VideoScriptAndMediaGenerator.renderSceneBitmap(
                 scene = activeScene,
                 width = width,
                 height = height,
                 framePhase = localPhase,
-                globalTimeSec = curTimeSec,
-                mouthOpen = mouthOpen,
                 showSubtitles = project.settings.subtitlesEnabled,
+                context = context,
+                mouthOpen = mouthOpen,
+                globalTimeSec = curTimeSec,
               )
-            } finally {
-              inputSurface.unlockCanvasAndPost(canvas)
+              eglBlitter.drawBitmapWithPts(frameBmp, ptsNs)
+              frameBmp.recycle()
+            } else {
+              val canvas = inputSurface.lockCanvas(null)
+              try {
+                AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(
+                  context = context,
+                  canvas = canvas,
+                  scene = activeScene,
+                  width = width,
+                  height = height,
+                  framePhase = localPhase,
+                  globalTimeSec = curTimeSec,
+                  mouthOpen = mouthOpen,
+                  showSubtitles = project.settings.subtitlesEnabled,
+                )
+              } finally {
+                inputSurface.unlockCanvasAndPost(canvas)
+              }
             }
             frameIndex++
             onProgress((frameIndex.toFloat() / totalFrames).coerceIn(0f, 0.94f))
@@ -361,6 +388,7 @@ object AndroidVideoRendererAndExporter {
       }
       onProgress(1f)
     } finally {
+      runCatching { eglBlitter?.release() }
       runCatching { inputSurface.release() }
       runCatching { vCodec.stop(); vCodec.release() }
       runCatching { aCodec?.stop(); aCodec?.release() }
@@ -699,6 +727,8 @@ object AndroidVideoRendererAndExporter {
     val termuxRunDir = publicDownloadFolder?.absolutePath ?: "/sdcard/Download/LXR-VideoStudio/$slug"
     val yamlText = OpenMontageFrameworkBridge.buildPipelineYaml(project)
     val remotionTsx = OpenMontageFrameworkBridge.buildRemotionTsx(project)
+    val manimPy = OpenMontageFrameworkBridge.buildManimMotionScript(project)
+    val gsapHtml = OpenMontageFrameworkBridge.buildGsapHyperframesHtml(project)
     val pythonRunner = OpenMontageFrameworkBridge.buildPythonOpenMontageRunner(project)
     val termuxSh = OpenMontageFrameworkBridge.buildTermuxPipelineScript(project, termuxRunDir)
     val checkpointJson = OpenMontageFrameworkBridge.buildCheckpointJson(project, completedStages)
@@ -723,6 +753,8 @@ object AndroidVideoRendererAndExporter {
       addEntry("lxr_openmontage_termux.sh", termuxSh.toByteArray(Charsets.UTF_8))
       addEntry("remotion/OpenMontageVideo.tsx", remotionTsx.toByteArray(Charsets.UTF_8))
       addEntry("remotion/package.json", """{"name":"$slug","private":true,"dependencies":{"remotion":"^4.0.0","react":"^18.2.0"}}""".toByteArray(Charsets.UTF_8))
+      addEntry("motion_graphics/manim_scene.py", manimPy.toByteArray(Charsets.UTF_8))
+      addEntry("motion_graphics/hyperframes_gsap.html", gsapHtml.toByteArray(Charsets.UTF_8))
       addEntry("script.txt", project.fullScriptText.toByteArray(Charsets.UTF_8))
       addEntry("subtitles.srt", srtContent.toByteArray(Charsets.UTF_8))
       addEntry("frames_concat.txt", concatManifest.toByteArray(Charsets.UTF_8))
@@ -731,6 +763,7 @@ object AndroidVideoRendererAndExporter {
         .put("title", project.title)
         .put("slug", slug)
         .put("framework", OpenMontageFrameworkBridge.OPENMONTAGE_REPO)
+        .put("productionMode", project.settings.productionMode.name)
         .put("voiceEngine", voiceEngineLabel)
         .put("renderEngine", renderEngineLabel)
       addEntry("manifest.json", manifest.toString(2).toByteArray(Charsets.UTF_8))
@@ -870,5 +903,116 @@ object AndroidVideoRendererAndExporter {
     val t = previewTrack
     previewTrack = null
     runCatching { t?.pause(); t?.flush(); t?.stop(); t?.release() }
+  }
+}
+
+/**
+ * EGL14 + GLES20 texture blitter pushing Bitmaps onto MediaCodec's input Surface with explicit
+ * presentation timestamps (eglPresentationTimeANDROID) so 24fps MP4 duration matches 44.1kHz AAC audio.
+ */
+private class EglSurfaceFrameBlitter(
+  surface: Surface,
+  private val width: Int,
+  private val height: Int,
+) {
+  private val eglDisplay: EGLDisplay
+  private val eglContext: EGLContext
+  private val eglSurface: EGLSurface
+  private val program: Int
+  private val textureId: Int
+  private val posHandle: Int
+  private val texHandle: Int
+  private val quadBuf: FloatBuffer
+
+  init {
+    eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+    require(eglDisplay != EGL14.EGL_NO_DISPLAY) { "EGL display unavailable" }
+    val vers = IntArray(2)
+    require(EGL14.eglInitialize(eglDisplay, vers, 0, vers, 1)) { "EGL init failed" }
+    val cfgAttr = intArrayOf(
+      EGL14.EGL_RED_SIZE, 8,
+      EGL14.EGL_GREEN_SIZE, 8,
+      EGL14.EGL_BLUE_SIZE, 8,
+      EGL14.EGL_ALPHA_SIZE, 8,
+      EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+      0x3142, 1,
+      EGL14.EGL_NONE,
+    )
+    val configs = arrayOfNulls<EGLConfig>(1)
+    val numCfg = IntArray(1)
+    require(EGL14.eglChooseConfig(eglDisplay, cfgAttr, 0, configs, 0, 1, numCfg, 0) && numCfg[0] > 0)
+    val ctxAttr = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
+    eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, ctxAttr, 0)
+    eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0], surface, intArrayOf(EGL14.EGL_NONE), 0)
+    EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+    val vs = compileShader(
+      GLES20.GL_VERTEX_SHADER,
+      "attribute vec2 aPos; attribute vec2 aTex; varying vec2 vTex; void main(){ gl_Position=vec4(aPos,0.0,1.0); vTex=aTex; }",
+    )
+    val fs = compileShader(
+      GLES20.GL_FRAGMENT_SHADER,
+      "precision mediump float; varying vec2 vTex; uniform sampler2D uTex; void main(){ gl_FragColor=texture2D(uTex, vTex); }",
+    )
+    program = GLES20.glCreateProgram().also { p ->
+      GLES20.glAttachShader(p, vs)
+      GLES20.glAttachShader(p, fs)
+      GLES20.glLinkProgram(p)
+    }
+    posHandle = GLES20.glGetAttribLocation(program, "aPos")
+    texHandle = GLES20.glGetAttribLocation(program, "aTex")
+
+    val texIds = IntArray(1)
+    GLES20.glGenTextures(1, texIds, 0)
+    textureId = texIds[0]
+    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+    val verts = floatArrayOf(
+      -1f, -1f, 0f, 1f,
+      1f, -1f, 1f, 1f,
+      -1f, 1f, 0f, 0f,
+      1f, 1f, 1f, 0f,
+    )
+    quadBuf = ByteBuffer.allocateDirect(verts.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+      put(verts)
+      position(0)
+    }
+  }
+
+  private fun compileShader(type: Int, src: String): Int {
+    val s = GLES20.glCreateShader(type)
+    GLES20.glShaderSource(s, src)
+    GLES20.glCompileShader(s)
+    return s
+  }
+
+  fun drawBitmapWithPts(bmp: Bitmap, ptsNs: Long) {
+    EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+    GLES20.glViewport(0, 0, width, height)
+    GLES20.glClearColor(0f, 0f, 0f, 1f)
+    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+    GLES20.glUseProgram(program)
+    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+    quadBuf.position(0)
+    GLES20.glEnableVertexAttribArray(posHandle)
+    GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+    quadBuf.position(2)
+    GLES20.glEnableVertexAttribArray(texHandle)
+    GLES20.glVertexAttribPointer(texHandle, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+    EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs)
+    EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+  }
+
+  fun release() {
+    EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+    EGL14.eglDestroySurface(eglDisplay, eglSurface)
+    EGL14.eglDestroyContext(eglDisplay, eglContext)
+    EGL14.eglTerminate(eglDisplay)
   }
 }
