@@ -116,8 +116,8 @@ class RiyaAccessibilityService : AccessibilityService() {
       val isStateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
       val isContentChange =
         event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-          com.example.data.RiyaState.running.value
-      val minGap = if (isStateChange) 700L else 1800L
+          (com.example.data.RiyaState.running.value || pkg == "com.android.systemui")
+      val minGap = if (isStateChange) 320L else 850L
       if ((isStateChange || isContentChange) &&
         now - lastScan >= minGap &&
         !scanScheduled
@@ -252,10 +252,12 @@ class RiyaAccessibilityService : AccessibilityService() {
     if (resolvedPkg != packageName && resolvedPkg != "unknown") {
       currentApp = resolvedPkg
     }
-    if (summaryLines.isNotEmpty()) {
-      currentScreenSummary =
-        "বর্তমান অ্যাপ: $resolvedPkg | স্ক্রিন দৃশ্য: ${summaryLines.take(15).joinToString(", ").take(350)}"
-    }
+    val liveReport = LockVaultManager.describeLivePhoneState(this, this)
+    val sceneText =
+      if (summaryLines.isNotEmpty()) summaryLines.take(15).joinToString(", ").take(350)
+      else "(দৃশ্যমান টেক্সট কম বা খালি)"
+    currentScreenSummary =
+      "${liveReport.summaryBn} | বর্তমান অ্যাপ: $resolvedPkg | স্ক্রিন দৃশ্য: $sceneText"
 
     val snapshot =
       ScreenSnapshot(
@@ -272,10 +274,18 @@ class RiyaAccessibilityService : AccessibilityService() {
     return snapshot
   }
 
-  // স্ক্রিন পড়া: উপর থেকে নিচে, বাঁ থেকে ডানে সাজানো। বাটন, লেখার বক্স (Title বনাম মূল Body আলাদাভাবে), সুইচ চিহ্নিত।
+  // স্ক্রিন পড়া: উপর থেকে নিচে, বাঁ থেকে ডানে সাজানো। বাটন, লেখার বক্স (Title বনাম মূল Body আলাদাভাবে), এবং চ্যাট বাবলের দিক (আমার পাঠানো vs অপর প্রান্তের মেসেজ) চিহ্নিত।
   fun readScreen(): String {
     readEntireScreenTree()
-    val root = rootInActiveWindow ?: return "স্ক্রিন পাওয়া যায়নি"
+    val liveState = LockVaultManager.describeLivePhoneState(this, this)
+    val root = rootInActiveWindow ?: return "${liveState.summaryBn}\nস্ক্রিন পাওয়া যায়নি"
+    val pkg = root.packageName?.toString().orEmpty()
+    val isMessagingPkg =
+      pkg.contains("whatsapp") || pkg.contains("imo") || pkg == "com.facebook.orca" || pkg == "com.facebook.mlite"
+    val rootBounds = Rect().also { root.getBoundsInScreen(it) }
+    val screenW = if (rootBounds.width() > 0) rootBounds.width() else resources.displayMetrics.widthPixels.coerceAtLeast(720)
+    val screenH = if (rootBounds.height() > 0) rootBounds.height() else resources.displayMetrics.heightPixels.coerceAtLeast(1280)
+
     val editablePairs = collectEditableNodes(root)
     val editableCandidates = editablePairs.mapIndexed { idx, node -> toCandidate(idx, node) }
     val nodeRoleByHash = IdentityHashMapCompat(editablePairs, editableCandidates)
@@ -289,6 +299,15 @@ class RiyaAccessibilityService : AccessibilityService() {
       val hint = if (Build.VERSION.SDK_INT >= 26) n.hintText?.toString()?.trim() else null
       val r = Rect()
       n.getBoundsInScreen(r)
+      val inChatMessageArea = isMessagingPkg && !n.isEditable && r.top > (screenH * 0.14f) && r.bottom < (screenH * 0.87f)
+      val bubbleDirectionTag =
+        if (inChatMessageArea && !t.isNullOrEmpty() && t.length >= 2) {
+          when {
+            r.left >= screenW * 0.28f && r.right >= screenW * 0.72f -> " [আমাদের পাঠানো উত্তর / আমি পাঠিয়েছি]"
+            r.left <= screenW * 0.25f && r.right <= screenW * 0.78f -> " [অপর প্রান্তের পাঠানো মেসেজ / Incoming]"
+            else -> ""
+          }
+        } else ""
       val tag =
         when {
           n.isEditable ->
@@ -298,6 +317,7 @@ class RiyaAccessibilityService : AccessibilityService() {
               else -> " [লেখার বক্স]"
             }
           n.isCheckable -> if (n.isChecked) " [সুইচ: চালু]" else " [সুইচ: বন্ধ]"
+          bubbleDirectionTag.isNotEmpty() -> bubbleDirectionTag
           n.isClickable -> " [বাটন]"
           else -> ""
         }
@@ -318,8 +338,8 @@ class RiyaAccessibilityService : AccessibilityService() {
         .sortedWith(compareBy<Triple<Int, Int, String>>({ it.first / 20 }, { it.second }))
         .map { it.third }
         .distinct()
-    if (lines.isEmpty()) return "স্ক্রিনে পড়ার মতো কিছু পাওয়া যায়নি"
-    return "অ্যাপ: ${root.packageName ?: ""}\n" + lines.joinToString("\n").take(4000)
+    if (lines.isEmpty()) return "${liveState.summaryBn}\nঅ্যাপ: $pkg\nস্ক্রিনে পড়ার মতো কিছু পাওয়া যায়নি"
+    return "${liveState.summaryBn}\nঅ্যাপ: $pkg\n" + lines.joinToString("\n").take(4000)
   }
 
   // চ্যাট বা লেখার বক্সে মেসেজ লেখা ও সেন্ড (WhatsApp, imo, Messenger, Gemini, ChatGPT)

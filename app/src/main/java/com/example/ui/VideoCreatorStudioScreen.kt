@@ -228,6 +228,9 @@ fun VideoCreatorStudioScreen(
           ProductionToolTab.EDIT -> ToolCardEditPanel(state = state, vm = vm)
         }
 
+        // Complete 3D Cartoon Animation, Movie, Character Library & Episodic Series Studio
+        CartoonSeriesStudioPanel(state = state, vm = vm)
+
         // Video Settings Strip (20 Types, Motion, Talking Character, Duration, Ratio, Quality)
         VideoTypeAndSettingsCard(state = state, vm = vm)
 

@@ -34,6 +34,20 @@ data class LockSwipeVector(
   val durationMs: Long,
 )
 
+enum class LivePhoneLockPhase {
+  SCREEN_OFF,
+  KEYGUARD_LOCKED,
+  APP_LOCKED,
+  UNLOCKED,
+}
+
+data class LivePhoneStateReport(
+  val phase: LivePhoneLockPhase,
+  val isLocked: Boolean,
+  val activePackage: String,
+  val summaryBn: String,
+)
+
 /**
  * Manages stored Phone Screen Lock & App Lock credentials (up to 8-digit PIN/Password or 3x3 Pattern)
  * across Infinix, Xiaomi, Redmi, Realme, Tecno, itel & Android devices.
@@ -127,18 +141,97 @@ object LockVaultManager {
 
   fun isSystemKeyguardUiShowing(acc: RiyaAccessibilityService?): Boolean {
     if (acc == null) return false
-    val pkg = acc.rootInActiveWindow?.packageName?.toString()?.lowercase().orEmpty()
-    if (pkg.contains("keyguard") || pkg.contains("lockscreen")) return true
-    if (pkg != "com.android.systemui") return false
-    val textDump = collectCompactScreenText(collectAllRoots(acc)).lowercase()
+    val roots = collectAllRoots(acc)
+    val pkgs =
+      roots.mapNotNull { it.packageName?.toString()?.lowercase()?.trim() }.filter { it.isNotEmpty() }
+    val activePkg = acc.rootInActiveWindow?.packageName?.toString()?.lowercase()?.trim().orEmpty()
+    if (activePkg.contains("keyguard") || activePkg.contains("lockscreen") ||
+      pkgs.any { it.contains("keyguard") || it.contains("lockscreen") }
+    ) {
+      return true
+    }
+    if (activePkg != "com.android.systemui" && "com.android.systemui" !in pkgs) return false
+    val textDump = collectCompactScreenText(roots).lowercase()
     return textDump.contains("keyguard") ||
       textDump.contains("lock_icon") ||
       textDump.contains("pinentry") ||
       textDump.contains("lockpattern") ||
+      textDump.contains("bouncer") ||
       textDump.contains("swipe up to unlock") ||
       textDump.contains("enter password") ||
       textDump.contains("enter pin") ||
+      textDump.contains("wrong pin") ||
+      textDump.contains("fingerprint") ||
+      textDump.contains("unlock with") ||
+      textDump.contains("পিন দিন") ||
+      textDump.contains("প্যাটার্ন আঁকুন") ||
       textDump.contains("emergency")
+  }
+
+  fun describeLivePhoneState(
+    ctx: Context,
+    acc: RiyaAccessibilityService?,
+    lockType: ScreenLockType = Store.phoneLockType(ctx),
+  ): LivePhoneStateReport {
+    return try {
+      val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      val interactive = pm?.isInteractive ?: true
+      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
+      val lowerPkg = activePkg.lowercase()
+      if (!interactive) {
+        return LivePhoneStateReport(
+          phase = LivePhoneLockPhase.SCREEN_OFF,
+          isLocked = true,
+          activePackage = activePkg.ifBlank { "screen_off" },
+          summaryBn = "স্ক্রিনের অবস্থা: বন্ধ ও লক করা (Screen OFF & Locked)",
+        )
+      }
+      val keyguardLocked = km?.isKeyguardLocked == true
+      val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+      val keyguardUi = isSystemKeyguardUiShowing(acc) || hasBouncerUiShowing(acc, lockType)
+      val mainLocked =
+        keyguardUi ||
+          lowerPkg.contains("keyguard") ||
+          lowerPkg.contains("lockscreen") ||
+          (lowerPkg == "com.android.systemui" && (keyguardLocked || deviceLocked)) ||
+          evaluateMainScreenLocked(
+            screenInteractive = true,
+            keyguardLocked = keyguardLocked,
+            deviceLocked = deviceLocked,
+            activeWindowPkg = lowerPkg,
+            lockScreenVisibleInUi = keyguardUi,
+          )
+      if (mainLocked) {
+        return LivePhoneStateReport(
+          phase = LivePhoneLockPhase.KEYGUARD_LOCKED,
+          isLocked = true,
+          activePackage = activePkg.ifBlank { "com.android.systemui" },
+          summaryBn = "স্ক্রিনের অবস্থা: মেইন স্ক্রিন লক অবস্থায় আছে (Phone Lock Screen — কাজ করার আগে আনলক করতে হবে)",
+        )
+      }
+      if (acc != null && isAppLockScreenShowing(acc)) {
+        return LivePhoneStateReport(
+          phase = LivePhoneLockPhase.APP_LOCKED,
+          isLocked = true,
+          activePackage = activePkg.ifBlank { "applock" },
+          summaryBn = "স্ক্রিনের অবস্থা: অ্যাপ লক স্ক্রিন খোলা আছে ($activePkg — কাজ করার আগে অ্যাপ লক খুলতে হবে)",
+        )
+      }
+      LivePhoneStateReport(
+        phase = LivePhoneLockPhase.UNLOCKED,
+        isLocked = false,
+        activePackage = activePkg.ifBlank { "unknown" },
+        summaryBn = "স্ক্রিনের অবস্থা: খোলা ও আনলক আছে (অ্যাপ: ${activePkg.ifBlank { "Home/Unknown" }})",
+      )
+    } catch (_: Throwable) {
+      LivePhoneStateReport(
+        phase = LivePhoneLockPhase.UNLOCKED,
+        isLocked = false,
+        activePackage = "unknown",
+        summaryBn = "স্ক্রিনের অবস্থা: খোলা",
+      )
+    }
   }
 
   fun isScreenUnlockedNow(
@@ -151,9 +244,10 @@ object LockVaultManager {
       val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
       val interactive = pm?.isInteractive ?: true
       if (!interactive) return false
+      val keyguardUi = isSystemKeyguardUiShowing(acc) || hasBouncerUiShowing(acc, lockType)
+      if (keyguardUi) return false
       if (km != null && !km.isKeyguardLocked) return true
       val activePkg = acc?.rootInActiveWindow?.packageName?.toString()?.trim()?.lowercase().orEmpty()
-      val keyguardUi = isSystemKeyguardUiShowing(acc) || hasBouncerUiShowing(acc, lockType)
       if (!evaluateMainScreenLocked(
           screenInteractive = interactive,
           keyguardLocked = km?.isKeyguardLocked == true,

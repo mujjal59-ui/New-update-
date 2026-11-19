@@ -29,7 +29,18 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
   init {
     refreshCapabilities()
     loadBundledAssets()
-    _uiState.update { it.copy(videoProviders = OpenMontageFrameworkBridge.VIDEO_GENERATION_PROVIDER_REGISTRY) }
+    val library = CharacterLibraryStore.loadLibrary(ctx)
+    val series = SeriesStoryBibleManager.loadSeriesProjects(ctx)
+    val defaultCast = library.take(2).map { it.id }
+    _uiState.update {
+      it.copy(
+        videoProviders = OpenMontageFrameworkBridge.VIDEO_GENERATION_PROVIDER_REGISTRY,
+        characterLibrary = library,
+        selectedCastIds = defaultCast,
+        seriesProjects = series,
+        activeSeriesId = series.firstOrNull()?.seriesId,
+      )
+    }
   }
 
   fun refreshCapabilities() {
@@ -170,6 +181,166 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
 
   fun clearBanner() = _uiState.update { it.copy(lastActionBanner = null) }
 
+  fun toggleCartoonSeriesStudio(show: Boolean) {
+    _uiState.update { it.copy(showCartoonSeriesStudio = show) }
+  }
+
+  fun toggleCastMember(charId: String) {
+    _uiState.update { st ->
+      val cur = st.selectedCastIds
+      val next = when {
+        charId in cur -> cur - charId
+        cur.size >= 4 -> cur.drop(1) + charId
+        else -> cur + charId
+      }
+      st.copy(selectedCastIds = next)
+    }
+  }
+
+  fun createCustomCharacter(
+    name: String,
+    roleBn: String,
+    category: CharacterCategory,
+    ageGroup: CharacterAgeGroup,
+    voiceId: String,
+    personality: String,
+    outfitStyle: String,
+    referenceImagePath: String = "",
+  ) {
+    val created = CharacterLibraryStore.createCustomCharacter(
+      name = name,
+      roleBn = roleBn,
+      category = category,
+      ageGroup = ageGroup,
+      voiceId = voiceId,
+      personality = personality,
+      outfitStyle = outfitStyle,
+      referenceImagePath = referenceImagePath,
+    )
+    _uiState.update { st ->
+      val nextLib = listOf(created) + st.characterLibrary
+      CharacterLibraryStore.saveLibrary(ctx, nextLib)
+      val nextCast = (st.selectedCastIds + created.id).distinct().takeLast(4)
+      st.copy(
+        characterLibrary = nextLib,
+        selectedCastIds = nextCast,
+        lastActionBanner = "নতুন চরিত্র '${created.name}' Character Library-তে সংরক্ষিত হয়েছে ✓",
+      )
+    }
+  }
+
+  fun attachReferenceImageToCharacter(charId: String, uri: Uri) {
+    viewModelScope.launch(Dispatchers.IO) {
+      val imported = StudioMediaLibrary.importUserUriToProjectCache(ctx, uri, UserMediaKind.IMAGE) ?: return@launch
+      _uiState.update { st ->
+        val nextLib = st.characterLibrary.map { ch ->
+          if (ch.id == charId) ch.copy(referenceImagePath = imported.cachedFilePath) else ch
+        }
+        CharacterLibraryStore.saveLibrary(ctx, nextLib)
+        st.copy(
+          characterLibrary = nextLib,
+          userMediaItems = st.userMediaItems + imported,
+          lastActionBanner = "Reference ছবি চরিত্রে যুক্ত হয়েছে — কথা বললে চোখ, ঠোঁট ও মাথা নড়বে ✓",
+        )
+      }
+    }
+  }
+
+  fun selectAnimationFormat(format: AnimationFormat) {
+    _uiState.update { st ->
+      st.copy(
+        selectedVideoType = format.recommendedVideoType,
+        customDurationSec = format.defaultDurationSec,
+        settings = st.settings.copy(
+          animationFormat = format,
+          aspectRatio = format.defaultAspectRatio,
+        ),
+      )
+    }
+  }
+
+  fun selectCameraShot(shot: CameraShotType) {
+    updateSettings { it.copy(preferredCameraShot = shot) }
+  }
+
+  fun selectEnvironment(env: EnvironmentSetting) {
+    updateSettings { it.copy(preferredEnvironment = env) }
+  }
+
+  fun selectWeatherMood(mood: TimeWeatherMood) {
+    updateSettings { it.copy(preferredWeatherMood = mood) }
+  }
+
+  fun selectCharacterEmotion(emotion: CharacterEmotion) {
+    updateSettings { it.copy(preferredEmotion = emotion) }
+  }
+
+  fun applyStoryTemplate(template: StoryActivityTemplate) {
+    _uiState.update { st ->
+      st.copy(
+        promptInput = template.promptBn,
+        selectedVideoType = template.format.recommendedVideoType,
+        settings = st.settings.copy(
+          animationFormat = template.format,
+          preferredEnvironment = template.environment,
+          preferredMotionStyle = template.motion,
+          preferredEmotion = template.emotion,
+        ),
+        lastActionBanner = "'${template.titleBn}' টেমপ্লেট প্রয়োগ হয়েছে ✓",
+      )
+    }
+  }
+
+  fun selectSeriesProject(seriesId: String?) {
+    _uiState.update { it.copy(activeSeriesId = seriesId) }
+  }
+
+  fun createSeriesProject(seriesTitle: String, genreBn: String, storyBibleSummary: String) {
+    val cleanTitle = seriesTitle.trim().ifBlank { "নতুন ৩ডি কার্টুন সিরিজ" }
+    val created = CartoonSeriesProject(
+      seriesId = "series_${System.currentTimeMillis() % 1_000_000L}",
+      seriesTitle = cleanTitle,
+      genreBn = genreBn.trim().ifBlank { "নাটক, স্কুল ও পারিবারিক" },
+      storyBibleSummary = storyBibleSummary.trim().ifBlank { "স্থায়ী চরিত্র ও ধারাবাহিক পর্বের গল্প" },
+      characterIds = _uiState.value.selectedCastIds,
+    )
+    _uiState.update { st ->
+      val nextSeries = listOf(created) + st.seriesProjects
+      SeriesStoryBibleManager.saveSeriesProjects(ctx, nextSeries)
+      st.copy(
+        seriesProjects = nextSeries,
+        activeSeriesId = created.seriesId,
+        lastActionBanner = "নতুন সিরিজ '$cleanTitle' Story Bible সহ তৈরি হয়েছে ✓",
+      )
+    }
+  }
+
+  fun generateNextEpisodeForSeries(episodeIdea: String, allowNetworkCloudTry: Boolean = true) {
+    val st = _uiState.value
+    val series = st.seriesProjects.firstOrNull { it.seriesId == st.activeSeriesId }
+      ?: st.seriesProjects.firstOrNull()
+      ?: return
+    val cast = st.characterLibrary.filter { it.id in st.selectedCastIds }
+      .ifEmpty { st.characterLibrary.filter { it.id in series.characterIds } }
+    val continuityPrompt = SeriesStoryBibleManager.buildEpisodeContinuityPrompt(
+      series = series,
+      cast = cast,
+      userIdea = episodeIdea.ifBlank { "আগের পর্বের পর নতুন ঘটনা ও চমক নিয়ে এগিয়ে চলা" },
+    )
+    _uiState.update {
+      it.copy(
+        promptInput = continuityPrompt,
+        activeSeriesId = series.seriesId,
+        selectedVideoType = VideoType.DRAMA_SERIAL,
+        settings = it.settings.copy(
+          animationFormat = AnimationFormat.CARTOON_SERIAL,
+          productionMode = VideoProductionMode.REAL_AI_VIDEO,
+        ),
+      )
+    }
+    startFullPipeline(allowNetworkCloudTry = allowNetworkCloudTry)
+  }
+
   fun startFullPipeline(allowNetworkCloudTry: Boolean = true) {
     pipelineJob?.cancel()
     pauseRequested = false
@@ -193,6 +364,32 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
           voiceoverEnabled = true,
           lipSyncEnabled = true,
           preferredMotionStyle = MotionChoreography.AUTO,
+        ),
+      )
+    }
+    startFullPipeline(allowNetworkCloudTry = allowNetworkCloudTry)
+  }
+
+  fun launch14RequirementSeriesTest(allowNetworkCloudTry: Boolean = true) {
+    _uiState.update { st ->
+      val multiCast = st.characterLibrary.take(4).map { it.id }
+      val epNum = st.seriesProjects.firstOrNull { it.seriesId == st.activeSeriesId }?.nextEpisodeNumber ?: 1
+      st.copy(
+        selectedCastIds = multiCast,
+        promptInput = "Episode %02d: স্কুল মাঠে ও ক্লাসরুমে ৩-৪ জন চরিত্র (মায়া, রাফি, ফারহানা ম্যাম, পিকু) হাঁটাচলা, হাত নেড়ে কথা বলা, লিপ-সিঙ্ক ও দলীয় ছন্দময় নাচ-গান করছে!".format(epNum),
+        selectedVideoType = VideoType.DRAMA_SERIAL,
+        selectedDurationPreset = DurationPreset.SHORT_15_60S,
+        customDurationSec = 20,
+        settings = st.settings.copy(
+          animationFormat = AnimationFormat.CARTOON_SERIAL,
+          productionMode = VideoProductionMode.REAL_AI_VIDEO,
+          preferredEnvironment = EnvironmentSetting.CLASSROOM,
+          preferredEmotion = CharacterEmotion.HAPPY,
+          preferredMotionStyle = MotionChoreography.GROUP_DANCE,
+          lipSyncEnabled = true,
+          subtitlesEnabled = true,
+          backgroundMusicEnabled = true,
+          voiceoverEnabled = true,
         ),
       )
     }
@@ -268,6 +465,12 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
     val prompt = st0.promptInput.trim().ifBlank { VideoStudioCatalog.DEFAULT_EXAMPLE_PROMPT }
     val slug = buildSlug(prompt)
     val projectId = "vid_${System.currentTimeMillis()}"
+    val activeSeries = st0.seriesProjects.firstOrNull { it.seriesId == st0.activeSeriesId }
+    val epNum = activeSeries?.nextEpisodeNumber ?: 1
+    val continuityNote = activeSeries?.episodes?.lastOrNull()?.let { prev ->
+      "EP%02d (%s) এর পরের অংশ: %s".format(prev.episodeNumber, prev.title, prev.endingHookBn)
+    } ?: activeSeries?.storyBibleSummary.orEmpty()
+    val selectedCast = st0.characterLibrary.filter { it.id in st0.selectedCastIds }
 
     var workingProj = st0.activeProject?.takeIf { startFromStageIndex > 0 } ?: VideoProject(
       id = projectId,
@@ -275,9 +478,12 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       title = "LXR Studio Project",
       prompt = prompt,
       videoType = st0.selectedVideoType,
+      animationFormat = st0.settings.animationFormat,
       customTypeLabel = st0.customVideoTypeInput,
       durationPreset = st0.selectedDurationPreset,
       customDurationSeconds = st0.customDurationSec,
+      seriesId = activeSeries?.seriesId.orEmpty(),
+      episodeNumber = epNum,
       settings = st0.settings,
     )
 
@@ -320,6 +526,10 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
           settings = workingProj.settings,
           userMediaItems = st0.userMediaItems,
           selectedBundledFiles = st0.selectedBundledAssetFiles,
+          selectedCast = selectedCast,
+          animationFormat = st0.settings.animationFormat,
+          episodeNumber = epNum,
+          seriesContinuityNote = continuityNote,
         )
         completed.add(PipelineStage.TOPIC_ANALYSIS)
 
@@ -490,9 +700,32 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
       )
 
       _uiState.update { st ->
+        val updatedSeries = if (finalProj.seriesId.isNotBlank()) {
+          val nextList = st.seriesProjects.map { sp ->
+            if (sp.seriesId == finalProj.seriesId) {
+              val newEp = EpisodeRecord(
+                episodeNumber = finalProj.episodeNumber,
+                title = finalProj.title,
+                summaryBn = finalProj.scenes.firstOrNull()?.narrationText ?: finalProj.topicAnalysisSummary,
+                endingHookBn = finalProj.scenes.lastOrNull()?.dialogueLine ?: "পরবর্তী পর্ব শীঘ্রই আসছে!",
+                sceneTitles = finalProj.scenes.map { it.title },
+                mp4Path = artifacts.mp4Path,
+              )
+              sp.copy(
+                episodes = sp.episodes + newEp,
+                lastCliffhangerBn = newEp.endingHookBn,
+                updatedAtMs = System.currentTimeMillis(),
+              )
+            } else sp
+          }
+          SeriesStoryBibleManager.saveSeriesProjects(ctx, nextList)
+          nextList
+        } else st.seriesProjects
+
         st.copy(
           activeProject = finalProj,
           savedProjects = listOf(finalProj) + st.savedProjects.filterNot { it.id == finalProj.id },
+          seriesProjects = updatedSeries,
           totalVideosCreatedCount = st.totalVideosCreatedCount + 1,
           progress = StudioProgressState(
             activeStage = PipelineStage.MP4_EXPORT,

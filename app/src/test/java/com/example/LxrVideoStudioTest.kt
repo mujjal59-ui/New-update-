@@ -14,8 +14,15 @@ import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.VideoCreatorStudioScreen
 import com.example.video.AdvancedCharacterAnimator
+import com.example.video.AnimationFormat
 import com.example.video.ArticulatedCharacterRenderer
+import com.example.video.CameraShotType
+import com.example.video.CharacterAgeGroup
+import com.example.video.CharacterCategory
+import com.example.video.CharacterEmotion
+import com.example.video.CharacterLibraryStore
 import com.example.video.DurationPreset
+import com.example.video.EnvironmentSetting
 import com.example.video.MotionChoreography
 import com.example.video.MotionGraphicKind
 import com.example.video.MotionGraphicsRenderer
@@ -23,9 +30,11 @@ import com.example.video.OpenMontageFrameworkBridge
 import com.example.video.PipelineRunStatus
 import com.example.video.PipelineStage
 import com.example.video.ProductionToolTab
+import com.example.video.SeriesStoryBibleManager
 import com.example.video.StudioMediaLibrary
 import com.example.video.TalkingCharacterPreset
 import com.example.video.TransitionEffect
+import com.example.video.VideoAspectRatio
 import com.example.video.VideoProductionMode
 import com.example.video.VideoQualityGate
 import com.example.video.VideoScenePlan
@@ -388,5 +397,113 @@ class LxrVideoStudioTest {
     staticFrame2.recycle()
     assertTrue("Static frozen frames MUST trigger isSlideshowDetected=true", frozenReport.isSlideshowDetected)
     assertFalse("Static frozen frames MUST be rejected (approved=false)", frozenReport.approved)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun characterLibrary_referenceImageLivingCanvas_multiActorAndSeriesContinuityWork() = runTest {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+
+    // 1. Seed & verify CharacterLibraryStore + Reference Image creation
+    val defaults = CharacterLibraryStore.defaultCharacters()
+    assertTrue("Character Library must pre-seed 10+ diverse roles", defaults.size >= 10)
+
+    val refFile = File(app.filesDir, "test_ref_portrait.png")
+    val refBmp = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
+      eraseColor(android.graphics.Color.rgb(245, 200, 170))
+    }
+    refFile.outputStream().use { refBmp.compress(Bitmap.CompressFormat.PNG, 90, it) }
+    refBmp.recycle()
+
+    val customChar = CharacterLibraryStore.createCustomCharacter(
+      name = "রাইসা (Raisa)",
+      roleBn = "ক্লাস ক্যাপ্টেন",
+      category = CharacterCategory.CARTOON_GIRL,
+      ageGroup = CharacterAgeGroup.CHILD,
+      voiceId = "Aoede",
+      personality = "উদ্যমী",
+      outfitStyle = "স্কুল ইউনিফর্ম",
+      referenceImagePath = refFile.absolutePath,
+    )
+    assertEquals(refFile.absolutePath, customChar.referenceImagePath)
+
+    // 2. Render 4-actor interactive classroom & dance scene with Reference Image face preservation (never static slideshow)
+    val multiScene = VideoScenePlan(
+      index = 1,
+      title = "Episode 01 — স্কুল ও দলীয় নাচ",
+      narrationText = "মায়া, রাফি, ফারহানা ম্যাম এবং রাইসা একসাথে কথা বলছে ও নাচছে!",
+      dialogueLine = "বন্ধুরা, আজ আমরা আনন্দে গাইবো ও নাচবো!",
+      characterName = customChar.name,
+      voiceId = "Aoede",
+      emotionalTone = "Excited",
+      visualPrompt = "4 characters classroom dance",
+      themeKeyword = "school",
+      visualSource = VisualSourceKind.DEPTH_3D_STYLE,
+      effectTag = "Group Dance",
+      overlayHeadline = "EP 01: School Joy",
+      durationSec = 5f,
+      motionStyle = MotionChoreography.GROUP_DANCE,
+      characterPreset = TalkingCharacterPreset.BUNDLED_3D,
+      productionMode = VideoProductionMode.REAL_AI_VIDEO,
+      castNames = listOf(customChar.name, "রাফি", "ফারহানা ম্যাম", "পিকু"),
+      castRefImagePaths = listOf(refFile.absolutePath, "", "", ""),
+      castPrimaryColors = listOf(0xFFEC4899, 0xFF0EA5E9, 0xFF8B5CF6, 0xFFA855F7),
+      castHairColors = listOf(0xFF31102F, 0xFF1E293B, 0xFF0F172A, 0xFF6B21A8),
+      castAgeGroups = listOf(CharacterAgeGroup.CHILD, CharacterAgeGroup.CHILD, CharacterAgeGroup.ADULT, CharacterAgeGroup.CREATURE),
+      emotion = CharacterEmotion.SAD_CRY,
+      cameraShot = CameraShotType.ORBIT_360,
+      environment = EnvironmentSetting.CLASSROOM,
+      episodeNumber = 1,
+    )
+
+    val f1 = Bitmap.createBitmap(540, 540, Bitmap.Config.ARGB_8888)
+    val f2 = Bitmap.createBitmap(540, 540, Bitmap.Config.ARGB_8888)
+    AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(app, Canvas(f1), multiScene, 540, 540, 0.12f, 0.6f, 0.10f, true)
+    AdvancedCharacterAnimator.drawAnimatedSceneToCanvas(app, Canvas(f2), multiScene, 540, 540, 0.78f, 3.9f, 0.90f, true)
+    val delta = VideoQualityGate.computeLuminanceDeltaPercent(f1, f2)
+    f1.recycle()
+    f2.recycle()
+    assertTrue("Multi-actor Reference Image scene must animate vibrantly across frames (delta=$delta%)", delta >= 1.5f)
+
+    // 3. Test 14th Requirement Multi-Cast Series Pipeline + Episode 01 -> Episode 02 continuity
+    val vm = VideoStudioViewModel(app)
+    vm.createCustomCharacter(
+      name = "রাইসা",
+      roleBn = "ছাত্রী",
+      category = CharacterCategory.STUDENT,
+      ageGroup = CharacterAgeGroup.CHILD,
+      voiceId = "Aoede",
+      personality = "উদ্যমী",
+      outfitStyle = "ইউনিফর্ম",
+      referenceImagePath = refFile.absolutePath,
+    )
+    vm.updateSettings { it.copy(aspectRatio = VideoAspectRatio.SQUARE_1_1) }
+    vm.selectAnimationFormat(AnimationFormat.CARTOON_SERIAL)
+    vm.selectEnvironment(EnvironmentSetting.CLASSROOM)
+    vm.updatePrompt("Episode 01: মায়া, রাফি ও রাইসা ক্লাসরুমে কথা বলছে, হাত নেড়ে ইশারা করছে এবং দলীয় নাচ করছে!")
+    vm.updateCustomDurationSeconds(15)
+    vm.runPipelineSynchronouslyForTest(allowNetworkCloudTry = false)
+
+    val st1 = vm.uiState.value
+    assertEquals(PipelineRunStatus.COMPLETED, st1.progress.status)
+    assertTrue("Multi-actor Quality Gate must approve animated series episode", st1.activeProject!!.qualityReport!!.approved)
+    val activeSeriesAfterEp1 = st1.seriesProjects.first { it.seriesId == st1.activeSeriesId }
+    assertTrue("Series must record Episode 01 history", activeSeriesAfterEp1.episodes.isNotEmpty())
+    val nextEpNumBefore2 = activeSeriesAfterEp1.nextEpisodeNumber
+
+    // Generate sequential next Episode and verify continuity progression
+    val continuityPrompt = SeriesStoryBibleManager.buildEpisodeContinuityPrompt(
+      series = activeSeriesAfterEp1,
+      cast = st1.characterLibrary.take(4),
+      userIdea = "স্কুল বাগানের আলোকিত নোটবুক খুলে দেখা",
+    )
+    assertTrue("Continuity prompt must reference previous episode", continuityPrompt.contains("Episode %02d".format(nextEpNumBefore2)))
+    vm.updatePrompt(continuityPrompt)
+    vm.runPipelineSynchronouslyForTest(allowNetworkCloudTry = false)
+
+    val st2 = vm.uiState.value
+    assertEquals(PipelineRunStatus.COMPLETED, st2.progress.status)
+    val activeSeriesAfterEp2 = st2.seriesProjects.first { it.seriesId == st2.activeSeriesId }
+    assertEquals(activeSeriesAfterEp1.episodes.size + 1, activeSeriesAfterEp2.episodes.size)
   }
 }

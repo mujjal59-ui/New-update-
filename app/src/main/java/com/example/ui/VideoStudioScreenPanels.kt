@@ -424,7 +424,13 @@ fun ToolCardImageVisualPanel(
         contentScale = ContentScale.Crop,
         modifier = Modifier
           .fillMaxWidth()
-          .aspectRatio(if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 9f / 16f else 16f / 9f)
+          .aspectRatio(
+            when (project.settings.aspectRatio) {
+              VideoAspectRatio.PORTRAIT_9_16 -> 9f / 16f
+              VideoAspectRatio.SQUARE_1_1 -> 1f
+              VideoAspectRatio.LANDSCAPE_16_9 -> 16f / 9f
+            }
+          )
           .clip(RoundedCornerShape(12.dp))
           .border(1.dp, CYBER_CYAN.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
       )
@@ -781,7 +787,13 @@ fun VideoPreviewPlayerDialog(
             },
             modifier = Modifier
               .fillMaxWidth()
-              .aspectRatio(if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 9f / 16f else 16f / 9f)
+              .aspectRatio(
+                when (project.settings.aspectRatio) {
+                  VideoAspectRatio.PORTRAIT_9_16 -> 9f / 16f
+                  VideoAspectRatio.SQUARE_1_1 -> 1f
+                  VideoAspectRatio.LANDSCAPE_16_9 -> 16f / 9f
+                }
+              )
               .clip(RoundedCornerShape(10.dp)),
           )
         } else {
@@ -794,7 +806,13 @@ fun VideoPreviewPlayerDialog(
               contentDescription = "Animated Scene Preview ${slideIndex + 1}",
               modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 9f / 16f else 16f / 9f)
+                .aspectRatio(
+                  when (project.settings.aspectRatio) {
+                    VideoAspectRatio.PORTRAIT_9_16 -> 9f / 16f
+                    VideoAspectRatio.SQUARE_1_1 -> 1f
+                    VideoAspectRatio.LANDSCAPE_16_9 -> 16f / 9f
+                  }
+                )
                 .clip(RoundedCornerShape(10.dp)),
               contentScale = ContentScale.Crop,
             )

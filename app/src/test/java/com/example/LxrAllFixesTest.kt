@@ -21,14 +21,17 @@ import android.app.Notification
 import android.content.Context
 import android.os.Bundle
 import androidx.test.core.app.ApplicationProvider
+import com.example.ai.RiyaPersona
 import com.example.data.RiyaPreferences
 import com.example.data.Store
 import com.example.service.AudioEchoGuard
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
 import com.example.service.LiveVadConfig
+import com.example.service.LockVaultManager
 import com.example.service.LxrAudioNoiseSuppressor
 import com.example.service.RiyaNotificationListenerService
+import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaVoiceManager
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
@@ -370,5 +373,48 @@ class LxrAllFixesTest {
         putCharSequence(Notification.EXTRA_TEXT, "Checking for new messages")
       }
     assertNull(RiyaNotificationListenerService.extractSenderAndMessage(summaryNoise))
+  }
+
+  @Test
+  fun lxrPersonaAndZeroDelayVad_enforceNameLaxZeroExcuseAndStudioCapabilities() {
+    assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
+    assertTrue(RiyaPersona.TEXT.contains("LAX"))
+    assertTrue(RiyaPersona.TEXT.contains("ZERO-EXCUSE"))
+    assertTrue(RiyaPersona.TEXT.contains("3D Cartoon Animation, Movie & Episodic Series Studio"))
+    assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
+    assertTrue("Zero-delay flush must stay <= 200ms", LiveVadConfig.END_OF_TURN_FLUSH_MS <= 200L)
+    assertTrue("Prefix padding must stay tight", LiveVadConfig.PREFIX_PADDING_MS <= 30)
+  }
+
+  @Test
+  fun lockTruthTableAndSentVsReceivedSeparation_neverConfuseOwnReplyWithIncoming() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    assertTrue(
+      "Screen off must always evaluate as locked",
+      LockVaultManager.evaluateMainScreenLocked(false, false, false, "com.whatsapp", false),
+    )
+    assertTrue(
+      "Keyguard UI visible on systemui must evaluate as locked",
+      LockVaultManager.evaluateMainScreenLocked(true, true, true, "com.android.systemui", true),
+    )
+    assertFalse(
+      "Foreground WhatsApp when screen on & no lock UI must evaluate unlocked",
+      LockVaultManager.evaluateMainScreenLocked(true, true, true, "com.whatsapp", false),
+    )
+    val liveReport = LockVaultManager.describeLivePhoneState(ctx, null)
+    assertTrue(liveReport.summaryBn.contains("স্ক্রিনের অবস্থা:"))
+
+    RiyaRuntimeBridge.recordOutgoingMessage("WhatsApp", "রাশেদ", "ঠিক আছে, আমি এখনই আসছি")
+    assertTrue(
+      "Recently sent WhatsApp message must match outgoing echo filter",
+      RiyaRuntimeBridge.isDuplicateOutgoingEcho("WhatsApp", "ঠিক আছে, আমি এখনই আসছি"),
+    )
+    assertFalse(
+      "Different incoming reply from other person must NOT be suppressed as outgoing echo",
+      RiyaRuntimeBridge.isDuplicateOutgoingEcho("WhatsApp", "কখন পৌঁছালে জানাও"),
+    )
+    assertTrue(
+      RiyaRuntimeBridge.getRecentOutgoingMessages().any { it.recipientName == "রাশেদ" && it.messageText.contains("আসছি") },
+    )
   }
 }

@@ -57,14 +57,11 @@ object AndroidVideoRendererAndExporter {
   ): List<String> {
     val dir = projectInternalDir(context, project.slug)
     val paths = mutableListOf<String>()
-    val aspectH =
-      if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) {
-        (width * 16f / 9f).roundToInt().coerceAtLeast(640)
-      } else {
-        (width * 9f / 16f).roundToInt().coerceAtLeast(360)
-      }
-    val targetW = if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 405 else width
-    val targetH = if (project.settings.aspectRatio == VideoAspectRatio.PORTRAIT_9_16) 720 else aspectH
+    val (targetW, targetH) = when (project.settings.aspectRatio) {
+      VideoAspectRatio.PORTRAIT_9_16 -> 405 to 720
+      VideoAspectRatio.SQUARE_1_1 -> 540 to 540
+      VideoAspectRatio.LANDSCAPE_16_9 -> width to (width * 9f / 16f).roundToInt().coerceAtLeast(360)
+    }
 
     project.scenes.forEach { sc ->
       val bmp = VideoScriptAndMediaGenerator.renderSceneBitmap(
@@ -106,11 +103,25 @@ object AndroidVideoRendererAndExporter {
     if (outFile.exists()) outFile.delete()
 
     val aspect = project.settings.aspectRatio
-    val requestedW = if (project.settings.resolution.is1080p) aspect.width1080 else aspect.width720
-    val requestedH = if (project.settings.resolution.is1080p) aspect.height1080 else aspect.height720
-
-    val encodeW = (if (requestedW > 1280) 1280 else requestedW) / 16 * 16
-    val encodeH = (if (requestedH > 1280) 1280 else requestedH) / 16 * 16
+    val is4K = project.settings.resolution.is4K
+    val requestedW = when {
+      is4K -> aspect.width1080 * 2
+      project.settings.resolution.is1080p -> aspect.width1080
+      else -> aspect.width720
+    }
+    val requestedH = when {
+      is4K -> aspect.height1080 * 2
+      project.settings.resolution.is1080p -> aspect.height1080
+      else -> aspect.height720
+    }
+    // Keep on-device AVC encoder within reliable mobile 1280px bound while preserving exact 16:9 / 9:16 / 1:1 ratio
+    val maxBound = 1280
+    val scaleFactor = if (maxOf(requestedW, requestedH) > maxBound) {
+      maxBound.toFloat() / maxOf(requestedW, requestedH).toFloat()
+    } else 1f
+    val encodeW = ((requestedW * scaleFactor).roundToInt() / 16 * 16).coerceAtLeast(320)
+    val encodeH = ((requestedH * scaleFactor).roundToInt() / 16 * 16).coerceAtLeast(320)
+    val resLabel = if (is4K) "4K UHD Master -> ${encodeW}x${encodeH}" else "${encodeW}x${encodeH}"
 
     // 1) Primary: Surface MediaCodec H.264 + 44100Hz AAC
     val surfaceResult = runCatching {
@@ -129,7 +140,7 @@ object AndroidVideoRendererAndExporter {
     if (surfaceResult.isSuccess && outFile.exists() && outFile.length() > 4096L) {
       return RenderOutcome(
         mp4File = outFile,
-        engineLabel = "Android MediaCodec EGL PTS H.264/AAC MP4 (${encodeW}x${encodeH} • 24fps)",
+        engineLabel = "Android MediaCodec EGL PTS H.264/AAC MP4 ($resLabel • 24fps)",
       )
     }
 

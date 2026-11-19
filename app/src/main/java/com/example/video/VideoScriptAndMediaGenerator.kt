@@ -85,6 +85,10 @@ object VideoScriptAndMediaGenerator {
     settings: ProductionSettings,
     userMediaItems: List<UserMediaItem> = emptyList(),
     selectedBundledFiles: List<String> = emptyList(),
+    selectedCast: List<CharacterProfile> = emptyList(),
+    animationFormat: AnimationFormat = settings.animationFormat,
+    episodeNumber: Int = 1,
+    seriesContinuityNote: String = "",
   ): GeneratedStoryBlueprint {
     val cleanPrompt = prompt.trim().ifBlank { VideoStudioCatalog.DEFAULT_EXAMPLE_PROMPT }
     val targetTotalSec = when (durationPreset) {
@@ -105,11 +109,18 @@ object VideoScriptAndMediaGenerator {
     val aiBlueprint = runCatching {
       withTimeout(10_000L) {
         val model = Firebase.ai.generativeModel(modelName = "gemini-3.5-flash-lite")
-        val typeName = customTypeLabel.ifBlank { videoType.labelEn }
+        val typeName = customTypeLabel.ifBlank { animationFormat.labelEn }
+        val castPromptHint = if (selectedCast.isNotEmpty()) {
+          "CastCharacters: " + selectedCast.take(4).joinToString("; ") { "${it.name} (${it.roleBn}, Voice=${it.recommendedVoiceId})" }
+        } else ""
+        val epPromptHint = if (seriesContinuityNote.isNotBlank()) "Episode $episodeNumber Continuity: $seriesContinuityNote" else ""
         val systemReq = """
-          You are an OpenMontage AI Video Director. Create a lively, expressive multi-scene storyboard JSON in ${if (cleanPrompt.any { it in '\u0980'..'\u09FF' }) "Bengali" else "English"}.
+          You are an LXR--AI 3D Cartoon Movie & Episodic Series Director. Create a lively, expressive multi-scene storyboard JSON in ${if (cleanPrompt.any { it in '\u0980'..'\u09FF' }) "Bengali" else "English"}.
           Prompt: $cleanPrompt
-          VideoType: $typeName
+          Format: $typeName
+          Environment: ${settings.preferredEnvironment.labelBn} | Weather: ${settings.preferredWeatherMood.labelBn}
+          $castPromptHint
+          $epPromptHint
           TargetDurationSec: $targetTotalSec
           Return ONLY valid JSON:
           {
@@ -117,7 +128,7 @@ object VideoScriptAndMediaGenerator {
             "topicAnalysis": "2-sentence creative direction",
             "bgmMood": "ambient mood label",
             "characters": [{"name":"...","role":"...","visual":"...","voiceId":"Aoede|Iapetus|Leda|Orus|Achernar|Charon|Sulafat","variant":"cauliflower|cabbage|banana|apple|flower|finger|girl_3d|boy_3d"}],
-            "scenes": [{"title":"...","narration":"clear natural spoken line (not monotonic)","dialogue":"expressive character dialogue","character":"...","voiceId":"Aoede|Iapetus|Leda|Orus|Achernar|Charon|Sulafat","emotion":"Warm|Excited|Playful|Dramatic","motion":"talking|walking|dancing|fashion_360|motion_graphics|drama_cinematic","visualPrompt":"...","headline":"short screen title","themeKeyword":"village|produce_story|dance|fashion|drama|space_kid|general"}]
+            "scenes": [{"title":"...","narration":"clear natural spoken line (not monotonic)","dialogue":"expressive character dialogue","character":"...","voiceId":"Aoede|Iapetus|Leda|Orus|Achernar|Charon|Sulafat","emotion":"Happy|Sad|Angry|Fear|Shy|Excited|Surprised|Calm","motion":"talking|walking|running|jumping|sitting|hand_wave|hug|handshake|dancing|group_dance|singing|classroom|playing|fashion_360|motion_graphics|drama_cinematic","visualPrompt":"...","headline":"short screen title","themeKeyword":"village|produce_story|dance|fashion|drama|space_kid|school|general"}]
           }
           Produce $desiredSceneCount vivid varied scenes. No markdown fences.
         """.trimIndent()
@@ -132,6 +143,8 @@ object VideoScriptAndMediaGenerator {
           settings = settings,
           userMediaItems = userMediaItems,
           selectedBundledFiles = selectedBundledFiles,
+          selectedCast = selectedCast,
+          episodeNumber = episodeNumber,
         )
       }
     }.getOrNull()
@@ -147,6 +160,10 @@ object VideoScriptAndMediaGenerator {
       settings = settings,
       userMediaItems = userMediaItems,
       selectedBundledFiles = selectedBundledFiles,
+      selectedCast = selectedCast,
+      animationFormat = animationFormat,
+      episodeNumber = episodeNumber,
+      seriesContinuityNote = seriesContinuityNote,
     )
   }
 
@@ -160,6 +177,8 @@ object VideoScriptAndMediaGenerator {
     settings: ProductionSettings,
     userMediaItems: List<UserMediaItem>,
     selectedBundledFiles: List<String>,
+    selectedCast: List<CharacterProfile> = emptyList(),
+    episodeNumber: Int = 1,
   ): GeneratedStoryBlueprint? {
     val start = raw.indexOf('{')
     val end = raw.lastIndexOf('}')
@@ -170,7 +189,7 @@ object VideoScriptAndMediaGenerator {
     val bgmMood = json.optString("bgmMood").ifBlank { "${videoType.defaultMood} Synth (Free)" }
 
     val charsJson = json.optJSONArray("characters") ?: JSONArray()
-    val characters = buildList {
+    val parsedChars = buildList {
       for (i in 0 until charsJson.length()) {
         val c = charsJson.optJSONObject(i) ?: continue
         val vId = c.optString("voiceId").takeIf { it in VideoStudioCatalog.voiceIds() } ?: primaryVoice
@@ -187,17 +206,36 @@ object VideoScriptAndMediaGenerator {
           )
         )
       }
-    }.ifEmpty { defaultCharactersForPrompt(prompt, videoType, primaryVoice) }
+    }
+    val characters = when {
+      selectedCast.isNotEmpty() -> selectedCast
+      parsedChars.isNotEmpty() -> parsedChars
+      else -> defaultCharactersForPrompt(prompt, videoType, primaryVoice)
+    }
 
     val visualUserItems = userMediaItems.filter { it.kind != UserMediaKind.AUDIO }
+    val castRefFallbackPaths = visualUserItems
+      .filter { it.kind == UserMediaKind.IMAGE || it.kind == UserMediaKind.SCREENSHOT }
+      .map { it.cachedFilePath }
+    val castSlice = characters.take(4)
+    val castNamesList = castSlice.map { it.name }
+    val castRefList = castSlice.mapIndexed { idx, ch ->
+      ch.referenceImagePath.ifBlank { castRefFallbackPaths.getOrNull(idx).orEmpty() }
+    }
+    val castPrimaryList = castSlice.map { it.primaryColorHex }
+    val castHairList = castSlice.map { it.hairColorHex }
+    val castAgeList = castSlice.map { it.ageGroup }
+
     val scenesJson = json.optJSONArray("scenes") ?: JSONArray()
     val count = scenesJson.length().coerceAtLeast(1)
     val perSceneSec = (targetTotalSec.toFloat() / count).coerceAtLeast(3.5f)
     val scenes = buildList {
       for (i in 0 until scenesJson.length()) {
         val s = scenesJson.optJSONObject(i) ?: continue
+        val leadChar = characters[i % characters.size]
         val vId = if (settings.useCharacterVoicesPerScene) {
-          s.optString("voiceId").takeIf { it in VideoStudioCatalog.voiceIds() } ?: primaryVoice
+          if (selectedCast.isNotEmpty()) leadChar.recommendedVoiceId
+          else (s.optString("voiceId").takeIf { it in VideoStudioCatalog.voiceIds() } ?: primaryVoice)
         } else settings.selectedVoiceId
         val nar = s.optString("narration", prompt)
         val dlg = s.optString("dialogue", "")
@@ -210,15 +248,19 @@ object VideoScriptAndMediaGenerator {
         val motionStyle = detectMotionChoreography(prompt, s.optString("motion"), videoType, settings, i)
         val gfxKind = assignMotionGraphicKind(settings.productionMode, motionStyle, i)
         val secondaryName = characters.getOrNull((i + 1) % characters.size.coerceAtLeast(1))?.name.orEmpty()
+        val leadName = if (selectedCast.isNotEmpty()) leadChar.name else s.optString("character", leadChar.name)
+        val sceneEnv = resolveEnvironment(settings, prompt, i)
+        val sceneShot = resolveCameraShot(settings, i)
+        val sceneEmotion = resolveSceneEmotion(settings, s.optString("emotion"), i)
         add(
           VideoScenePlan(
             index = i + 1,
             title = s.optString("title", "দৃশ্য ${i + 1}"),
             narrationText = nar,
             dialogueLine = dlg,
-            characterName = s.optString("character", characters.first().name),
+            characterName = leadName,
             voiceId = vId,
-            emotionalTone = s.optString("emotion", "Expressive"),
+            emotionalTone = s.optString("emotion", sceneEmotion.name),
             visualPrompt = s.optString("visualPrompt", "Animated scene frame"),
             themeKeyword = s.optString("themeKeyword", inferThemeKeyword(prompt, i)),
             visualSource = when {
@@ -241,9 +283,20 @@ object VideoScriptAndMediaGenerator {
             characterPreset = charPreset,
             productionMode = settings.productionMode,
             motionGraphicKind = gfxKind,
-            secondaryCharacterName = if (secondaryName != s.optString("character", characters.first().name)) secondaryName else "",
+            secondaryCharacterName = if (secondaryName != leadName) secondaryName else "",
             chartValues = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf(0.36f, 0.58f, 0.79f, 0.94f) else emptyList(),
             chartLabels = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf("Phase 1", "Phase 2", "Phase 3", "Peak") else emptyList(),
+            castNames = castNamesList,
+            castRefImagePaths = castRefList,
+            castPrimaryColors = castPrimaryList,
+            castHairColors = castHairList,
+            castAgeGroups = castAgeList,
+            emotion = sceneEmotion,
+            cameraShot = sceneShot,
+            environment = sceneEnv,
+            weatherMood = settings.preferredWeatherMood,
+            episodeNumber = episodeNumber,
+            extrasCount = if (sceneEnv in setOf(EnvironmentSetting.SCHOOL_YARD, EnvironmentSetting.CONCERT_STAGE, EnvironmentSetting.MARKETPLACE, EnvironmentSetting.CITY_STREET)) 3 else 2,
           )
         )
       }
@@ -352,11 +405,22 @@ object VideoScriptAndMediaGenerator {
         MotionChoreography.FASHION_360_SPIN
       videoType == VideoType.MOTION_GRAPHICS || q.contains("মোশন") || q.contains("চার্ট") || q.contains("motion") ->
         MotionChoreography.MOTION_GRAPHICS
+      q.contains("দলীয় নাচ") || q.contains("group_dance") || q.contains("group dance") || (q.contains("নাচ") && (q.contains("বন্ধু") || q.contains("সবাই") || q.contains("একসাথে"))) ->
+        MotionChoreography.GROUP_DANCE
+      q.contains("গান") || q.contains("sing") ->
+        if (sceneIdx % 2 == 0) MotionChoreography.SINGING else MotionChoreography.GROUP_DANCE
+      q.contains("ক্লাস") || q.contains("স্কুল") || q.contains("classroom") || q.contains("school") ->
+        if (sceneIdx % 2 == 0) MotionChoreography.CLASSROOM_TEACHING else MotionChoreography.HAND_WAVE_GESTURE
+      q.contains("আলিঙ্গন") || q.contains("hug") -> MotionChoreography.HUG_INTERACTION
+      q.contains("হাত মেলা") || q.contains("handshake") -> MotionChoreography.HANDSHAKE
+      q.contains("লাফ") || q.contains("jump") || q.contains("খেলা") || q.contains("play") ->
+        if (sceneIdx % 2 == 0) MotionChoreography.JUMPING else MotionChoreography.PLAYING
+      q.contains("বস") || q.contains("sit") -> MotionChoreography.SITTING
       videoType == VideoType.DRAMA_SERIAL || q.contains("নাটক") || q.contains("সিরিয়াল") || q.contains("drama") || q.contains("serial") ->
-        if (sceneIdx % 2 == 0) MotionChoreography.DRAMA_CINEMATIC else MotionChoreography.TALKING_LIPSYNC
+        listOf(MotionChoreography.DRAMA_CINEMATIC, MotionChoreography.TALKING_LIPSYNC, MotionChoreography.HAND_WAVE_GESTURE)[sceneIdx % 3]
       q.contains("দৌড়") || q.contains("run") || q.contains("রকেট") ->
         MotionChoreography.RUNNING
-      q.contains("নাচ") || q.contains("dance") || q.contains("গান") ->
+      q.contains("নাচ") || q.contains("dance") ->
         if (sceneIdx % 3 == 0) MotionChoreography.TALKING_LIPSYNC else MotionChoreography.DANCING
       q.contains("হাঁট") || q.contains("walk") ->
         MotionChoreography.WALKING
@@ -364,9 +428,62 @@ object VideoScriptAndMediaGenerator {
         listOf(
           MotionChoreography.TALKING_LIPSYNC,
           MotionChoreography.WALKING,
-          MotionChoreography.RUNNING,
-          MotionChoreography.MOTION_GRAPHICS,
+          MotionChoreography.HAND_WAVE_GESTURE,
+          MotionChoreography.GROUP_DANCE,
         )[sceneIdx % 4]
+    }
+  }
+
+  private fun resolveSceneEmotion(settings: ProductionSettings, rawHint: String, sceneIdx: Int): CharacterEmotion {
+    val l = rawHint.lowercase()
+    return when {
+      l.contains("sad") || l.contains("cry") || l.contains("কান্না") -> CharacterEmotion.SAD_CRY
+      l.contains("angry") || l.contains("রাগ") -> CharacterEmotion.ANGRY
+      l.contains("fear") || l.contains("ভয়") -> CharacterEmotion.FEAR
+      l.contains("shy") || l.contains("লজ্জা") -> CharacterEmotion.SHY
+      l.contains("surpris") || l.contains("বিস্ময়") -> CharacterEmotion.SURPRISED
+      l.contains("excit") || l.contains("joy") -> CharacterEmotion.EXCITED_JOY
+      else -> settings.preferredEmotion
+    }
+  }
+
+  private fun resolveCameraShot(settings: ProductionSettings, sceneIdx: Int): CameraShotType {
+    if (settings.preferredCameraShot != CameraShotType.WIDE_SHOT) {
+      return when (sceneIdx % 3) {
+        0 -> settings.preferredCameraShot
+        1 -> CameraShotType.TWO_SHOT
+        else -> CameraShotType.CLOSE_UP
+      }
+    }
+    return listOf(
+      CameraShotType.WIDE_SHOT,
+      CameraShotType.TWO_SHOT,
+      CameraShotType.TRACKING_SHOT,
+      CameraShotType.CLOSE_UP,
+    )[sceneIdx % 4]
+  }
+
+  private fun resolveEnvironment(settings: ProductionSettings, prompt: String, sceneIdx: Int): EnvironmentSetting {
+    if (settings.preferredEnvironment != EnvironmentSetting.AUTO) return settings.preferredEnvironment
+    val q = prompt.lowercase()
+    return when {
+      q.contains("ক্লাস") || q.contains("স্কুল") || q.contains("শিক্ষক") || q.contains("school") || q.contains("class") ->
+        if (sceneIdx % 2 == 0) EnvironmentSetting.CLASSROOM else EnvironmentSetting.SCHOOL_YARD
+      q.contains("নাচ") || q.contains("গান") || q.contains("dance") || q.contains("music") || q.contains("stage") ->
+        EnvironmentSetting.CONCERT_STAGE
+      q.contains("পার্ক") || q.contains("পিকনিক") || q.contains("park") || q.contains("garden") ->
+        EnvironmentSetting.PARK_GARDEN
+      q.contains("বাজার") || q.contains("market") -> EnvironmentSetting.MARKETPLACE
+      q.contains("শহর") || q.contains("city") || q.contains("পুলিশ") || q.contains("ডাক্তার") ->
+        EnvironmentSetting.CITY_STREET
+      q.contains("বাড়ি") || q.contains("পরিবার") || q.contains("মা") || q.contains("বাবা") || q.contains("home") ->
+        EnvironmentSetting.HOME_LIVING
+      q.contains("মহাকাশ") || q.contains("space") || q.contains("রকেট") -> EnvironmentSetting.SPACE_COSMOS
+      q.contains("রূপকথা") || q.contains("ফ্যান্টাসি") || q.contains("fantasy") || q.contains("বন") ->
+        EnvironmentSetting.FANTASY_FOREST
+      q.contains("গ্রাম") || q.contains("কৃষক") || q.contains("village") ->
+        EnvironmentSetting.VILLAGE_PATH
+      else -> EnvironmentSetting.PARK_GARDEN
     }
   }
 
@@ -429,12 +546,29 @@ object VideoScriptAndMediaGenerator {
     settings: ProductionSettings,
     userMediaItems: List<UserMediaItem> = emptyList(),
     selectedBundledFiles: List<String> = emptyList(),
+    selectedCast: List<CharacterProfile> = emptyList(),
+    animationFormat: AnimationFormat = settings.animationFormat,
+    episodeNumber: Int = 1,
+    seriesContinuityNote: String = "",
   ): GeneratedStoryBlueprint {
     val q = prompt.lowercase()
     val isBengali = prompt.any { it in '\u0980'..'\u09FF' }
-    val characters = defaultCharactersForPrompt(prompt, videoType, primaryVoice)
-    val typeTitle = customTypeLabel.ifBlank { videoType.labelBn }
+    val characters = if (selectedCast.isNotEmpty()) selectedCast else defaultCharactersForPrompt(prompt, videoType, primaryVoice)
+    val typeTitle = customTypeLabel.ifBlank { animationFormat.labelBn }
     val visualUserItems = userMediaItems.filter { it.kind != UserMediaKind.AUDIO }
+    val castRefFallbackPaths = visualUserItems
+      .filter { it.kind == UserMediaKind.IMAGE || it.kind == UserMediaKind.SCREENSHOT }
+      .map { it.cachedFilePath }
+    val castSlice = characters.take(4)
+    val castNamesList = castSlice.map { it.name }
+    val castRefList = castSlice.mapIndexed { idx, ch ->
+      ch.referenceImagePath.ifBlank { castRefFallbackPaths.getOrNull(idx).orEmpty() }
+    }
+    val castPrimaryList = castSlice.map { it.primaryColorHex }
+    val castHairList = castSlice.map { it.hairColorHex }
+    val castAgeList = castSlice.map { it.ageGroup }
+    val lead1 = characters.firstOrNull()?.name ?: "মায়া"
+    val lead2 = characters.getOrNull(1)?.name ?: "রাফি"
 
     val templateScenes: List<Pair<Triple<String, String, String>, String>> = when {
       q.contains("ফুলকপি") || q.contains("পাতাকপি") || q.contains("আপেল") || q.contains("কলা") ||
@@ -445,12 +579,26 @@ object VideoScriptAndMediaGenerator {
           Triple("দৃশ্য ৩: ফুল ও কথা বলা আঙ্গুলের চমক", "সুন্দর ফুটে থাকা ফুল দোল খাচ্ছে আর ছোট্ট আঙ্গুল বন্ধু সবাইকে গুনে গুনে ছন্দ শেখাচ্ছে!", "ফুল ও আঙ্গুল: এক দুই তিন চার — নাচের তালে শিখবো এবার নতুন সব মজার বিষয়!") to "produce_story",
           Triple("দৃশ্য ৪: সবার মিলিত নাচ ও বিদায়", "ফুলকপি, পাতাকপি, কলা, আপেল, ফুল ও আঙ্গুল একসাথে নেচে সুন্দর সমাপ্তি করছে!", "সবাই মিলে: দেখা হবে পরের পর্বে—ভালো থেকো সবাই!") to "produce_story",
         )
-      videoType == VideoType.DRAMA_SERIAL || q.contains("নাটক") || q.contains("সিরিয়াল") ->
+      q.contains("ক্লাস") || q.contains("স্কুল") || q.contains("school") || q.contains("class") ->
         listOf(
-          Triple("দৃশ্য ১: নাটকের আবেগঘন সূচনা", "$prompt — সকালের শান্ত গ্রামে চরিত্রদের নতুন দিনের নাটকীয় গল্প শুরু হলো।", "অনন্যা: আজকের এই সিদ্ধান্ত আমাদের পুরো পরিবারের গল্প বদলে দেবে!") to "drama",
-          Triple("দৃশ্য ২: দ্বন্দ্ব ও চমকপ্রদ সংলাপ", "কাহিনীর মোড় ঘুরে যায় যখন হঠাৎ এক অপ্রত্যাশিত খবর সবার সামনে চলে আসে।", "রাফি: সত্য কখনো চাপা থাকে না, আমি শেষ পর্যন্ত লড়াই করবো!") to "drama",
-          Triple("দৃশ্য ৩: আবেগ ও উত্তেজনার ক্লাইম্যাক্স", "চোখে চোখ রেখে সত্যের মুখোমুখি হয় সবাই — প্রতিটি সংলাপে স্পষ্ট আবেগ ফুটে ওঠে।", "অনন্যা: বিশ্বাস আর ভালোবাসাই আমাদের আসল শক্তি!") to "drama",
-          Triple("দৃশ্য ৪: সিরিয়াল পর্বের সমাপ্তি", "নতুন রহস্য আর পরবর্তী পর্বের চমক রেখে আজকের নাটকীয় অধ্যায় শেষ হয়।", "উপস্থাপক: পরবর্তী সিরিয়াল পর্ব দেখতে সাথেই থাকুন!") to "drama",
+          Triple("দৃশ্য ১: সকালের স্কুলে যাত্রা", "বন্ধুরা হাসিমুখে কথা বলতে বলতে স্কুলের পথে হাঁটছে ও হাত নেড়ে অভিবাদন জানাচ্ছে।", "$lead1: গুড মর্নিং $lead2! আজকের ক্লাস আর সাংস্কৃতিক অনুষ্ঠান দারুণ হবে!") to "school",
+          Triple("দৃশ্য ২: ক্লাসরুমে পাঠদান ও প্রশ্নোত্তর", "ক্লাসরুমে শিক্ষক বোর্ডের সামনে পড়াচ্ছেন, আর শিক্ষার্থীরা মনোযোগ দিয়ে প্রশ্ন ও উত্তর দিচ্ছে।", "$lead2: ম্যাম, আজ আমরা বিজ্ঞান ও মজার গল্প দুটোই শিখবো!") to "school",
+          Triple("দৃশ্য ৩: টিফিন ও বন্ধুদের খেলাধুলা", "স্কুল মাঠে শিশুরা একসাথে দৌড়ঝাঁপ, হাত মেলানো ও আনন্দে মেতে উঠেছে।", "$lead1: সবাই মিলে খেলাধুলা আর নাচ-গান করলে মন ভরে যায়!") to "school",
+          Triple("দৃশ্য ৪: দলীয় উদযাপন ও সমাপ্তি", "স্কুলের অনুষ্ঠানে সবাই মিলে গান ও ছন্দময় নাচ পরিবেশন করে পর্ব শেষ করছে।", "সবাই: দেখা হবে আগামী পর্বে নতুন গল্প নিয়ে!") to "school",
+        )
+      q.contains("দলীয় নাচ") || q.contains("নাচ") || q.contains("গান") || q.contains("dance") || q.contains("music") ->
+        listOf(
+          Triple("দৃশ্য ১: মিউজিক স্টেজে গ্র্যান্ড এন্ট্রি", "রঙিন আলোর স্টেজে $lead1, $lead2 ও বন্ধুরা গানের তালে হাত নেড়ে সবাইকে আমন্ত্রণ জানাচ্ছে।", "$lead1: মিউজিক অন করো! আজ বাংলা ও ইংরেজি গানের সাথে দারুণ নাচ হবে!") to "dance",
+          Triple("দৃশ্য ২: দলীয় ছন্দময় নাচ (Group Dance)", "সব চরিত্র একসাথে তালে তালে হাত-পা ও শরীর দুলিয়ে ছন্দময় নাচ পরিবেশন করছে।", "$lead2: ওয়ান টু থ্রি ফোর—দেখো আমাদের স্টাইল আর এনার্জি!") to "dance",
+          Triple("দৃশ্য ৩: গান ও লিপ-সিঙ্ক ক্লোজ-আপ", "চরিত্ররা মুখ ও ঠোঁট গানের কথার সাথে নিখুঁতভাবে মিলিয়ে প্রাণবন্ত গান গাইছে।", "$lead1: সুর আর ছন্দের তালে চলো এগিয়ে যাই সামনের পথে!") to "dance",
+          Triple("দৃশ্য ৪: গ্র্যান্ড ফিনালে ও বিদায়", "সব বন্ধু একসাথে হাত মিলিয়ে ও আলিঙ্গন করে রঙিন ফিনালে শেষ করছে।", "সবাই: ধন্যবাদ! লাইক ও সাবস্ক্রাইব করে সাথেই থাকুন!") to "dance",
+        )
+      videoType == VideoType.DRAMA_SERIAL || animationFormat in setOf(AnimationFormat.ANIMATED_DRAMA, AnimationFormat.CARTOON_SERIAL, AnimationFormat.FULL_MOVIE_3D) || q.contains("নাটক") || q.contains("সিরিয়াল") ->
+        listOf(
+          Triple("পর্ব %02d — দৃশ্য ১: গল্পের ধারাবাহিক সূচনা".format(episodeNumber), "${seriesContinuityNote.ifBlank { prompt }} — $lead1 ও $lead2 নতুন অধ্যায়ের মুখোমুখি।", "$lead1: আগের পর্বের পর আজ আমরা সত্যের আরও কাছাকাছি চলে এসেছি!") to "drama",
+          Triple("পর্ব %02d — দৃশ্য ২: সংলাপ ও আবেগের মোড়".format(episodeNumber), "একাধিক চরিত্রের মাঝে গম্ভীর ও আবেগঘন কথোপকথন এবং প্রতিক্রিয়া দেখা যাচ্ছে।", "$lead2: চিন্তা করো না, আমরা সবাই মিলে এই সমস্যার সমাধান বের করবোই!") to "drama",
+          Triple("পর্ব %02d — দৃশ্য ৩: নাটকীয় ক্লাইম্যাক্স ও অ্যাকশন".format(episodeNumber), "ক্লাইম্যাক্সের মুহূর্তে চরিত্রদের মুখের অভিব্যক্তি ও চলাফেরা দর্শকের নজর কাড়ে।", "$lead1: বিশ্বাসের শক্তিই আমাদের আসল বিজয়!") to "drama",
+          Triple("পর্ব %02d — দৃশ্য ৪: পরবর্তী পর্বের রহস্য ও সমাপ্তি".format(episodeNumber), "নতুন ক্লিফহ্যাঙ্গার রেখে Episode %02d সুন্দরভাবে সমাপ্ত হলো।".format(episodeNumber), "$lead2: দেখুন আগামী Episode %02d-এ কী চমক অপেক্ষা করছে!".format(episodeNumber + 1)) to "drama",
         )
       videoType == VideoType.FASHION_360 || q.contains("৩৬০") || q.contains("ফ্যাশন") ->
         listOf(
@@ -468,10 +616,10 @@ object VideoScriptAndMediaGenerator {
         )
       else ->
         listOf(
-          Triple("দৃশ্য ১: চমকপ্রদ সূচনা (Intro)", if (isBengali) "$prompt — প্রাণবন্ত অ্যানিমেশন, হাঁটাচলা ও কথা বলা চরিত্র নিয়ে শুরু হচ্ছে আমাদের নতুন ভিডিও!" else "Welcome! Today we present: $prompt", "উপস্থাপক: চলুন একসাথে দেখে নিই চমৎকার সব দৃশ্য!") to "village",
-          Triple("দৃশ্য ২: মূল কাহিনী ও গতিশীল দৃশ্য", if (isBengali) "প্রতিটি কথার তালে তালে চরিত্ররা নড়াচড়া করছে, কথা বলছে এবং দৃশ্যগুলো জীবন্ত হয়ে উঠছে।" else "Characters speak, walk, and dance dynamically in rhythm with every line.", "সঙ্গী: দেখুন প্রতিটি ছবির সাথে মোশন কী সুন্দর মিলে গেছে!") to "general",
-          Triple("দৃশ্য ৩: নাচ, মোশন গ্রাফিক্স ও বিস্তারিত", if (isBengali) "বর্ণিল মোশন গ্রাফিক্স, ৩৬০ ডিগ্রি এফেক্ট ও স্পষ্ট বাংলা ভয়েসওভারে জমে উঠেছে পরিবেশনা।" else "Kinetic motion graphics, 360 views, and clear expressive voiceover keep energy high.", "উপস্থাপক: একঘেয়ে নয়—প্রতিটি সেকেন্ডে থাকছে নতুন চমক!") to "dance",
-          Triple("দৃশ্য ৪: আনন্দময় সমাপ্তি (Outro)", if (isBengali) "আশা করি ভিডিওটি আপনার অনেক ভালো লেগেছে—চাইলে আরও সীমাহীন ভিডিও তৈরি করতে পারেন!" else "Thank you for watching — create unlimited videos anytime with LXR--AI Studio!", "সবাই: দেখা হবে আবার নতুন কোনো চমকপ্রদ ভিডিওতে!") to "village",
+          Triple("দৃশ্য ১: ৩ডি কার্টুন ও গল্পের সূচনা", if (isBengali) "$prompt — $lead1 ও $lead2 প্রাণবন্ত হাঁটাচলা, হাতের ইশারা ও লিপ-সিঙ্ক সংলাপ নিয়ে শুরু করছে!" else "Welcome! Today we present: $prompt", "$lead1: হ্যালো বন্ধুরা! চলো আজকের অসাধারণ গল্পটি শুরু করি!") to "village",
+          Triple("দৃশ্য ২: একাধিক চরিত্রের মিথস্ক্রিয়া", if (isBengali) "একাধিক চরিত্র একই দৃশ্যে একে অপরের কথার উত্তর দিচ্ছে, হাসছে এবং অভিব্যক্তি দেখাচ্ছে।" else "Multiple articulated characters converse, walk, and react together.", "$lead2: দেখো প্রতিটি দৃশ্য আর অভিব্যক্তি কতটা বাস্তব লাগছে!") to "general",
+          Triple("দৃশ্য ৩: নাচ, গান ও ক্লাইম্যাক্স", if (isBengali) "ছন্দময় দলীয় নাচ, স্পষ্ট বাংলা ভয়েসওভার ও সিনেম্যাটিক ক্যামেরা শটে জমে উঠেছে দৃশ্য।" else "Dynamic dance, clear voiceover, and cinematic camera tracking keep energy high.", "$lead1: সবাই মিলে আনন্দে নেচে গেয়ে উৎসব করি চলো!") to "dance",
+          Triple("দৃশ্য ৪: আনন্দময় সমাপ্তি ও পরবর্তী পর্ব", if (isBengali) "আশা করি ভিডিওটি আপনার অনেক ভালো লেগেছে — চাইলেই পরবর্তী এপিসোড তৈরি করতে পারেন!" else "Thank you for watching — create unlimited episodes anytime!", "সবাই: দেখা হবে আবার নতুন এপিসোডে!") to "village",
         )
     }
 
@@ -490,6 +638,9 @@ object VideoScriptAndMediaGenerator {
       val motionStyle = detectMotionChoreography(prompt, scTitle, videoType, settings, idx)
       val gfxKind = assignMotionGraphicKind(settings.productionMode, motionStyle, idx)
       val companionName = characters.getOrNull((idx + 1) % characters.size.coerceAtLeast(1))?.name.orEmpty()
+      val sceneEnv = resolveEnvironment(settings, prompt, idx)
+      val sceneShot = resolveCameraShot(settings, idx)
+      val sceneEmotion = resolveSceneEmotion(settings, scTitle, idx)
 
       VideoScenePlan(
         index = idx + 1,
@@ -508,7 +659,7 @@ object VideoScriptAndMediaGenerator {
             VisualSourceKind.ANIMATED_2D_VECTOR
           else -> VisualSourceKind.DEPTH_3D_STYLE
         },
-        effectTag = "${motionStyle.labelBn} • ${gfxKind.labelBn}",
+        effectTag = "${motionStyle.labelBn} • ${sceneShot.labelBn}",
         overlayHeadline = scTitle.substringAfter(": ").take(30),
         durationSec = perSceneSec,
         trimStartSec = 0f,
@@ -526,12 +677,26 @@ object VideoScriptAndMediaGenerator {
         secondaryCharacterName = if (companionName != charProfile.name) companionName else "",
         chartValues = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf(0.38f, 0.62f, 0.81f, 0.96f) else emptyList(),
         chartLabels = if (gfxKind == MotionGraphicKind.ANIMATED_CHART) listOf("2023", "2024", "2025", "2026") else emptyList(),
+        castNames = castNamesList,
+        castRefImagePaths = castRefList,
+        castPrimaryColors = castPrimaryList,
+        castHairColors = castHairList,
+        castAgeGroups = castAgeList,
+        emotion = sceneEmotion,
+        cameraShot = sceneShot,
+        environment = sceneEnv,
+        weatherMood = settings.preferredWeatherMood,
+        episodeNumber = episodeNumber,
+        extrasCount = if (sceneEnv in setOf(EnvironmentSetting.SCHOOL_YARD, EnvironmentSetting.CONCERT_STAGE, EnvironmentSetting.MARKETPLACE, EnvironmentSetting.CITY_STREET)) 3 else 2,
       )
     }
 
-    val title = "$typeTitle: ${prompt.take(36)}"
+    val epPrefix = if (episodeNumber > 1 || animationFormat == AnimationFormat.CARTOON_SERIAL || animationFormat == AnimationFormat.ANIMATED_DRAMA) {
+      "EP %02d • ".format(episodeNumber)
+    } else ""
+    val title = "$epPrefix$typeTitle: ${prompt.take(34)}"
     val analysis =
-      "বিষয় বিশ্লেষণ: '$prompt' — ${settings.productionMode.labelBn} মোডে ${scenes.size}টি ডায়নামিক দৃশ্য (${targetTotalSec}s), ${characters.size}টি চলমান/লিপ-সিঙ্ক চরিত্র ও মোশন গ্রাফিক্সসহ প্রস্তুত।"
+      "বিষয় বিশ্লেষণ: '$prompt' — ${animationFormat.labelBn} (${settings.productionMode.labelBn}) • ${scenes.size}টি ডায়নামিক দৃশ্য (${targetTotalSec}s), ${characters.size}টি চলমান/লিপ-সিঙ্ক চরিত্র (${characters.take(4).joinToString { it.name }}) প্রস্তুত।"
     val scriptText = formatFullScriptText(title, analysis, characters, scenes)
 
     return GeneratedStoryBlueprint(
@@ -541,7 +706,7 @@ object VideoScriptAndMediaGenerator {
       scenes = scenes,
       bgmMoodLabel = "${videoType.defaultMood} Synth (Free CC0)",
       fullScriptText = scriptText,
-      usedAiEngine = "LXR--AI OpenMontage Smart Director (100% Free & Unlimited)",
+      usedAiEngine = "LXR--AI 3D Movie & Series Director (100% Free & Unlimited)",
     )
   }
 

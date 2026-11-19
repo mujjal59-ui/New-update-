@@ -31,6 +31,94 @@ enum class VideoType(
   CUSTOM("Custom Video Type", "Custom Type", "hybrid.yaml", "Adaptive Freeflow"),
 }
 
+enum class AnimationFormat(
+  val labelBn: String,
+  val labelEn: String,
+  val recommendedVideoType: VideoType,
+  val defaultAspectRatio: VideoAspectRatio,
+  val defaultDurationSec: Int,
+) {
+  SHORT_FILM_3D("3D Cartoon Short Film", "3D Cartoon Short Film", VideoType.ANIMATION_3D_STYLE, VideoAspectRatio.LANDSCAPE_16_9, 45),
+  FULL_MOVIE_3D("3D Cartoon Full Movie", "3D Cartoon Full Movie", VideoType.CINEMATIC, VideoAspectRatio.LANDSCAPE_16_9, 180),
+  ANIMATED_DRAMA("Animated Drama (নাটক)", "Animated Drama", VideoType.DRAMA_SERIAL, VideoAspectRatio.LANDSCAPE_16_9, 90),
+  CARTOON_SERIAL("Cartoon Serial (সিরিজ পর্ব)", "Cartoon Serial Episode", VideoType.DRAMA_SERIAL, VideoAspectRatio.LANDSCAPE_16_9, 60),
+  EDUCATIONAL("Educational Animation (শিক্ষা)", "Educational Animation", VideoType.EDUCATIONAL, VideoAspectRatio.LANDSCAPE_16_9, 60),
+  COMEDY("Comedy Animation (কমেডি)", "Comedy Animation", VideoType.CARTOON, VideoAspectRatio.LANDSCAPE_16_9, 45),
+  MUSICAL("Musical Animation (গান)", "Musical Animation", VideoType.ANIMATION, VideoAspectRatio.LANDSCAPE_16_9, 45),
+  DANCE_VIDEO("Dance Video (নাচ)", "Dance Video", VideoType.ANIMATION_3D_STYLE, VideoAspectRatio.PORTRAIT_9_16, 30),
+  STORYTELLING("Storytelling Video (গল্প)", "Storytelling Video", VideoType.STORYTELLING, VideoAspectRatio.LANDSCAPE_16_9, 60),
+  YOUTUBE_SHORTS("YouTube Shorts (৯:১৬)", "YouTube Shorts", VideoType.YOUTUBE_SHORTS, VideoAspectRatio.PORTRAIT_9_16, 30),
+  YOUTUBE_FULL("YouTube Full-Length (১৬:৯)", "YouTube Full-Length", VideoType.YOUTUBE_FULL, VideoAspectRatio.LANDSCAPE_16_9, 120),
+}
+
+enum class CharacterAgeGroup(val labelBn: String, val scaleFactor: Float) {
+  CHILD("শিশু (Child)", 0.78f),
+  TEEN("কিশোর (Teen)", 0.88f),
+  YOUNG_ADULT("তরুণ (Young Adult)", 0.98f),
+  ADULT("প্রাপ্তবয়স্ক (Adult)", 1.04f),
+  ELDER("বয়োজ্যেষ্ঠ (Elder)", 1.00f),
+  CREATURE("প্রাণী / ফ্যান্টাসি", 0.90f),
+}
+
+enum class CharacterCategory(val labelBn: String) {
+  CARTOON_GIRL("3D Cartoon Girl"),
+  CARTOON_BOY("3D Cartoon Boy"),
+  CHILD_KID("শিশু ও শিক্ষার্থী"),
+  PARENT_FAMILY("মা-বাবা ও পরিবার"),
+  TEACHER("শিক্ষক / প্রফেসর"),
+  STUDENT("ছাত্র-ছাত্রী"),
+  FRIEND_NEIGHBOR("বন্ধু ও প্রতিবেশী"),
+  DOCTOR("ডাক্তার"),
+  POLICE("পুলিশ অফিসার"),
+  FARMER("কৃষক"),
+  BUSINESS("ব্যবসায়ী"),
+  ANIMAL_FANTASY("প্রাণী ও ফ্যান্টাসি"),
+  PRODUCE_MASCOT("কথা বলা ফল/সবজি/ফুল"),
+}
+
+enum class CharacterEmotion(val labelBn: String) {
+  HAPPY("হাসি ও আনন্দ (Happy)"),
+  SMILING("মিষ্টি হাসি (Smiling)"),
+  SAD_CRY("কান্না ও মন খারাপ (Sad)"),
+  ANGRY("রাগ ও গম্ভীর (Angry)"),
+  FEAR("ভয় ও অবাক (Fear)"),
+  SHY("লজ্জা ও নম্র (Shy)"),
+  EXCITED_JOY("উচ্ছ্বাস ও উৎসব (Joy)"),
+  SURPRISED("বিস্ময় (Surprised)"),
+  CALM("শান্ত ও স্বাভাবিক (Calm)"),
+}
+
+enum class CameraShotType(val labelBn: String, val zoomFactor: Float) {
+  WIDE_SHOT("Wide Shot (সম্পূর্ণ দৃশ্য)", 1.0f),
+  CLOSE_UP("Close-up (মুখ ও অভিব্যক্তি)", 1.32f),
+  TRACKING_SHOT("Tracking Shot (গতি অনুসরণ)", 1.12f),
+  LOW_ANGLE("Low Angle (নাটকীয় কোণ)", 1.10f),
+  TWO_SHOT("Two-Shot (যুগল সংলাপ)", 1.06f),
+  ORBIT_360("Orbit 360° (ঘূর্ণায়মান)", 1.08f),
+}
+
+enum class EnvironmentSetting(val labelBn: String) {
+  AUTO("গল্প অনুযায়ী অটো পরিবেশ"),
+  CLASSROOM("স্কুল ও কলেজ ক্লাসরুম"),
+  SCHOOL_YARD("স্কুল মাঠ ও খেলাধুলা"),
+  HOME_LIVING("বাড়ি ও পারিবারিক ঘর"),
+  VILLAGE_PATH("গ্রামের প্রাকৃতিক পথ"),
+  CITY_STREET("শহরের রাস্তা ও ভবন"),
+  PARK_GARDEN("পার্ক ও ফুলের বাগান"),
+  MARKETPLACE("বাজার ও সামাজিক অনুষ্ঠান"),
+  CONCERT_STAGE("মিউজিক ও ড্যান্স স্টেজ"),
+  FANTASY_FOREST("রূপকথা ও ফ্যান্টাসি বন"),
+  SPACE_COSMOS("মহাকাশ ও নক্ষত্র"),
+}
+
+enum class TimeWeatherMood(val labelBn: String) {
+  DAYLIGHT("উজ্জ্বল দিন (Day)"),
+  SUNSET_GOLDEN("গোধূলি বিকেল (Sunset)"),
+  NIGHT_MOONLIGHT("চাঁদনী রাত (Night)"),
+  RAINY_DRIZZLE("বৃষ্টিমুখর আবহ (Rain)"),
+  NEON_FESTIVE("রঙিন উৎসব ও আলো (Neon)"),
+}
+
 enum class VideoProductionMode(
   val labelBn: String,
   val badgeEn: String,
@@ -87,7 +175,17 @@ enum class MotionChoreography(val labelBn: String, val key: String) {
   TALKING_LIPSYNC("মুখ নাড়িয়ে কথা বলা (Lip-Sync)", "talking"),
   WALKING("হাঁটাচলা (Walking)", "walking"),
   RUNNING("দৌড়ানো ও গতি (Running)", "running"),
-  DANCING("নাচানাচি (Dancing)", "dancing"),
+  JUMPING("লাফানো ও উচ্ছ্বাস (Jumping)", "jumping"),
+  SITTING("বসে কথা বলা ও পড়া (Sitting)", "sitting"),
+  STANDING_TURN("দাঁড়ানো ও ঘুরে তাকানো", "standing_turn"),
+  HAND_WAVE_GESTURE("হাত নেড়ে ইশারা ও অভিবাদন", "hand_wave"),
+  HUG_INTERACTION("আলিঙ্গন ও বন্ধুত্ব (Hug)", "hug"),
+  HANDSHAKE("হাত মেলানো (Handshake)", "handshake"),
+  DANCING("একক নাচ (Solo Dance)", "dancing"),
+  GROUP_DANCE("দলীয় ছন্দময় নাচ (Group Dance)", "group_dance"),
+  SINGING("গান ও লিপ-সিঙ্ক (Singing)", "singing"),
+  CLASSROOM_TEACHING("ক্লাসরুমে পাঠদান ও প্রশ্নোত্তর", "classroom"),
+  PLAYING("খেলাধুলা ও দৌড়ঝাঁপ (Playing)", "playing"),
   FASHION_360_SPIN("৩৬০° ফ্যাশন ঘূর্ণন", "fashion_360"),
   MOTION_GRAPHICS("মোশন গ্রাফিক্স ও কাইনেটিক", "motion_graphics"),
   DRAMA_CINEMATIC("নাটক ও সিরিয়াল সিনেমাটিক", "drama_cinematic"),
@@ -111,14 +209,14 @@ enum class TalkingCharacterPreset(val labelBn: String, val key: String) {
   APPLE("কথা বলা আপেল (Apple)", "apple"),
   FLOWER("কথা বলা ফুল (Flower)", "flower"),
   FINGER("কথা বলা আঙ্গুল (Finger)", "finger"),
-  USER_MEDIA("আপনার দেওয়া ছবি/ভিডিও", "user_media"),
+  USER_MEDIA("আপনার দেওয়া Reference ছবি/ভিডিও", "user_media"),
 }
 
 enum class UserMediaKind(val labelBn: String) {
-  IMAGE("ছবি / ইমেজ"),
+  IMAGE("ছবি / Reference"),
   SCREENSHOT("স্ক্রিনশট"),
   VIDEO("ভিডিও ক্লিপ"),
-  AUDIO("অডিও/ভয়েস"),
+  AUDIO("অডিও/গান/ভয়েস"),
 }
 
 data class UserMediaItem(
@@ -136,7 +234,7 @@ enum class DurationPreset(
   val recommendedScenes: Int,
 ) {
   SHORT_15_60S("১৫–৬০ সেকেন্ড (Shorts)", 30, 5),
-  ANIMATION_3_5M("৩–৫ মিনিট (Animation)", 180, 8),
+  ANIMATION_3_5M("৩–৫ মিনিট (Movie/Episode)", 180, 8),
   YOUTUBE_ADAPTIVE("YouTube ভিডিও (৯০ সেকেন্ড)", 90, 6),
   CUSTOM("কাস্টম (আনলিমিটেড)", 45, 5),
 }
@@ -151,11 +249,17 @@ enum class VideoAspectRatio(
 ) {
   PORTRAIT_9_16("৯:১৬ Shorts/Reels", "9:16", 720, 1280, 1080, 1920),
   LANDSCAPE_16_9("১৬:৯ YouTube HD", "16:9", 1280, 720, 1920, 1080),
+  SQUARE_1_1("১:১ Square (Social)", "1:1", 720, 720, 1080, 1080),
 }
 
-enum class VideoResolutionPreset(val label: String, val is1080p: Boolean) {
-  HD_720P("720p HD (দ্রুত ও রিয়েলিস্টিক)", false),
-  FHD_1080P("1080p Full HD", true),
+enum class VideoResolutionPreset(
+  val label: String,
+  val is1080p: Boolean,
+  val is4K: Boolean = false,
+) {
+  HD_720P("720p HD (দ্রুত ও রিয়েলিস্টিক)", false, false),
+  FHD_1080P("1080p Full HD", true, false),
+  UHD_4K("4K UHD (ডিভাইস সাপোর্ট অনুযায়ী)", true, true),
 }
 
 enum class TransitionEffect(val labelBn: String, val ffmpegFilter: String) {
@@ -214,6 +318,13 @@ data class CharacterProfile(
   val primaryColorHex: Long,
   val accentColorHex: Long,
   val avatarVariant: String,
+  val ageGroup: CharacterAgeGroup = CharacterAgeGroup.YOUNG_ADULT,
+  val category: CharacterCategory = CharacterCategory.CARTOON_BOY,
+  val personality: String = "বন্ধুত্বপূর্ণ ও প্রাণবন্ত",
+  val outfitStyle: String = "আধুনিক রঙিন পোশাক",
+  val referenceImagePath: String = "",
+  val hairColorHex: Long = 0xFF1E293B,
+  val isSavedInLibrary: Boolean = true,
 )
 
 data class VideoScenePlan(
@@ -248,9 +359,44 @@ data class VideoScenePlan(
   val realFootageSourceLabel: String = "",
   val chartValues: List<Float> = emptyList(),
   val chartLabels: List<String> = emptyList(),
+  val castNames: List<String> = emptyList(),
+  val castRefImagePaths: List<String> = emptyList(),
+  val castPrimaryColors: List<Long> = emptyList(),
+  val castHairColors: List<Long> = emptyList(),
+  val castAgeGroups: List<CharacterAgeGroup> = emptyList(),
+  val emotion: CharacterEmotion = CharacterEmotion.HAPPY,
+  val cameraShot: CameraShotType = CameraShotType.WIDE_SHOT,
+  val environment: EnvironmentSetting = EnvironmentSetting.AUTO,
+  val weatherMood: TimeWeatherMood = TimeWeatherMood.DAYLIGHT,
+  val episodeNumber: Int = 1,
+  val extrasCount: Int = 2,
 ) {
   val effectiveDurationSec: Float
     get() = (trimEndSec - trimStartSec).coerceAtLeast(1.5f)
+}
+
+data class EpisodeRecord(
+  val episodeNumber: Int,
+  val title: String,
+  val summaryBn: String,
+  val endingHookBn: String,
+  val sceneTitles: List<String>,
+  val mp4Path: String = "",
+  val createdAtMs: Long = System.currentTimeMillis(),
+)
+
+data class CartoonSeriesProject(
+  val seriesId: String,
+  val seriesTitle: String,
+  val genreBn: String,
+  val storyBibleSummary: String,
+  val characterIds: List<String> = emptyList(),
+  val episodes: List<EpisodeRecord> = emptyList(),
+  val lastCliffhangerBn: String = "",
+  val updatedAtMs: Long = System.currentTimeMillis(),
+) {
+  val nextEpisodeNumber: Int
+    get() = (episodes.maxOfOrNull { it.episodeNumber } ?: 0) + 1
 }
 
 data class SubtitleCue(
@@ -300,13 +446,18 @@ object VideoStudioCatalog {
   fun voiceIds(): List<String> = Store.VOICE_OPTIONS.map { it.id }
 
   const val DEFAULT_EXAMPLE_PROMPT =
-    "একটি প্রফেশনাল অ্যানিমেশন ও মোশন গ্রাফিক্স ভিডিও তৈরি করো, যেখানে দুটি চরিত্র হেঁটে ও কথা বলে ভবিষ্যতের সৌরশক্তি ও প্রকৃতির রহস্য ব্যাখ্যা করছে।"
+    "একটি প্রফেশনাল 3D কার্টুন ও অ্যানিমেশন গল্প তৈরি করো, যেখানে শিশু, শিক্ষার্থী ও বন্ধুরা মিলে স্কুলে যাচ্ছে, ক্লাসে কথা বলছে ও আনন্দে নাচ-গান করছে।"
 }
 
 data class ProductionSettings(
   val aspectRatio: VideoAspectRatio = VideoAspectRatio.LANDSCAPE_16_9,
   val resolution: VideoResolutionPreset = VideoResolutionPreset.HD_720P,
   val productionMode: VideoProductionMode = VideoProductionMode.HYBRID_ALL_THREE,
+  val animationFormat: AnimationFormat = AnimationFormat.SHORT_FILM_3D,
+  val preferredCameraShot: CameraShotType = CameraShotType.WIDE_SHOT,
+  val preferredEnvironment: EnvironmentSetting = EnvironmentSetting.AUTO,
+  val preferredWeatherMood: TimeWeatherMood = TimeWeatherMood.DAYLIGHT,
+  val preferredEmotion: CharacterEmotion = CharacterEmotion.HAPPY,
   val subtitlesEnabled: Boolean = true,
   val backgroundMusicEnabled: Boolean = true,
   val voiceoverEnabled: Boolean = true,
@@ -336,7 +487,7 @@ data class StudioProgressState(
   val sceneProgress: Float = 0f,
   val editingProgress: Float = 0f,
   val renderingProgress: Float = 0f,
-  val statusMessageBn: String = "OpenMontage Studio প্রস্তুত — মোড বা প্রম্পট দিয়ে রিয়েল ভিডিও তৈরি করুন!",
+  val statusMessageBn: String = "3D Cartoon & OpenMontage Studio প্রস্তুত — চরিত্র, গল্প বা সিরিজ এপিসোড তৈরি করুন!",
   val completedStages: Set<PipelineStage> = emptySet(),
   val failedStage: PipelineStage? = null,
   val errorMessage: String? = null,
@@ -367,15 +518,15 @@ data class ExportedVideoArtifacts(
 data class OpenMontageCapabilityReport(
   val frameworkRepoUrl: String = "https://github.com/OpenMontageInc/OpenMontage",
   val onDeviceEncoderAvailable: Boolean = true,
-  val onDeviceEncoderNote: String = "Android MediaCodec H.264/AAC (EGL PTS-Synced 24fps) + Articulated Rig প্রস্তুত ✓",
+  val onDeviceEncoderNote: String = "Android MediaCodec H.264/AAC (EGL PTS-Synced 24fps) + 3D Articulated Cast প্রস্তুত ✓",
   val termuxInstalled: Boolean = false,
   val termuxRunPermGranted: Boolean = false,
   val ffmpegNote: String = "Termux FFmpeg + Manim + Remotion/GSAP + অন-ডিভাইস 24fps MP4 রেন্ডার সক্রিয় ✓।",
   val piperTtsNote: String = "Free-First নীতি: Gemini Free Voice / Piper TTS / LXR Formant — কোনো Paid API অনুমতি ছাড়া চলে না ✓।",
   val remotionNote: String = "Remotion (.tsx), GSAP HyperFrames (.html) ও Manim (.py) বান্ডিল প্রতিটি প্রজেক্টে এক্সপোর্ট হয়।",
-  val stockMediaNote: String = "ফ্রি রিয়েল ফুটেজ (Wikimedia Commons, Internet Archive, NASA) + আপনার গ্যালারি মিডিয়া + ৬০ অ্যাসেট সক্রিয় ✓।",
+  val stockMediaNote: String = "ফ্রি রিয়েল ফুটেজ (Wikimedia Commons, Internet Archive, NASA) + আপনার Reference ইমেজ + Character Library সক্রিয় ✓।",
   val aiVideoApiDisclosureBn: String =
-    "গুরুত্বপূর্ণ: Google Veo, Kling, Runway, Hailuo, Seedance হলো Paid API; Wan/LTX/Hunyuan-এর জন্য Desktop GPU লাগে। ফ্রি অবস্থায় অন-ডিভাইস 24fps আর্টিকুলেটেড অ্যানিমেশন, মোশন গ্রাফিক্স ও ফ্রি স্টক ভিডিও ব্যবহৃত হয়।",
+    "খরচ ও সীমাবদ্ধতার স্বচ্ছতা: Google Veo, Kling, Runway, Hailuo, Seedance হলো Paid API; Wan/LTX/Hunyuan-এর জন্য Desktop GPU লাগে। ফ্রি অবস্থায় অন-ডিভাইস 24fps 3D আর্টিকুলেটেড অ্যানিমেশন, Reference Lip-Sync ও ফ্রি স্টক ভিডিও চলে।",
 )
 
 data class VideoProject(
@@ -384,6 +535,7 @@ data class VideoProject(
   val title: String,
   val prompt: String,
   val videoType: VideoType = VideoType.ANIMATION,
+  val animationFormat: AnimationFormat = AnimationFormat.SHORT_FILM_3D,
   val customTypeLabel: String = "",
   val durationPreset: DurationPreset = DurationPreset.SHORT_15_60S,
   val customDurationSeconds: Int = 30,
@@ -395,6 +547,8 @@ data class VideoProject(
   val previewFramePaths: List<String> = emptyList(),
   val bgmMoodLabel: String = "Lively Cinematic Ambient (Free Procedural Synth)",
   val bgmWavPath: String = "",
+  val seriesId: String = "",
+  val episodeNumber: Int = 1,
   val settings: ProductionSettings = ProductionSettings(),
   val artifacts: ExportedVideoArtifacts = ExportedVideoArtifacts(),
   val qualityReport: VideoQualityReport? = null,
@@ -416,6 +570,11 @@ data class VideoStudioUiState(
   val bundledAssets: List<StudioAssetEntry> = emptyList(),
   val selectedBundledAssetFiles: List<String> = emptyList(),
   val userMediaItems: List<UserMediaItem> = emptyList(),
+  val characterLibrary: List<CharacterProfile> = emptyList(),
+  val selectedCastIds: List<String> = emptyList(),
+  val seriesProjects: List<CartoonSeriesProject> = emptyList(),
+  val activeSeriesId: String? = null,
+  val showCartoonSeriesStudio: Boolean = false,
   val videoProviders: List<OpenMontageVideoProviderEntry> = emptyList(),
   val pendingPaidProviderConsentId: String? = null,
   val totalVideosCreatedCount: Int = 0,

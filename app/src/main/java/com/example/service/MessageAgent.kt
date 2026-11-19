@@ -905,6 +905,13 @@ object MessageAgent {
     val elapsed = System.currentTimeMillis() - startMs
     val recipientLabel = if (app.isAi) "" else (extractOpenChatName(acc) ?: effectiveContact)
     if (res.contains("পাঠানো হয়েছে")) {
+      if (!app.isAi) {
+        RiyaRuntimeBridge.recordOutgoingMessage(app.label, recipientLabel, cleanMsg)
+        com.example.data.Store.remember(
+          ctx,
+          "[আমার পাঠানো উত্তর / SENT_BY_ME][${app.label} -> $recipientLabel]: $cleanMsg",
+        )
+      }
       RiyaState.markTaskCompleted(
         "${app.label}${if (app.isAi) "" else " ($recipientLabel)"}-এ লেখা পাঠানো হয়েছে: \"$cleanMsg\"",
         "সফলভাবে পাঠানো সম্পন্ন হয়েছে (${elapsed}ms)",

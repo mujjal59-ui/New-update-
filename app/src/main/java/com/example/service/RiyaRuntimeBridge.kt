@@ -114,6 +114,46 @@ object RiyaRuntimeBridge {
 
   fun getReplyPayload(eventKey: String): PendingReplyPayload? = replyPayloads[eventKey]
 
+  data class OutgoingMessageRecord(
+    val appLabel: String,
+    val recipientName: String,
+    val messageText: String,
+    val timestampMs: Long = System.currentTimeMillis(),
+  )
+
+  private val _outgoingSentMessages = MutableStateFlow<List<OutgoingMessageRecord>>(emptyList())
+  val outgoingSentMessages: StateFlow<List<OutgoingMessageRecord>> = _outgoingSentMessages.asStateFlow()
+
+  fun recordOutgoingMessage(appLabel: String, recipientName: String, messageText: String) {
+    val cleanMsg = messageText.trim()
+    if (cleanMsg.isEmpty()) return
+    val record = OutgoingMessageRecord(
+      appLabel = appLabel.ifBlank { "Messaging" },
+      recipientName = recipientName.ifBlank { "অন্য প্রান্ত" },
+      messageText = cleanMsg,
+      timestampMs = System.currentTimeMillis(),
+    )
+    _outgoingSentMessages.update { current ->
+      (listOf(record) + current).take(30)
+    }
+  }
+
+  fun getRecentOutgoingMessages(withinMs: Long = 10 * 60_000L): List<OutgoingMessageRecord> {
+    val cutoff = System.currentTimeMillis() - withinMs
+    return _outgoingSentMessages.value.filter { it.timestampMs >= cutoff }
+  }
+
+  fun isDuplicateOutgoingEcho(appLabel: String, text: String, windowMs: Long = 90_000L): Boolean {
+    val norm = text.trim()
+    if (norm.isEmpty()) return false
+    val cutoff = System.currentTimeMillis() - windowMs
+    return _outgoingSentMessages.value.any { rec ->
+      rec.timestampMs >= cutoff &&
+        rec.messageText.equals(norm, ignoreCase = true) &&
+        (appLabel.isBlank() || rec.appLabel.equals(appLabel, ignoreCase = true))
+    }
+  }
+
   fun clearDismissedMessages() {
     _pendingMessages.update { list ->
       list.filter { it.status == IncomingReplyStatus.PENDING_PERMISSION || it.status == IncomingReplyStatus.SENDING }

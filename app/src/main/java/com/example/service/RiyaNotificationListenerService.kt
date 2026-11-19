@@ -243,7 +243,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             }
           if (!isAppEnabled) return@launch
 
-          Store.remember(ctx, "[$appLabel] $sender: $msgText")
+          if (RiyaRuntimeBridge.isDuplicateOutgoingEcho(appLabel, msgText)) return@launch
+          Store.remember(ctx, "[প্রাপ্ত মেসেজ / RECEIVED][$appLabel] $sender: $msgText")
           RiyaState.addLog("📩 $appLabel ($sender): $msgText")
 
           val immediateTemplate =
@@ -306,6 +307,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             )
             if (sent) {
               RiyaRuntimeBridge.updateIncomingMessageStatus(eventKey, IncomingReplyStatus.AUTO_SENT)
+              RiyaRuntimeBridge.recordOutgoingMessage(appLabel, sender, smartReply)
+              Store.remember(ctx, "[আমার পাঠানো উত্তর / SENT_BY_ME][$appLabel -> $sender]: $smartReply")
               val liveMsg = PendingIncomingMessage(appType, appLabel, sender, msgText, pkg, smartReply)
               val sentToLive = RiyaState.live?.onIncomingMessageReceived(liveMsg, autoSentReply = smartReply) == true
               if (!sentToLive) {
@@ -422,6 +425,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
       senderName: String,
       replyText: String,
     ) {
+      RiyaRuntimeBridge.recordOutgoingMessage(appLabel, senderName, replyText)
+      Store.remember(context, "[আমার পাঠানো উত্তর / SENT_BY_ME][$appLabel -> $senderName]: $replyText")
       val spokenConfirm =
         "বস, $appLabel-এ $senderName-কে আমি ঠিক এই উত্তরটি লিখে পাঠিয়েছি: $replyText।"
       val live = RiyaState.live

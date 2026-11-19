@@ -69,11 +69,11 @@ data class PendingIncomingMessage(
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
   const val END_SENSITIVITY = "END_SENSITIVITY_HIGH"
-  const val PREFIX_PADDING_MS = 40
-  // Combined with 150ms hangover + 380ms audioStreamEnd flush -> fast ~0.9-1.5s replies without cutting Boss mid-sentence
+  const val PREFIX_PADDING_MS = 20
+  // Combined with 150ms hangover + 175ms audioStreamEnd flush -> instant zero-delay replies after Boss finishes speaking
   const val SILENCE_DURATION_MS = 500
   const val MIC_HANGOVER_MS = 150L
-  const val END_OF_TURN_FLUSH_MS = 380L
+  const val END_OF_TURN_FLUSH_MS = 175L
 
   fun buildRealtimeInputConfigJson(): JSONObject =
     JSONObject().put(
@@ -427,15 +427,21 @@ class GeminiLive(private val ctx: Context) {
 
   private var lastShot = 0
   private var watchdogTick = 0
+  @Volatile private var lastObservedPhoneStateKey = ""
+  @Volatile private var liveWatchTick = 0
   private val screenLoop =
     object : Runnable {
       override fun run() {
         if (stopped) return
+        liveWatchTick++
         try {
-          watchScreen()
+          observeLiveLockAndScreen1s()
+          val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
+          if (liveWatchTick % imageEveryTicks == 0) {
+            watchScreen()
+          }
         } catch (_: Exception) {}
-        val intervalMs = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 9500L else 6000L
-        main.postDelayed(this, intervalMs)
+        main.postDelayed(this, 1000L)
       }
     }
 
@@ -575,6 +581,39 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
+  private fun observeLiveLockAndScreen1s() {
+    val acc = RiyaAccessibilityService.instance
+    val report = LockVaultManager.describeLivePhoneState(ctx, acc)
+    val openChat = if (!report.isLocked && acc != null) MessageAgent.extractOpenChatName(acc)?.let { " | খোলা চ্যাট: $it" }.orEmpty() else ""
+    val stateKey = "${report.phase}:${report.activePackage}:$openChat"
+    val previousSummaryTail =
+      RiyaAccessibilityService.currentScreenSummary.substringAfter("| স্ক্রিন দৃশ্য:", "").trim()
+    val updatedSummary =
+      if (report.isLocked) {
+        "${report.summaryBn} | বর্তমান অ্যাপ: ${report.activePackage}"
+      } else if (previousSummaryTail.isNotEmpty() && RiyaAccessibilityService.currentApp == report.activePackage) {
+        "${report.summaryBn}$openChat | বর্তমান অ্যাপ: ${report.activePackage} | স্ক্রিন দৃশ্য: $previousSummaryTail"
+      } else {
+        "${report.summaryBn}$openChat | বর্তমান অ্যাপ: ${report.activePackage}"
+      }
+    RiyaAccessibilityService.currentScreenSummary = updatedSummary
+    if (ready && !stopped && stateKey != lastObservedPhoneStateKey && !RiyaState.cameraOn) {
+      lastObservedPhoneStateKey = stateKey
+      if ((ws?.queueSize() ?: 0L) < 8_000L) {
+        try {
+          ws?.send(
+            JSONObject()
+              .put(
+                "realtimeInput",
+                JSONObject().put("text", "[লাইভ ১-সেকেন্ড স্ক্রিন আপডেট]: $updatedSummary"),
+              )
+              .toString(),
+          )
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
   private fun watchScreen() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
     if ((ws?.queueSize() ?: 0L) > 1_500L) return
@@ -582,6 +621,7 @@ class GeminiLive(private val ctx: Context) {
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
+    if (LockVaultManager.describeLivePhoneState(ctx, acc).isLocked) return
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
     acc.screenshotJpeg(maxDim = if (lowNet) 300 else 380, quality = if (lowNet) 22 else 30) { jpg ->
       if (jpg != null) {
@@ -878,7 +918,9 @@ class GeminiLive(private val ctx: Context) {
 
   private fun setup(): JSONObject {
     val now = nowText()
-    val screenContext = RiyaAccessibilityService.currentScreenSummary.ifBlank { "বস হোম স্ক্রিনে আছেন।" }
+    val liveLock = LockVaultManager.describeLivePhoneState(ctx, RiyaAccessibilityService.instance)
+    val screenContext =
+      RiyaAccessibilityService.currentScreenSummary.ifBlank { liveLock.summaryBn }
     val accStatus =
       if (Keep.accessibilityOn(ctx)) "ACTIVE"
       else "OFF (কাজ শুরু করতে না পারলে বসকে জানাবে)"
@@ -886,9 +928,11 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Screen Watch: ON | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI
+      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Live Screen Watch: EVERY 1 SECOND | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Current Lock Status: ${liveLock.summaryBn}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
-      - Response Speed & Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ না হওয়া পর্যন্ত মাঝে কথা বলবে না; কথা শেষ হওয়া মাত্রই কোনো দেরি না করে দ্রুত ১–১.৫ সেকেন্ডের মধ্যে একবারে একটি পূর্ণাঙ্গ, বুদ্ধিদীপ্ত ও আদুরে বাংলায় উত্তর দেবে (দ্বিখণ্ডিত/ডাবল উত্তর দেবে না)।
+      - Response Speed & Zero-Delay Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ হওয়া মাত্রই কোনো দেরি বা থামা ছাড়া সাথে সাথে শূন্য সেকেন্ডে পরিষ্কার বাংলায় একটি পূর্ণাঙ্গ, বুদ্ধিদীপ্ত ও আদুরে উত্তর দেবে (দ্বিখণ্ডিত/ডাবল উত্তর দেবে না)। কখনো বসের কমান্ডে অজুহাত দেবে না।
 
       ${RiyaPersona.TEXT}
 
@@ -1195,19 +1239,25 @@ class GeminiLive(private val ctx: Context) {
         "lock_phone",
         "unlock_phone",
       )
-    if (name !in skipUnlockTools && LockVaultManager.isDeviceLocked(ctx)) {
-      val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
-      if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
-        turnUnlockedMainScreenByLxr = true
-      } else if (unlockRes.status != UnlockStatus.ALREADY_UNLOCKED) {
-        return unlockRes.messageBn
+    if (name !in skipUnlockTools) {
+      val liveStateNow = LockVaultManager.describeLivePhoneState(ctx, acc)
+      if (liveStateNow.phase == LivePhoneLockPhase.SCREEN_OFF ||
+        liveStateNow.phase == LivePhoneLockPhase.KEYGUARD_LOCKED ||
+        LockVaultManager.isDeviceLocked(ctx)
+      ) {
+        val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
+        if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
+          turnUnlockedMainScreenByLxr = true
+        } else if (unlockRes.status != UnlockStatus.ALREADY_UNLOCKED) {
+          return unlockRes.messageBn
+        }
       }
     }
 
     // Autonomous App Lock detection BEFORE running non-lock tools (no Boss permission prompt)
     if (acc != null && name != "lock_phone" && name != "unlock_phone" && LockVaultManager.isAppLockScreenShowing(acc)) {
       LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-      Thread.sleep(280L)
+      Thread.sleep(160L)
     }
 
     val watch = Store.screenWatch(ctx) && acc != null && Keep.accessibilityOn(ctx)
@@ -1215,7 +1265,7 @@ class GeminiLive(private val ctx: Context) {
       val r = runToolRaw(name, a)
       if (acc != null && (name == "open_app" || name == "send_message") && LockVaultManager.isAppLockScreenShowing(acc)) {
         LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-        Thread.sleep(300L)
+        Thread.sleep(180L)
       }
       val base = if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
       return if (turnUnlockedMainScreenByLxr && name !in skipUnlockTools) {
@@ -1233,10 +1283,10 @@ class GeminiLive(private val ctx: Context) {
       } catch (_: Exception) {}
     }
     val r = runToolRaw(name, a)
-    Thread.sleep(if (name == "open_app" || name == "play_youtube") 450L else 280L)
+    Thread.sleep(if (name == "open_app" || name == "play_youtube") 260L else 150L)
     if ((name == "open_app" || name == "send_message" || name == "play_youtube") && LockVaultManager.isAppLockScreenShowing(acc)) {
       LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-      Thread.sleep(360L)
+      Thread.sleep(220L)
     }
     var after = screenSnapshot()
     val lockNote =
@@ -1244,7 +1294,7 @@ class GeminiLive(private val ctx: Context) {
       else ""
     if (name in needsFind && (r.contains("খুঁজে পাওয়া যায়নি") || r.contains("সার্চ বাটন চাপতে পারিনি"))) {
       val r2 = runToolRaw(name, a)
-      Thread.sleep(280)
+      Thread.sleep(160)
       after = screenSnapshot()
       return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(বসকে কিছু জিজ্ঞেস না করে নিজেই পরের ধাপ দ্রুত শেষ করো এবং স্বাভাবিক ও স্পষ্ট বাংলায় একবারে ফলাফল জানাও—মুখস্থ সমাপনী বাক্য বারবার বলবে না)"
     }
@@ -1312,13 +1362,19 @@ class GeminiLive(private val ctx: Context) {
           if (RiyaState.cameraOn) {
             "লাইভ ব্যাক ক্যামেরা এখন চালু আছে। ইনকামিং ভিডিও স্ট্রিম থেকে পাওয়া সর্বশেষ ক্যামেরা ফ্রেম দেখে সরাসরি উত্তর দাও।"
           } else {
-            RiyaAccessibilityService.currentScreenSummary.ifBlank { "স্ক্রিনের তথ্য পাওয়া যায়নি" }
+            val report = LockVaultManager.describeLivePhoneState(ctx, acc)
+            "${report.summaryBn}\n${RiyaAccessibilityService.currentScreenSummary.ifBlank { "অ্যাপ: ${report.activePackage}" }}"
           }
         "read_screen" ->
           if (RiyaState.cameraOn) {
             "লাইভ ভিশন ক্যামেরা এখন চালু আছে! অ্যাপের UI নয়, সরাসরি ক্যামেরার ইনকামিং ভিডিও ফ্রেম দেখে বস যা দেখাচ্ছেন তা বলো।"
           } else {
-            acc?.readScreen() ?: noAcc
+            val report = LockVaultManager.describeLivePhoneState(ctx, acc)
+            if (report.isLocked) {
+              "${report.summaryBn}\n(ফোন/অ্যাপ লক আছে, ভেতরের অ্যাপ পড়ার আগে অবশ্যই আনলক করতে হবে।)"
+            } else {
+              acc?.readScreen() ?: noAcc
+            }
           }
         "click_text" -> acc?.clickText(a.optString("text")) ?: noAcc
         "type_text" ->
@@ -1967,22 +2023,33 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun checkNotificationBar(): String {
-    val pending =
-      RiyaRuntimeBridge.pendingMessages.value.firstOrNull {
+    val pendingList =
+      RiyaRuntimeBridge.pendingMessages.value.filter {
         it.status == IncomingReplyStatus.PENDING_PERMISSION
       }
-    if (pending != null) {
-      return "সর্বশেষ অপেক্ষমাণ মেসেজ: ${pending.appLabel}-এ ${pending.senderName} লিখেছেন \"${pending.messageText}\"।"
+    val recentSent = RiyaRuntimeBridge.getRecentOutgoingMessages(withinMs = 15 * 60_000L).take(3)
+    val sentNote =
+      if (recentSent.isNotEmpty()) {
+        "\n[আমাদের পাঠানো সর্বশেষ উত্তর (এগুলো অপর প্রান্ত থেকে আসা মেসেজ নয় — আমি/বস পাঠিয়েছি)]:\n" +
+          recentSent.joinToString("\n") { "- ${it.appLabel} (${it.recipientName}-কে): \"${it.messageText}\"" }
+      } else ""
+
+    if (pendingList.isNotEmpty()) {
+      val incomingText =
+        pendingList.take(4).joinToString("\n") {
+          "- ${it.appLabel}-এ ${it.senderName} লিখেছেন: \"${it.messageText}\""
+        }
+      return "[নতুন প্রাপ্ত মেসেজ / RECEIVED (শুধু এগুলোই অপর প্রান্ত থেকে এসেছে)]:\n$incomingText$sentNote"
     }
-    val acc = RiyaAccessibilityService.instance ?: return "Accessibility চালু নেই বস"
+    val acc = RiyaAccessibilityService.instance ?: return if (sentNote.isNotBlank()) "কোনো নতুন ইনকামিং মেসেজ নেই বস।$sentNote" else "Accessibility চালু নেই বস"
     acc.global("notifications")
-    Thread.sleep(320)
+    Thread.sleep(240)
     val notes = acc.readScreen()
     acc.global("back")
     return if (notes.isNotBlank() && !notes.startsWith("স্ক্রিনে পড়ার মতো")) {
-      "নোটিফিকেশন বারে যা পাওয়া গেছে:\n$notes"
+      "নোটিফিকেশন বারে যা পাওয়া গেছে:\n$notes$sentNote"
     } else {
-      "এই মুহূর্তে কোনো নতুন মেসেজ বা নোটিফিকেশন নেই বস।"
+      "এই মুহূর্তে অপর প্রান্ত থেকে কোনো নতুন মেসেজ বা নোটিফিকেশন নেই বস।$sentNote"
     }
   }
 
