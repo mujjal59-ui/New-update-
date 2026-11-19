@@ -74,6 +74,12 @@ class RiyaNotificationListenerService : NotificationListenerService() {
             val person = b.getParcelable("sender_person") as? android.app.Person
             sender = person?.name?.toString()?.trim().orEmpty()
           }
+          val senderLow = sender.lowercase()
+          val rawIsSelf =
+            senderLow in setOf("you", "me", "আপনি", "আমি") ||
+              (selfName.isNotEmpty() && sender.equals(selfName, true))
+          if (rawIsSelf) continue
+
           val effectiveSender =
             when {
               sender.isNotBlank() && convTitle.isNotBlank() && !sender.equals(convTitle, true) ->
@@ -82,10 +88,10 @@ class RiyaNotificationListenerService : NotificationListenerService() {
               convTitle.isNotBlank() -> convTitle
               else -> extraTitle
             }
+          val effLow = effectiveSender.lowercase()
           val isSelfEcho =
-            effectiveSender.equals("You", true) ||
-              effectiveSender.equals("আপনি", true) ||
-              (selfName.isNotEmpty() && sender.equals(selfName, true))
+            effLow in setOf("you", "me", "আপনি", "আমি") ||
+              (selfName.isNotEmpty() && effectiveSender.equals(selfName, true))
           if (!isSelfEcho && effectiveSender.isNotBlank() && text.isNotBlank() && !isNoiseSummaryText(text)) {
             return effectiveSender to text
           }
@@ -127,7 +133,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
 
       if (sender.isBlank() || msgText.isBlank()) return null
       val lowerSender = sender.lowercase()
-      if (lowerSender in setOf("whatsapp", "whatsapp business", "imo", "messenger", "messenger lite", "you", "আপনি") ||
+      if (lowerSender in setOf("whatsapp", "whatsapp business", "imo", "messenger", "messenger lite", "you", "me", "আপনি", "আমি") ||
+        (selfName.isNotEmpty() && sender.equals(selfName, true)) ||
         lowerSender.contains("new messages") ||
         lowerSender.contains("নতুন বার্তা") ||
         isNoiseSummaryText(msgText)
@@ -135,6 +142,114 @@ class RiyaNotificationListenerService : NotificationListenerService() {
         return null
       }
       return sender to msgText
+    }
+
+    @Suppress("DEPRECATION")
+    fun extractIncomingVoiceCall(
+      pkg: String,
+      notification: Notification?,
+      fallbackTexts: List<String> = emptyList(),
+    ): DetectedChatVoiceCall? {
+      val appLabel = resolveAppLabel(pkg) ?: return null
+      val extras = notification?.extras
+      val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+      val conv = extras?.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim().orEmpty()
+      val text =
+        (extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            ?: extras?.getCharSequence(Notification.EXTRA_TEXT))
+          ?.toString()
+          ?.trim()
+          .orEmpty()
+      val combined =
+        listOf(title, conv, text, fallbackTexts.joinToString(" "))
+          .filter { it.isNotBlank() }
+          .joinToString(" | ")
+      val lower = combined.lowercase()
+      if (lower.isBlank()) return null
+
+      // Ignore outgoing calls placed by Boss himself ("Calling...", "Dialing...", "Audio call 57 sec")
+      val outgoingSignals =
+        listOf("calling", "dialing", "outgoing", "return to call", "tap to return to call", "কল করা হচ্ছে", "কল চলছে")
+      if (outgoingSignals.any { lower.contains(it) }) return null
+
+      val isCategoryCall = notification?.category == Notification.CATEGORY_CALL
+      val missedOrIncomingKeywords =
+        listOf(
+          "missed voice call",
+          "missed audio call",
+          "missed video call",
+          "missed call",
+          "incoming voice call",
+          "incoming audio call",
+          "incoming video call",
+          "incoming call",
+          "voice call",
+          "audio call",
+          "video call",
+          "মিসড ভয়েস কল",
+          "মিসড অডিও কল",
+          "মিসড ভিডিও কল",
+          "মিসড কল",
+          "ইনকামিং কল",
+          "ভয়েস কল",
+          "অডিও কল",
+        )
+      val hasCallKeyword = missedOrIncomingKeywords.any { lower.contains(it) }
+      if (!isCategoryCall && !hasCallKeyword) return null
+
+      // Do not treat completed duration strings like "Audio call 57 sec" or generic notification titles as incoming
+      if (!isCategoryCall && !lower.contains("missed") && !lower.contains("incoming") &&
+        !lower.contains("মিসড") && !lower.contains("ইনকামিং") && !lower.contains("ringing")
+      ) {
+        return null
+      }
+
+      val isVideo = lower.contains("video") || lower.contains("ভিডিও")
+      val isMissed = lower.contains("missed") || lower.contains("মিসড")
+      val callTypeBn =
+        when {
+          isMissed && isVideo -> "মিসড ভিডিও কল"
+          isMissed -> "মিসড ভয়েস/অডিও কল"
+          isVideo -> "ভিডিও কল"
+          else -> "ভয়েস/অডিও কল"
+        }
+
+      val callerCandidate =
+        listOf(title, conv, fallbackTexts.firstOrNull().orEmpty())
+          .map { it.trim() }
+          .firstOrNull { cand ->
+            cand.isNotBlank() &&
+              !cand.equals(appLabel, true) &&
+              !cand.lowercase().contains("missed") &&
+              !cand.lowercase().contains("incoming") &&
+              !cand.lowercase().contains("voice call") &&
+              !cand.lowercase().contains("video call")
+          } ?: "একজন কন্টাক্ট"
+
+      val verbBn = if (isMissed) "দিয়েছিলেন (মিসড)" else "দিচ্ছেন"
+      return DetectedChatVoiceCall(
+        appLabel = appLabel,
+        callerName = callerCandidate,
+        callSummaryBn = "$appLabel-এ $callerCandidate আপনাকে একটি $callTypeBn $verbBn",
+        rawText = combined,
+        isIncomingOrMissed = true,
+      )
+    }
+
+    private fun handleVoiceCallDetected(context: Context, call: DetectedChatVoiceCall) {
+      val recorded =
+        RiyaRuntimeBridge.recordDetectedVoiceCall(
+          appLabel = call.appLabel,
+          callerName = call.callerName,
+          summaryBn = call.callSummaryBn,
+        ) ?: return
+      Store.remember(context, "[কল অ্যালার্ট][${recorded.appLabel}] ${recorded.summaryBn}")
+      RiyaState.addLog("📞 ${recorded.summaryBn}")
+      val live = RiyaState.live
+      val sentToLive = live?.onVoiceCallAlert(recorded.appLabel, recorded.callerName, recorded.summaryBn) == true
+      if (!sentToLive) {
+        RiyaVoiceManager.speakUrgent(context, "বস, ${recorded.summaryBn}।")
+      }
     }
 
     private fun isNoiseSummaryText(text: String): Boolean {
@@ -156,6 +271,10 @@ class RiyaNotificationListenerService : NotificationListenerService() {
       fallbackTexts: List<String>,
     ) {
       val appLabel = resolveAppLabel(pkg) ?: return
+      extractIncomingVoiceCall(pkg, notification, fallbackTexts)?.let { voiceCall ->
+        handleVoiceCallDetected(context.applicationContext, voiceCall)
+        return
+      }
       if (notification != null && (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
 
       val extracted =
@@ -176,7 +295,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
 
       val (sender, msgText) = extracted
       val lowerSender = sender.lowercase()
-      if (lowerSender in setOf("whatsapp", "imo", "messenger", "you", "আপনি") ||
+      if (lowerSender in setOf("whatsapp", "imo", "messenger", "you", "me", "আপনি", "আমি") ||
         msgText.lowercase().contains("checking for new messages")
       ) {
         return
@@ -244,6 +363,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           if (!isAppEnabled) return@launch
 
           if (RiyaRuntimeBridge.isDuplicateOutgoingEcho(appLabel, msgText)) return@launch
+          if (RiyaRuntimeBridge.hasRecentlyHandledIncomingMessage(appLabel, sender, msgText)) return@launch
+          RiyaRuntimeBridge.markIncomingMessageHandled(appLabel, sender, msgText)
           Store.remember(ctx, "[প্রাপ্ত মেসেজ / RECEIVED][$appLabel] $sender: $msgText")
           RiyaState.addLog("📩 $appLabel ($sender): $msgText")
 
@@ -476,6 +597,10 @@ class RiyaNotificationListenerService : NotificationListenerService() {
     RiyaRuntimeBridge.setNotificationListenerConnected(true)
 
     val notification = sbn.notification ?: return
+    extractIncomingVoiceCall(pkg, notification)?.let { voiceCall ->
+      handleVoiceCallDetected(applicationContext, voiceCall)
+      return
+    }
     if ((notification.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
 
     val extras = notification.extras ?: return

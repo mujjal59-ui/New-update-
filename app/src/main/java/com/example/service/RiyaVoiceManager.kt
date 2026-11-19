@@ -30,6 +30,8 @@ object RiyaVoiceManager {
   @Volatile private var currentRate = Store.DEFAULT_VOICE_SPEED
   @Volatile private var voiceEnabled = true
   @Volatile private var activeAudioTrack: AudioTrack? = null
+  @Volatile var onBeforeLocalTtsPlay: (() -> Unit)? = null
+  @Volatile var isLiveAudioActivelyPlaying: (() -> Boolean)? = null
 
   private val cloudExec = Executors.newSingleThreadExecutor()
   private val speechSeq = AtomicInteger(0)
@@ -135,10 +137,19 @@ object RiyaVoiceManager {
       // Strictly never fall back to the phone's default robotic Android TextToSpeech voice
       return
     }
+    if (!forceSpeak && isLiveAudioActivelyPlaying?.invoke() == true) {
+      // Do not layer local TTS on top of active Gemini Live speech
+      return
+    }
 
     val seq = speechSeq.incrementAndGet()
     if (interrupt) {
       stopActivePlaybackOnly()
+    }
+    if (interrupt || forceSpeak) {
+      try {
+        onBeforeLocalTtsPlay?.invoke()
+      } catch (_: Throwable) {}
     }
 
     currentRate = Store.voiceSpeed(ctx)

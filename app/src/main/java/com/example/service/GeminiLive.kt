@@ -190,7 +190,7 @@ class GeminiLive(private val ctx: Context) {
   private fun toolsJson() =
     (if (searchOn) """[{"googleSearch":{}},""" else "[") +
       """{"functionDeclarations":[
-      {"name":"open_app","description":"ফোনে অ্যাপ খুঁজতে বা ওপেন করতে এটি ব্যবহার করো। এটি বাধ্যতামূলকভাবে আগে হোম স্ক্রিনে গিয়ে অ্যাপ খুঁজে ওপেন করে এবং অ্যাপ লক থাকলে অনুমতি ছাড়াই খুলে দেয়।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
+      {"name":"open_app","description":"ফোনে ঠিক যে অ্যাপের নাম বলা হয়েছে সেটি সরাসরি ওপেন করে (imo, WhatsApp, Messenger ইত্যাদি কখনোই এলোমেলো বা অন্য অ্যাপ খোলে না, এবং অ্যাপ লক থাকলে অনুমতি ছাড়াই খুলে দেয়)।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
       {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও (imo বললে imo, WhatsApp বললে WhatsApp)। এই টুল নিজেই অ্যাপ খোলে, অ্যাপ লক থাকলে সরাসরি খোলে, নাম খোঁজে, মেসেজ লেখে এবং ইমোজি বাদ দিয়ে সঠিক সেন্ড বাটনে ক্লিক করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
       {"name":"unlock_phone","description":"ফোনের মেইন স্ক্রিন বন্ধ বা লক অবস্থায় থাকলে ডাবল ট্যাপ করে আলো জ্বালিয়ে স্ক্রিন আনলক করো। কখনোই পিন/পাসওয়ার্ড/ভল্ট অ্যাপে সেভ থাকার কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
@@ -262,6 +262,7 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var suppressStaleModelAudio = false
   @Volatile private var activeTurnHasStartedOutput = false
   @Volatile private var lastBossSpeechDetectedMs = 0L
+  private val audioPlaybackEpoch = java.util.concurrent.atomic.AtomicLong(0L)
   private val micNoiseSuppressor = LxrAudioNoiseSuppressor(16000)
 
   fun updatePlaybackSpeed(speed: Float) {
@@ -500,6 +501,7 @@ class GeminiLive(private val ctx: Context) {
       }
     return try {
       val speakerMark = lastSpeakerWriteMs
+      val turnEpoch = audioPlaybackEpoch.get()
       // Briefly mute upstream mic so server VAD does not swallow incoming message prompt
       micMuteUntilMs = System.currentTimeMillis() + 700L
       val turnPayload =
@@ -522,7 +524,61 @@ class GeminiLive(private val ctx: Context) {
       if (sent) {
         main.postDelayed(
           {
-            if (!stopped && ready && lastSpeakerWriteMs == speakerMark) {
+            if (!stopped &&
+              ready &&
+              lastSpeakerWriteMs == speakerMark &&
+              !activeTurnHasStartedOutput &&
+              !isAiSpeakingRecently() &&
+              audioPlaybackEpoch.get() == turnEpoch
+            ) {
+              RiyaVoiceManager.speakUrgent(ctx, fallbackText)
+            }
+          },
+          4200L,
+        )
+      }
+      sent
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun onVoiceCallAlert(appLabel: String, callerName: String, callSummaryBn: String): Boolean {
+    if (!ready || stopped) return false
+    val prompt =
+      "[জরুরি ভয়েস/ভিডিও কল অ্যালার্ট]: $callSummaryBn। এখনই শান্ত ও স্পষ্ট বাংলায় বসকে সংক্ষেপে জানিয়ে দাও যে $appLabel-এ $callerName-এর কাছ থেকে এই কলটি এসেছে/মিস হয়েছে।"
+    val fallbackText = "বস, $callSummaryBn।"
+    return try {
+      val speakerMark = lastSpeakerWriteMs
+      val turnEpoch = audioPlaybackEpoch.get()
+      micMuteUntilMs = System.currentTimeMillis() + 550L
+      val turnPayload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                  ),
+              )
+              .put("turnComplete", true),
+          )
+      val sent = ws?.send(turnPayload.toString()) == true
+      if (sent) {
+        main.postDelayed(
+          {
+            if (!stopped &&
+              ready &&
+              lastSpeakerWriteMs == speakerMark &&
+              !activeTurnHasStartedOutput &&
+              !isAiSpeakingRecently() &&
+              audioPlaybackEpoch.get() == turnEpoch
+            ) {
               RiyaVoiceManager.speakUrgent(ctx, fallbackText)
             }
           },
@@ -590,26 +646,56 @@ class GeminiLive(private val ctx: Context) {
       RiyaAccessibilityService.currentScreenSummary.substringAfter("| স্ক্রিন দৃশ্য:", "").trim()
     val updatedSummary =
       if (report.isLocked) {
-        "${report.summaryBn} | বর্তমান অ্যাপ: ${report.activePackage}"
+        "[লক সতর্কতা: ${report.summaryBn}] | বর্তমান অ্যাপ: ${report.activePackage}"
       } else if (previousSummaryTail.isNotEmpty() && RiyaAccessibilityService.currentApp == report.activePackage) {
-        "${report.summaryBn}$openChat | বর্তমান অ্যাপ: ${report.activePackage} | স্ক্রিন দৃশ্য: $previousSummaryTail"
+        "বর্তমান অ্যাপ: ${report.activePackage}$openChat | স্ক্রিন দৃশ্য: $previousSummaryTail"
       } else {
-        "${report.summaryBn}$openChat | বর্তমান অ্যাপ: ${report.activePackage}"
+        "বর্তমান অ্যাপ: ${report.activePackage}$openChat"
       }
     RiyaAccessibilityService.currentScreenSummary = updatedSummary
+
     if (ready && !stopped && stateKey != lastObservedPhoneStateKey && !RiyaState.cameraOn) {
       lastObservedPhoneStateKey = stateKey
-      if ((ws?.queueSize() ?: 0L) < 8_000L) {
+      // Only push a realtime lock alert when the phone/app is genuinely locked—never spam "স্ক্রিন আনলক আছে / খোলা আছে"!
+      if (report.isLocked && (ws?.queueSize() ?: 0L) < 8_000L) {
         try {
           ws?.send(
             JSONObject()
               .put(
                 "realtimeInput",
-                JSONObject().put("text", "[লাইভ ১-সেকেন্ড স্ক্রিন আপডেট]: $updatedSummary"),
+                JSONObject().put("text", "[লক সতর্কতা]: ${report.summaryBn}"),
               )
               .toString(),
           )
         } catch (_: Throwable) {}
+      }
+    }
+
+    // Proactively detect incoming/missed voice or video calls visible on screen inside messaging apps (e.g. imo, WhatsApp, Messenger)
+    if (!report.isLocked && acc != null && ChatScreenGeometryParser.isMessagingPackage(report.activePackage)) {
+      val snapshot = RiyaRuntimeBridge.latestScreenSnapshot.value
+      if (snapshot.nodes.isNotEmpty() && snapshot.packageName == report.activePackage) {
+        val dm = ctx.resources.displayMetrics
+        val chatName = MessageAgent.extractOpenChatName(acc)
+        val visibleCalls =
+          ChatScreenGeometryParser.extractVisibleVoiceCalls(
+            nodes = snapshot.nodes,
+            pkg = report.activePackage,
+            screenWidth = dm.widthPixels.coerceAtLeast(720),
+            screenHeight = dm.heightPixels.coerceAtLeast(1280),
+            openChatName = chatName,
+          )
+        for (vc in visibleCalls) {
+          val rec = RiyaRuntimeBridge.recordDetectedVoiceCall(vc.appLabel, vc.callerName, vc.callSummaryBn)
+          if (rec != null) {
+            Store.remember(ctx, "[কল অ্যালার্ট][${rec.appLabel}] ${rec.summaryBn}")
+            RiyaState.addLog("📞 ${rec.summaryBn}")
+            val sentToLive = ready && !stopped && onVoiceCallAlert(rec.appLabel, rec.callerName, rec.summaryBn)
+            if (!sentToLive) {
+              RiyaVoiceManager.speakUrgent(ctx, "বস, ${rec.summaryBn}।")
+            }
+          }
+        }
       }
     }
   }
@@ -664,6 +750,8 @@ class GeminiLive(private val ctx: Context) {
     micNoiseSuppressor.reset()
     refreshSlowNetworkState()
     LxrFloatingOverlayManager.onInterruptSpeakRequest = { interruptSpeakerForBoss() }
+    RiyaVoiceManager.onBeforeLocalTtsPlay = { interruptSpeakerForBoss() }
+    RiyaVoiceManager.isLiveAudioActivelyPlaying = { isAiSpeakingRecently() || activeTurnHasStartedOutput }
     try {
       audioRouteThread?.quitSafely()
     } catch (_: Throwable) {}
@@ -723,6 +811,9 @@ class GeminiLive(private val ctx: Context) {
     stopped = true
     ready = false
     waitingServerReply = false
+    audioPlaybackEpoch.incrementAndGet()
+    RiyaVoiceManager.onBeforeLocalTtsPlay = null
+    RiyaVoiceManager.isLiveAudioActivelyPlaying = null
     try {
       main.removeCallbacksAndMessages(null)
     } catch (_: Throwable) {}
@@ -806,6 +897,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   fun interruptSpeakerForBoss() {
+    audioPlaybackEpoch.incrementAndGet()
     synchronized(trackLock) {
       val t = track
       if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
@@ -832,6 +924,7 @@ class GeminiLive(private val ctx: Context) {
       RiyaState.status.value = "Menu থেকে API Key দিন"
       return
     }
+    audioPlaybackEpoch.incrementAndGet()
     try {
       ws?.cancel()
     } catch (_: Exception) {}
@@ -844,6 +937,7 @@ class GeminiLive(private val ctx: Context) {
         Request.Builder().url(url).build(),
         object : WebSocketListener() {
           override fun onOpen(w: WebSocket, r: Response) {
+            if (w !== ws) return
             try {
               w.send(setup().toString())
             } catch (e: Exception) {
@@ -851,11 +945,18 @@ class GeminiLive(private val ctx: Context) {
             }
           }
 
-          override fun onMessage(w: WebSocket, text: String) = handle(text)
+          override fun onMessage(w: WebSocket, text: String) {
+            if (w !== ws) return
+            handle(text)
+          }
 
-          override fun onMessage(w: WebSocket, bytes: ByteString) = handle(bytes.utf8())
+          override fun onMessage(w: WebSocket, bytes: ByteString) {
+            if (w !== ws) return
+            handle(bytes.utf8())
+          }
 
           override fun onClosing(w: WebSocket, code: Int, reason: String) {
+            if (w !== ws) return
             w.close(1000, null)
           }
 
@@ -1032,7 +1133,11 @@ class GeminiLive(private val ctx: Context) {
           if (suppressStaleModelAudio) {
             // Discard stale residual audio packets from an interrupted turn to eliminate split/double replies
           } else {
+            if (!activeTurnHasStartedOutput) {
+              RiyaVoiceManager.stopSpeaking()
+            }
             activeTurnHasStartedOutput = true
+            val turnEpoch = audioPlaybackEpoch.get()
             for (i in 0 until ps.length()) {
               ps.getJSONObject(i).optJSONObject("inlineData")?.let {
                 val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
@@ -1044,8 +1149,9 @@ class GeminiLive(private val ctx: Context) {
                   try {
                     if (!playExec.isShutdown) {
                       playExec.execute {
-                        if (stopped || suppressStaleModelAudio) return@execute
+                        if (stopped || suppressStaleModelAudio || turnEpoch != audioPlaybackEpoch.get()) return@execute
                         synchronized(trackLock) {
+                          if (stopped || suppressStaleModelAudio || turnEpoch != audioPlaybackEpoch.get()) return@synchronized
                           val t = track
                           if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
                             try {
@@ -1054,7 +1160,7 @@ class GeminiLive(private val ctx: Context) {
                               if (wrote > 0) {
                                 val frames = (wrote / 2).toLong()
                                 totalSpeakerFramesWritten += frames
-                                if (pcmRms >= 220.0) {
+                                if (pcmRms >= 75.0) {
                                   lastAudibleEndFrame = totalSpeakerFramesWritten
                                   lastSpeakerOutputRms = pcmRms
                                   lastSpeakerSoundingMs = lastSpeakerWriteMs
@@ -1240,11 +1346,7 @@ class GeminiLive(private val ctx: Context) {
         "unlock_phone",
       )
     if (name !in skipUnlockTools) {
-      val liveStateNow = LockVaultManager.describeLivePhoneState(ctx, acc)
-      if (liveStateNow.phase == LivePhoneLockPhase.SCREEN_OFF ||
-        liveStateNow.phase == LivePhoneLockPhase.KEYGUARD_LOCKED ||
-        LockVaultManager.isDeviceLocked(ctx)
-      ) {
+      if (LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)) {
         val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
         if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
           turnUnlockedMainScreenByLxr = true
@@ -1363,7 +1465,11 @@ class GeminiLive(private val ctx: Context) {
             "লাইভ ব্যাক ক্যামেরা এখন চালু আছে। ইনকামিং ভিডিও স্ট্রিম থেকে পাওয়া সর্বশেষ ক্যামেরা ফ্রেম দেখে সরাসরি উত্তর দাও।"
           } else {
             val report = LockVaultManager.describeLivePhoneState(ctx, acc)
-            "${report.summaryBn}\n${RiyaAccessibilityService.currentScreenSummary.ifBlank { "অ্যাপ: ${report.activePackage}" }}"
+            if (report.isLocked) {
+              "${report.summaryBn}\n${RiyaAccessibilityService.currentScreenSummary.ifBlank { "অ্যাপ: ${report.activePackage}" }}"
+            } else {
+              RiyaAccessibilityService.currentScreenSummary.ifBlank { "বর্তমান অ্যাপ: ${report.activePackage}" }
+            }
           }
         "read_screen" ->
           if (RiyaState.cameraOn) {
@@ -1472,7 +1578,13 @@ class GeminiLive(private val ctx: Context) {
     MessageAgent.find(rawName)?.let { spec ->
       return spec.label to (listOf(spec.pkg) + spec.fallbackPkgs)
     }
-    val n = rawName.lowercase().trim()
+    val cleaned =
+      rawName
+        .lowercase()
+        .replace(Regex("(অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|ওপেন|করো|\\bapp\\b|\\bopen\\b)"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    val tokens = cleaned.split(Regex("[\\s.,:/\\-_]+")).filter { it.isNotEmpty() }
     val known =
       listOf(
         Triple("YouTube", listOf("youtube", "ইউটিউব"), listOf("com.google.android.youtube")),
@@ -1486,7 +1598,7 @@ class GeminiLive(private val ctx: Context) {
         Triple("TikTok", listOf("tiktok", "টিকটক"), listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill")),
       )
     known.firstOrNull { (_, aliases, _) ->
-      aliases.any { al -> n == al || n.contains(al) }
+      aliases.any { al -> cleaned == al || al in tokens || (al.length >= 4 && cleaned.contains(al)) }
     }?.let { (label, _, pkgs) ->
       return label to pkgs
     }
@@ -1505,16 +1617,35 @@ class GeminiLive(private val ctx: Context) {
     var launchIntent: Intent? = null
 
     // 1. Strict alias & package resolution (prevents WhatsApp <-> imo <-> Messenger mixups!)
+    val msgSpec = MessageAgent.find(query)
     val known = resolveKnownPackages(query)
-    if (known != null) {
+    if (msgSpec != null) {
+      targetLabel = msgSpec.label
+      targetPkgs = listOf(msgSpec.pkg) + msgSpec.fallbackPkgs
+      launchIntent = MessageAgent.launchIntentFor(ctx, msgSpec)
+    } else if (known != null) {
       targetLabel = known.first
       targetPkgs = known.second
       launchIntent =
         targetPkgs.firstNotNullOfOrNull { pkg -> pm.getLaunchIntentForPackage(pkg) }
+          ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+      if (launchIntent == null) {
+        val allowedSet = targetPkgs.map { it.lowercase() }.toSet()
+        val matchAct =
+          pm.queryIntentActivities(li, 0).firstOrNull {
+            it.activityInfo.packageName.lowercase() in allowedSet
+          }
+        if (matchAct != null) {
+          launchIntent =
+            Intent(li)
+              .setClassName(matchAct.activityInfo.packageName, matchAct.activityInfo.name)
+              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        }
+      }
     }
 
-    // 2. Fallback to Launcher activity match if not in known exact map
-    if (launchIntent == null) {
+    // 2. Fallback to Launcher activity match ONLY if not a known named app
+    if (launchIntent == null && known == null) {
       val list = pm.queryIntentActivities(li, 0)
       val m =
         list.firstOrNull { it.loadLabel(pm).toString().equals(query, ignoreCase = true) }
@@ -1530,7 +1661,7 @@ class GeminiLive(private val ctx: Context) {
         launchIntent =
           Intent(li)
             .setClassName(m.activityInfo.packageName, m.activityInfo.name)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
       }
     }
 
@@ -1538,7 +1669,7 @@ class GeminiLive(private val ctx: Context) {
       val curBefore = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
       val alreadyOpen = curBefore in targetPkgs
       if (!alreadyOpen) {
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         ctx.startActivity(launchIntent)
         val deadline = System.currentTimeMillis() + 4500L
         while (System.currentTimeMillis() < deadline) {
@@ -1567,7 +1698,7 @@ class GeminiLive(private val ctx: Context) {
       )
       return buildString {
         append(
-          if (verifiedOpen) "$targetLabel ($activePkg) অ্যাপটি ওপেন হয়েছে।"
+          if (verifiedOpen) "$targetLabel ($activePkg) অ্যাপটি সঠিকভাবে ওপেন হয়েছে।"
           else "$targetLabel ওপেন করা হয়েছে (বর্তমান উইন্ডো: $activePkg)।"
         )
         if (fullScreen.isNotBlank()) {
@@ -1577,10 +1708,14 @@ class GeminiLive(private val ctx: Context) {
       }
     }
 
-    // 3. Last resort: look on Home screen visually via Accessibility clickText
+    if (known != null) {
+      return "'$targetLabel' অ্যাপটি ফোনে ইনস্টল করা নেই বা সিস্টেম লঞ্চারে পাওয়া যায়নি বস (তাই অন্য কোনো ভুল অ্যাপ খোলা হয়নি)।"
+    }
+
+    // 3. Last resort only for unknown custom apps: look on Home screen strictly (no fuzzy contact matching)
     goHomeAndVerify(acc)
     if (acc != null) {
-      val res = acc.clickText(query)
+      val res = acc.clickText(query, isContact = false)
       if (res.contains("ক্লিক করা হয়েছে")) {
         Thread.sleep(600)
         val fullScreen = acc.readScreen()
@@ -2027,6 +2162,12 @@ class GeminiLive(private val ctx: Context) {
       RiyaRuntimeBridge.pendingMessages.value.filter {
         it.status == IncomingReplyStatus.PENDING_PERMISSION
       }
+    val recentCalls = RiyaRuntimeBridge.getRecentVoiceCalls(withinMs = 15 * 60_000L).take(3)
+    val callsNote =
+      if (recentCalls.isNotEmpty()) {
+        "\n[ভয়েস/ভিডিও কল অ্যালার্ট (বসকে অবশ্যই জানাও)]:\n" +
+          recentCalls.joinToString("\n") { "- ${it.summaryBn}" }
+      } else ""
     val recentSent = RiyaRuntimeBridge.getRecentOutgoingMessages(withinMs = 15 * 60_000L).take(3)
     val sentNote =
       if (recentSent.isNotEmpty()) {
@@ -2039,17 +2180,18 @@ class GeminiLive(private val ctx: Context) {
         pendingList.take(4).joinToString("\n") {
           "- ${it.appLabel}-এ ${it.senderName} লিখেছেন: \"${it.messageText}\""
         }
-      return "[নতুন প্রাপ্ত মেসেজ / RECEIVED (শুধু এগুলোই অপর প্রান্ত থেকে এসেছে)]:\n$incomingText$sentNote"
+      return "[নতুন প্রাপ্ত মেসেজ / RECEIVED (শুধু এগুলোই অপর প্রান্ত থেকে এসেছে)]:\n$incomingText$callsNote$sentNote"
     }
-    val acc = RiyaAccessibilityService.instance ?: return if (sentNote.isNotBlank()) "কোনো নতুন ইনকামিং মেসেজ নেই বস।$sentNote" else "Accessibility চালু নেই বস"
+    val acc = RiyaAccessibilityService.instance
+      ?: return if (callsNote.isNotBlank() || sentNote.isNotBlank()) "কোনো নতুন ইনকামিং মেসেজ নেই বস।$callsNote$sentNote" else "Accessibility চালু নেই বস"
     acc.global("notifications")
     Thread.sleep(240)
     val notes = acc.readScreen()
     acc.global("back")
     return if (notes.isNotBlank() && !notes.startsWith("স্ক্রিনে পড়ার মতো")) {
-      "নোটিফিকেশন বারে যা পাওয়া গেছে:\n$notes$sentNote"
+      "নোটিফিকেশন বারে যা পাওয়া গেছে:$callsNote\n$notes$sentNote"
     } else {
-      "এই মুহূর্তে অপর প্রান্ত থেকে কোনো নতুন মেসেজ বা নোটিফিকেশন নেই বস।$sentNote"
+      "এই মুহূর্তে অপর প্রান্ত থেকে কোনো নতুন মেসেজ বা নোটিফিকেশন নেই বস।$callsNote$sentNote"
     }
   }
 
@@ -2490,6 +2632,7 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
                   consecutiveLoudChunks = consecutiveLoudMicChunks,
+                  phoneTailHoldMs = 260L,
                 )
 
               if (!isSoftMuted && isSpeakerAudiblyPlayingNow && !ttsSpeakingNow) {

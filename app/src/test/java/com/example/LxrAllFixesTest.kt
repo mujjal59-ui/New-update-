@@ -24,15 +24,20 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.ai.RiyaPersona
 import com.example.data.RiyaPreferences
 import com.example.data.Store
+import android.graphics.Rect
 import com.example.service.AudioEchoGuard
+import com.example.service.ChatBubbleDirection
+import com.example.service.ChatScreenGeometryParser
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
 import com.example.service.LiveVadConfig
 import com.example.service.LockVaultManager
 import com.example.service.LxrAudioNoiseSuppressor
+import com.example.service.MessageAgent
 import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaVoiceManager
+import com.example.service.ScreenNodeInfo
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
 import com.example.ui.CYBER_BLUE
@@ -416,5 +421,160 @@ class LxrAllFixesTest {
     assertTrue(
       RiyaRuntimeBridge.getRecentOutgoingMessages().any { it.recipientName == "রাশেদ" && it.messageText.contains("আসছি") },
     )
+  }
+
+  @Test
+  fun chatScreenGeometry_classifiesLeftIncomingRightOutgoingAndDetectsMissedCalls() {
+    val w = 1080
+    val h = 2400
+    // Messenger / WhatsApp / imo left incoming bubble
+    assertEquals(
+      ChatBubbleDirection.INCOMING_LEFT,
+      ChatScreenGeometryParser.classifyBubbleDirection(140, 620, w, "কেমন আছেন ভাই", "", "com.facebook.orca"),
+    )
+    // Short right-side reply bubble ("হ্যাঁ", "না")
+    assertEquals(
+      ChatBubbleDirection.OUTGOING_RIGHT,
+      ChatScreenGeometryParser.classifyBubbleDirection(940, 1050, w, "না", "", "com.facebook.orca"),
+    )
+    // Right-side WhatsApp auto-reply bubble
+    assertEquals(
+      ChatBubbleDirection.OUTGOING_RIGHT,
+      ChatScreenGeometryParser.classifyBubbleDirection(160, 1035, w, "আমি LXR--AI, বস ব্যস্ত আছেন", "", "com.whatsapp"),
+    )
+    // Centered date header
+    assertEquals(
+      ChatBubbleDirection.SYSTEM_CENTER,
+      ChatScreenGeometryParser.classifyBubbleDirection(430, 650, w, "Yesterday", "", "com.whatsapp"),
+    )
+
+    // imo thread with left Missed Audio Call, left Missed Video Call, and right outgoing Audio call 57 sec
+    val nodes =
+      listOf(
+        ScreenNodeInfo(
+          text = "Saluddin Vai",
+          contentDescription = "",
+          viewId = "",
+          className = "android.widget.TextView",
+          isClickable = false,
+          isEditable = false,
+          isScrollable = false,
+          bounds = Rect(140, 120, 480, 190),
+        ),
+        ScreenNodeInfo(
+          text = "Missed Audio Call",
+          contentDescription = "",
+          viewId = "",
+          className = "android.widget.TextView",
+          isClickable = false,
+          isEditable = false,
+          isScrollable = false,
+          bounds = Rect(240, 1100, 620, 1180),
+        ),
+        ScreenNodeInfo(
+          text = "Missed Video Call",
+          contentDescription = "",
+          viewId = "",
+          className = "android.widget.TextView",
+          isClickable = false,
+          isEditable = false,
+          isScrollable = false,
+          bounds = Rect(240, 1650, 620, 1730),
+        ),
+        ScreenNodeInfo(
+          text = "Audio call 57 sec",
+          contentDescription = "",
+          viewId = "",
+          className = "android.widget.TextView",
+          isClickable = false,
+          isEditable = false,
+          isScrollable = false,
+          bounds = Rect(520, 1920, 950, 2020),
+        ),
+      )
+    val calls =
+      ChatScreenGeometryParser.extractVisibleVoiceCalls(
+        nodes = nodes,
+        pkg = "com.imo.android.imoim",
+        screenWidth = w,
+        screenHeight = h,
+        openChatName = "Saluddin Vai",
+      )
+    assertEquals(2, calls.size)
+    assertTrue(calls.any { it.callerName == "Saluddin Vai" && it.callSummaryBn.contains("অডিও") })
+    assertTrue(calls.any { it.callerName == "Saluddin Vai" && it.callSummaryBn.contains("ভিডিও") })
+    assertFalse(calls.any { it.rawText.contains("57 sec") })
+  }
+
+  @Test
+  fun selfEchoMessagingStyleYouAndVoiceCallNotifications_areFilteredAndDetectedCleanly() {
+    // 1. Self-echo "You" in a chat titled "My Namber" must return null so LXR never treats own outgoing reply as incoming
+    val ownMsgBundle = Bundle().apply { putCharSequence("sender", "You"); putCharSequence("text", "আমি LXR--AI") }
+    val selfExtras =
+      Bundle().apply {
+        putCharSequence(Notification.EXTRA_CONVERSATION_TITLE, "My Namber")
+        putParcelableArray(Notification.EXTRA_MESSAGES, arrayOf(ownMsgBundle))
+      }
+    assertNull(
+      "Outgoing 'You' message inside conversation must not be parsed as incoming",
+      RiyaNotificationListenerService.extractSenderAndMessage(selfExtras),
+    )
+
+    // 2. Incoming voice call notification in imo
+    val callNotif =
+      Notification().apply {
+        category = Notification.CATEGORY_CALL
+        extras =
+          Bundle().apply {
+            putCharSequence(Notification.EXTRA_TITLE, "Saluddin Vai")
+            putCharSequence(Notification.EXTRA_TEXT, "Incoming voice call")
+          }
+      }
+    val detectedCall = RiyaNotificationListenerService.extractIncomingVoiceCall("com.imo.android.imoim", callNotif)
+    assertNotNull(detectedCall)
+    assertEquals("imo", detectedCall!!.appLabel)
+    assertEquals("Saluddin Vai", detectedCall.callerName)
+
+    // 3. Outgoing "Calling..." notification must be ignored
+    val outgoingCallNotif =
+      Notification().apply {
+        category = Notification.CATEGORY_CALL
+        extras =
+          Bundle().apply {
+            putCharSequence(Notification.EXTRA_TITLE, "Saluddin Vai")
+            putCharSequence(Notification.EXTRA_TEXT, "Calling...")
+          }
+      }
+    assertNull(
+      RiyaNotificationListenerService.extractIncomingVoiceCall("com.imo.android.imoim", outgoingCallNotif),
+    )
+  }
+
+  @Test
+  fun appDisambiguationAndDuplicateSendGuards_preventCrossAppMistakesAndDoubleSending() {
+    assertEquals("imo", MessageAgent.find("ইমু অ্যাপ খোলো")?.key)
+    assertEquals("imo", MessageAgent.find("imo")?.key)
+    assertEquals("whatsapp", MessageAgent.find("হোয়াটসঅ্যাপ ওপেন করো")?.key)
+    assertEquals("whatsapp", MessageAgent.find("WhatsApp")?.key)
+    assertEquals("messenger", MessageAgent.find("মেসেঞ্জার খোলো")?.key)
+    assertEquals("messenger", MessageAgent.find("Messenger")?.key)
+
+    val uniqueRec = "TestUser_${System.nanoTime()}"
+    assertFalse(RiyaRuntimeBridge.isDuplicateOutgoingToRecipient("WhatsApp", uniqueRec, "কেমন আছেন?"))
+    RiyaRuntimeBridge.recordOutgoingMessage("WhatsApp", uniqueRec, "কেমন আছেন?")
+    assertTrue(RiyaRuntimeBridge.isDuplicateOutgoingToRecipient("WhatsApp", uniqueRec, "কেমন আছেন?"))
+    assertFalse(RiyaRuntimeBridge.isDuplicateOutgoingToRecipient("imo", uniqueRec, "কেমন আছেন?"))
+
+    val msgSigText = "আসসালামু আলাইকুম_${System.nanoTime()}"
+    assertFalse(RiyaRuntimeBridge.hasRecentlyHandledIncomingMessage("WhatsApp", uniqueRec, msgSigText))
+    RiyaRuntimeBridge.markIncomingMessageHandled("WhatsApp", uniqueRec, msgSigText)
+    assertTrue(RiyaRuntimeBridge.hasRecentlyHandledIncomingMessage("WhatsApp", uniqueRec, msgSigText))
+
+    val callEv = RiyaRuntimeBridge.recordDetectedVoiceCall("imo", uniqueRec, "imo-এ $uniqueRec মিসড অডিও কল দিয়েছিলেন")
+    assertNotNull(callEv)
+    assertNull(RiyaRuntimeBridge.recordDetectedVoiceCall("imo", uniqueRec, "imo-এ $uniqueRec মিসড অডিও কল দিয়েছিলেন"))
+
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    assertFalse(LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, null))
   }
 }

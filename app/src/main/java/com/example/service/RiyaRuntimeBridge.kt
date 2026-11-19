@@ -33,6 +33,19 @@ object RiyaRuntimeBridge {
   private val replyPayloads = ConcurrentHashMap<String, PendingReplyPayload>()
   private val lastSenderReplyTime = ConcurrentHashMap<String, Long>()
   private val recentNotificationHashes = ConcurrentHashMap<String, Long>()
+  private val recentHandledIncomingSignatures = ConcurrentHashMap<String, Long>()
+  private val recentVoiceCallSignatures = ConcurrentHashMap<String, Long>()
+
+  data class IncomingVoiceCallEvent(
+    val callKey: String,
+    val appLabel: String,
+    val callerName: String,
+    val summaryBn: String,
+    val timestampMs: Long = System.currentTimeMillis(),
+  )
+
+  private val _detectedVoiceCalls = MutableStateFlow<List<IncomingVoiceCallEvent>>(emptyList())
+  val detectedVoiceCalls: StateFlow<List<IncomingVoiceCallEvent>> = _detectedVoiceCalls.asStateFlow()
 
   fun setServiceConnected(connected: Boolean) {
     _isAccessibilityServiceConnected.value = connected
@@ -58,25 +71,90 @@ object RiyaRuntimeBridge {
     _requestedUiPage.value = pageKey
   }
 
-  fun isDuplicateNotification(signature: String, windowMs: Long = 8_000L): Boolean {
+  private fun normSig(s: String): String =
+    s.trim().lowercase().replace(Regex("\\s+"), " ")
+
+  fun isDuplicateNotification(signature: String, windowMs: Long = 120_000L): Boolean {
+    val normKey = normSig(signature)
     val now = System.currentTimeMillis()
-    val previous = recentNotificationHashes[signature]
-    recentNotificationHashes[signature] = now
-    // Prune stale hashes opportunistically
-    if (recentNotificationHashes.size > 100) {
-      recentNotificationHashes.entries.removeIf { now - it.value > 60_000L }
+    val previous = recentNotificationHashes[normKey]
+    if (previous != null && (now - previous) < windowMs) {
+      return true
     }
-    return previous != null && (now - previous) < windowMs
+    recentNotificationHashes[normKey] = now
+    if (recentNotificationHashes.size > 150) {
+      recentNotificationHashes.entries.removeIf { now - it.value > 15 * 60_000L }
+    }
+    return false
   }
 
-  fun canAutoReplyToSender(senderKey: String, cooldownMs: Long = 15_000L): Boolean {
+  fun hasRecentlyHandledIncomingMessage(
+    appLabel: String,
+    senderName: String,
+    messageText: String,
+    windowMs: Long = 10 * 60_000L,
+  ): Boolean {
+    val key = "${normSig(appLabel)}|${normSig(senderName)}|${normSig(messageText)}"
+    val prev = recentHandledIncomingSignatures[key] ?: return false
+    return (System.currentTimeMillis() - prev) < windowMs
+  }
+
+  fun markIncomingMessageHandled(appLabel: String, senderName: String, messageText: String) {
     val now = System.currentTimeMillis()
-    val last = lastSenderReplyTime[senderKey] ?: 0L
+    val key = "${normSig(appLabel)}|${normSig(senderName)}|${normSig(messageText)}"
+    recentHandledIncomingSignatures[key] = now
+    if (recentHandledIncomingSignatures.size > 150) {
+      recentHandledIncomingSignatures.entries.removeIf { now - it.value > 30 * 60_000L }
+    }
+  }
+
+  fun canAutoReplyToSender(senderKey: String, cooldownMs: Long = 45_000L): Boolean {
+    val now = System.currentTimeMillis()
+    val last = lastSenderReplyTime[normSig(senderKey)] ?: 0L
     return (now - last) >= cooldownMs
   }
 
   fun markSenderReplied(senderKey: String) {
-    lastSenderReplyTime[senderKey] = System.currentTimeMillis()
+    lastSenderReplyTime[normSig(senderKey)] = System.currentTimeMillis()
+  }
+
+  /**
+   * Records a missed or incoming voice/video call cleanly, returning the newly recorded event
+   * or null if this exact caller + app call alert was already recorded recently.
+   */
+  fun recordDetectedVoiceCall(
+    appLabel: String,
+    callerName: String,
+    summaryBn: String,
+    dedupWindowMs: Long = 3 * 60_000L,
+  ): IncomingVoiceCallEvent? {
+    val cleanCaller = callerName.trim().ifBlank { "কন্টাক্ট" }
+    val cleanApp = appLabel.trim().ifBlank { "Messaging" }
+    val sig = "${normSig(cleanApp)}|${normSig(cleanCaller)}|${normSig(summaryBn)}"
+    val now = System.currentTimeMillis()
+    val prev = recentVoiceCallSignatures[sig]
+    if (prev != null && (now - prev) < dedupWindowMs) {
+      return null
+    }
+    recentVoiceCallSignatures[sig] = now
+    if (recentVoiceCallSignatures.size > 80) {
+      recentVoiceCallSignatures.entries.removeIf { now - it.value > 30 * 60_000L }
+    }
+    val ev =
+      IncomingVoiceCallEvent(
+        callKey = "${cleanApp}_${now}_${cleanCaller.hashCode()}",
+        appLabel = cleanApp,
+        callerName = cleanCaller,
+        summaryBn = summaryBn,
+        timestampMs = now,
+      )
+    _detectedVoiceCalls.update { current -> (listOf(ev) + current).take(15) }
+    return ev
+  }
+
+  fun getRecentVoiceCalls(withinMs: Long = 15 * 60_000L): List<IncomingVoiceCallEvent> {
+    val cutoff = System.currentTimeMillis() - withinMs
+    return _detectedVoiceCalls.value.filter { it.timestampMs >= cutoff }
   }
 
   fun registerIncomingMessage(event: IncomingMessageEvent, payload: PendingReplyPayload?) {
@@ -143,13 +221,31 @@ object RiyaRuntimeBridge {
     return _outgoingSentMessages.value.filter { it.timestampMs >= cutoff }
   }
 
+  fun isDuplicateOutgoingToRecipient(
+    appLabel: String,
+    recipientName: String,
+    messageText: String,
+    windowMs: Long = 90_000L,
+  ): Boolean {
+    val normMsg = normSig(messageText)
+    val normRec = normSig(recipientName)
+    if (normMsg.isEmpty()) return false
+    val cutoff = System.currentTimeMillis() - windowMs
+    return _outgoingSentMessages.value.any { rec ->
+      rec.timestampMs >= cutoff &&
+        normSig(rec.messageText) == normMsg &&
+        (appLabel.isBlank() || rec.appLabel.equals(appLabel, ignoreCase = true)) &&
+        (normRec.isBlank() || normSig(rec.recipientName) == normRec || rec.recipientName.equals("অন্য প্রান্ত"))
+    }
+  }
+
   fun isDuplicateOutgoingEcho(appLabel: String, text: String, windowMs: Long = 90_000L): Boolean {
-    val norm = text.trim()
+    val norm = normSig(text)
     if (norm.isEmpty()) return false
     val cutoff = System.currentTimeMillis() - windowMs
     return _outgoingSentMessages.value.any { rec ->
       rec.timestampMs >= cutoff &&
-        rec.messageText.equals(norm, ignoreCase = true) &&
+        normSig(rec.messageText) == norm &&
         (appLabel.isBlank() || rec.appLabel.equals(appLabel, ignoreCase = true))
     }
   }

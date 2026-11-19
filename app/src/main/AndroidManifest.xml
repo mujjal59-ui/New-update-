@@ -33,8 +33,13 @@
         <package android:name="com.imo.android.imoim" />
         <package android:name="com.imo.android.imoimhd" />
         <package android:name="com.imo.android.imoimbeta" />
+        <package android:name="com.imo.android.imoimlite" />
         <package android:name="com.facebook.orca" />
         <package android:name="com.facebook.mlite" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.facebook.lite" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="org.telegram.messenger" />
         <package android:name="com.google.android.youtube" />
         <package android:name="com.google.android.apps.bard" />
         <package android:name="com.openai.chatgpt" />

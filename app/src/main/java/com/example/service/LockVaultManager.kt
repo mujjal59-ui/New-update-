@@ -150,8 +150,19 @@ object LockVaultManager {
     ) {
       return true
     }
-    if (activePkg != "com.android.systemui" && "com.android.systemui" !in pkgs) return false
-    val textDump = collectCompactScreenText(roots).lowercase()
+    // If foreground active window is already a regular user app (not systemui), do NOT mistake status bar for keyguard!
+    if (activePkg.isNotEmpty() && activePkg != "com.android.systemui") return false
+    val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
+    val keyguardRoots =
+      roots.filter { r ->
+        val p = r.packageName?.toString()?.lowercase()?.trim().orEmpty()
+        if (p != "com.android.systemui") return@filter false
+        val rect = Rect()
+        r.getBoundsInScreen(rect)
+        rect.height() >= (screenH * 0.45f).toInt() || rect.height() == 0
+      }
+    if (keyguardRoots.isEmpty()) return false
+    val textDump = collectCompactScreenText(keyguardRoots).lowercase()
     return textDump.contains("keyguard") ||
       textDump.contains("lock_icon") ||
       textDump.contains("pinentry") ||
@@ -161,11 +172,29 @@ object LockVaultManager {
       textDump.contains("enter password") ||
       textDump.contains("enter pin") ||
       textDump.contains("wrong pin") ||
-      textDump.contains("fingerprint") ||
-      textDump.contains("unlock with") ||
+      textDump.contains("unlock with fingerprint") ||
       textDump.contains("পিন দিন") ||
-      textDump.contains("প্যাটার্ন আঁকুন") ||
-      textDump.contains("emergency")
+      textDump.contains("প্যাটার্ন আঁকুন")
+  }
+
+  /**
+   * Returns true ONLY when the phone main display/keyguard was genuinely locked at the OS level
+   * BEFORE a task began (never triggered by an unlocked app's EditText or notification shade).
+   */
+  fun isMainScreenGenuinelyLockedBeforeTask(ctx: Context, acc: RiyaAccessibilityService?): Boolean {
+    val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    if (pm != null && !pm.isInteractive) return true
+    val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    val keyguardLocked = km?.isKeyguardLocked == true
+    if (!keyguardLocked && !isSystemKeyguardUiShowing(acc)) return false
+    val activePkg = acc?.rootInActiveWindow?.packageName?.toString()
+    return evaluateMainScreenLocked(
+      screenInteractive = true,
+      keyguardLocked = keyguardLocked,
+      deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked,
+      activeWindowPkg = activePkg,
+      lockScreenVisibleInUi = isSystemKeyguardUiShowing(acc),
+    )
   }
 
   fun describeLivePhoneState(
@@ -406,17 +435,43 @@ object LockVaultManager {
   }
 
   fun hasBouncerUiShowing(acc: RiyaAccessibilityService?, lockType: ScreenLockType): Boolean {
-    if (acc == null) return false
-    val roots = collectAllRoots(acc)
+    if (acc == null || lockType == ScreenLockType.NONE) return false
+    val activePkg = acc.rootInActiveWindow?.packageName?.toString()?.lowercase()?.trim().orEmpty()
+    val km = acc.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    val keyguardPkg = activePkg == "com.android.systemui" || activePkg.contains("keyguard") || activePkg.contains("lockscreen")
+    if (!keyguardPkg && km?.isKeyguardLocked != true) return false
+
+    val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
+    val lockRoots =
+      collectAllRoots(acc).filter { r ->
+        val p = r.packageName?.toString()?.lowercase()?.trim().orEmpty()
+        if (p.contains("keyguard") || p.contains("lockscreen")) return@filter true
+        if (p == "com.android.systemui") {
+          val rect = Rect()
+          r.getBoundsInScreen(rect)
+          return@filter rect.height() >= (screenH * 0.45f).toInt() || rect.height() == 0
+        }
+        false
+      }
+    if (lockRoots.isEmpty()) return false
+
     val allNodes = mutableListOf<AccessibilityNodeInfo>()
     fun collect(n: AccessibilityNodeInfo?, depth: Int) {
       if (n == null || depth > 28) return
       allNodes.add(n)
       for (i in 0 until n.childCount) collect(n.getChild(i), depth + 1)
     }
-    roots.forEach { collect(it, 0) }
+    lockRoots.forEach { collect(it, 0) }
     if (lockType == ScreenLockType.PIN) {
-      if (allNodes.any { it.isEditable }) return true
+      if (allNodes.any { n ->
+          val id = n.viewIdResourceName?.lowercase().orEmpty()
+          (n.isEditable && (id.contains("pin") || id.contains("password") || id.contains("keyguard"))) ||
+            id.contains("pinentry") ||
+            id.contains("keyguard_pin")
+        }
+      ) {
+        return true
+      }
     }
     if (lockType == ScreenLockType.PATTERN) {
       val dm = acc.resources.displayMetrics
@@ -431,7 +486,7 @@ object LockVaultManager {
         }
       if (hasPatternNode) return true
     }
-    val dump = collectCompactScreenText(roots)
+    val dump = collectCompactScreenText(lockRoots)
     return isBouncerInputUiVisible(dump, lockType)
   }
 

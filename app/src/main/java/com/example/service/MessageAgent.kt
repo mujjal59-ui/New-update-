@@ -32,15 +32,43 @@ object MessageAgent {
         pkg = "com.whatsapp",
         fallbackPkgs = listOf("com.whatsapp.w4b"),
         label = "WhatsApp",
-        aliases = listOf("whatsapp", "হোয়াটসঅ্যাপ", "হোয়াটস্যাপ", "ওয়াটসঅ্যাপ"),
+        aliases =
+          listOf(
+            "whatsapp",
+            "whatsapp business",
+            "whats app",
+            "whatsap",
+            "watsapp",
+            "হোয়াটসঅ্যাপ",
+            "হোয়াটস্যাপ",
+            "হোয়াটস অ্যাপ",
+            "ওয়াটসঅ্যাপ",
+            "ওয়াটস অ্যাপ",
+            "হোয়াটসঅ্যাপ",
+            "হোয়াটস্যাপ",
+          ),
         isAi = false,
       ),
       AppSpec(
         key = "imo",
         pkg = "com.imo.android.imoim",
-        fallbackPkgs = listOf("com.imo.android.imoimhd", "com.imo.android.imoimbeta"),
+        fallbackPkgs = listOf("com.imo.android.imoimhd", "com.imo.android.imoimbeta", "com.imo.android.imoimlite"),
         label = "imo",
-        aliases = listOf("imo", "ইমো", "ইমু", "আইমো"),
+        aliases =
+          listOf(
+            "imo",
+            "imo hd",
+            "imo beta",
+            "imo lite",
+            "emu",
+            "imu",
+            "emo",
+            "ইমো",
+            "ইমু",
+            "আইমো",
+            "ইমো এইচডি",
+            "ইমু এইচডি",
+          ),
         isAi = false,
       ),
       AppSpec(
@@ -48,7 +76,19 @@ object MessageAgent {
         pkg = "com.facebook.orca",
         fallbackPkgs = listOf("com.facebook.mlite"),
         label = "Messenger",
-        aliases = listOf("messenger", "মেসেঞ্জার", "মেসেনজার", "ম্যাসেঞ্জার"),
+        aliases =
+          listOf(
+            "messenger",
+            "fb messenger",
+            "facebook messenger",
+            "messenger lite",
+            "massenger",
+            "messanger",
+            "মেসেঞ্জার",
+            "মেসেনজার",
+            "ম্যাসেঞ্জার",
+            "ম্যাসেনজার",
+          ),
         isAi = false,
       ),
       AppSpec(
@@ -70,18 +110,42 @@ object MessageAgent {
     )
 
   fun find(name: String): AppSpec? {
-    val n = name.lowercase().trim()
-    if (n.isEmpty()) return null
-    APPS.firstOrNull { a ->
-      a.key == n || a.label.lowercase() == n || a.aliases.any { al -> n == al.lowercase() }
-    }?.let { return it }
-    return APPS.firstOrNull { a -> a.aliases.any { al -> n.contains(al.lowercase()) } }
+    val raw = name.lowercase().trim()
+    if (raw.isEmpty()) return null
+    val cleaned =
+      raw
+        .replace(Regex("(অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|টা|তে|এ|খোলো|ওপেন|করো|\\bapp\\b|\\bopen\\b)"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    val candidates = listOf(raw, cleaned).filter { it.isNotEmpty() }.distinct()
+
+    // 1. Exact key, label, or exact alias match
+    for (q in candidates) {
+      APPS.firstOrNull { a ->
+        a.key == q || a.label.lowercase() == q || a.aliases.any { al -> q == al.lowercase() }
+      }?.let { return it }
+    }
+
+    // 2. Word-boundary / token match (avoids "im" inside random words or cross-app bleed)
+    for (q in candidates) {
+      val tokens = q.split(Regex("[\\s.,:/\\-_]+")).filter { it.isNotEmpty() }
+      APPS.firstOrNull { a ->
+        a.aliases.any { al ->
+          val alLow = al.lowercase()
+          alLow in tokens ||
+            (alLow.length >= 4 && q.contains(alLow)) ||
+            (tokens.any { tok -> tok == alLow })
+        }
+      }?.let { return it }
+    }
+    return null
   }
 
   fun launchIntentFor(ctx: Context, app: AppSpec): Intent? {
     val allowedPkgs = listOf(app.pkg) + app.fallbackPkgs
-    return allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
-      ?: launchByLabel(ctx, app)
+    val direct = allowedPkgs.firstNotNullOfOrNull { ctx.packageManager.getLaunchIntentForPackage(it) }
+    val resolved = direct ?: launchByLabel(ctx, app)
+    return resolved?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
   }
 
   private fun stripInvisible(s: String): String =
@@ -150,11 +214,26 @@ object MessageAgent {
   private fun launchByLabel(ctx: Context, app: AppSpec): Intent? {
     val pm = ctx.packageManager
     val li = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val allowedPkgs = (listOf(app.pkg) + app.fallbackPkgs).map { it.lowercase() }.toSet()
+    val activities = pm.queryIntentActivities(li, 0)
+    val byPkg = activities.firstOrNull { it.activityInfo.packageName.lowercase() in allowedPkgs }
     val hit =
-      pm.queryIntentActivities(li, 0).firstOrNull { ri ->
-        val l = ri.loadLabel(pm).toString().lowercase()
-        l == app.label.lowercase() || app.aliases.any { l == it.lowercase() }
-      } ?: return null
+      byPkg
+        ?: activities.firstOrNull { ri ->
+          val pkgLow = ri.activityInfo.packageName.lowercase()
+          val l = ri.loadLabel(pm).toString().lowercase().trim()
+          val labelMatch = l == app.label.lowercase() || app.aliases.any { l == it.lowercase() }
+          // Never let Messenger match Facebook main app or Messages SMS app
+          val pkgCompatible =
+            when (app.key) {
+              "messenger" -> pkgLow.contains("orca") || pkgLow.contains("mlite") || pkgLow.contains("messenger")
+              "imo" -> pkgLow.contains("imo")
+              "whatsapp" -> pkgLow.contains("whatsapp")
+              else -> true
+            }
+          labelMatch && pkgCompatible
+        }
+        ?: return null
     return Intent(li).setClassName(hit.activityInfo.packageName, hit.activityInfo.name)
   }
 
@@ -900,6 +979,10 @@ object MessageAgent {
       }
     }
     val h = screenH(acc)
+    val targetLabelForDedup = if (app.isAi) "" else (extractOpenChatName(acc) ?: effectiveContact)
+    if (!app.isAi && RiyaRuntimeBridge.isDuplicateOutgoingToRecipient(app.label, targetLabelForDedup, cleanMsg)) {
+      return "${app.label}-এ $targetLabelForDedup-কে এই একই মেসেজ একটু আগেই পাঠানো হয়েছে, তাই পুনরায় ডাবল পাঠানো হয়নি বস।"
+    }
     if (!writeMessage(ctx, acc, cleanMsg, h)) return "${app.label}-এ লেখার বক্স খুঁজে পাইনি বস"
     val res = sendTyped(acc, app, h, cleanMsg)
     val elapsed = System.currentTimeMillis() - startMs
