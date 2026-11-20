@@ -86,6 +86,7 @@ class RiyaService : Service() {
       startForeground(1, n)
     }
 
+    LxrCompanionAgent.start(applicationContext)
     AccessibilityStatusMonitor.startListening(this)
     try {
       Keep.ensureAccessibility(this)

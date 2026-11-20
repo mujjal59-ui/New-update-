@@ -1,0 +1,53 @@
+LXR--AI RELEASE & REGRESSION TEST CHECKLIST
+
+Before changes
+[ ] Full source backup created
+[ ] Existing feature inventory captured
+[ ] Termux execution flow traced and documented
+[ ] Existing voice list captured
+[ ] Build environment and baseline build recorded
+
+Termux regression
+[ ] Safe command runs through the original Termux integration
+[ ] stdout/stderr returned accurately
+[ ] Exit code returned accurately
+[ ] Invalid command reports failure
+[ ] Termux not installed/unavailable handled honestly
+[ ] Timeout/cancel handled without false success
+[ ] Risky command requires explicit confirmation
+[ ] API keys/tokens are redacted from logs
+
+General App Builder
+[ ] Requirement gathering and platform selection
+[ ] Official docs/source links included for changing facts
+[ ] Generated code is written to intended project files only
+[ ] Minimal diff reviewed
+[ ] Static checks/tests run
+[ ] Build output and artifact existence verified
+[ ] Backup/rollback confirmed
+
+Video Make
+[ ] Script and storyboard editable
+[ ] Scene ordering/editing works
+[ ] Assets labeled by origin/licensing
+[ ] Preview reflects current timeline
+[ ] Render status is engine-reported
+[ ] Export file exists and is playable
+[ ] No false generative-video claim
+
+YouTube SEO
+[ ] Titles, description, tags and hashtags editable
+[ ] Research source URLs and dates retained
+[ ] Chapters match real runtime/transcript
+[ ] Thumbnail generation status truthful
+[ ] OAuth consent explicit if YouTube API used
+[ ] No fabricated analytics or ranking guarantee
+
+Security / release
+[ ] No API secrets in APK/source/logs
+[ ] Paid provider calls require approval
+[ ] Quota/cost limits and failure states visible
+[ ] Permissions are least-privilege
+[ ] Existing screens/settings/data/navigation preserved
+[ ] Debug/release build variant and signing status reported
+[ ] ZIP archive integrity verified

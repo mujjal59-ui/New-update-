@@ -1,0 +1,34 @@
+# PROMPT 4 — LXR YOUTUBE VIDEO SEO STUDIO
+LXR--AI-এর YouTube Video + SEO Studio complete করো এবং Video Creation Studio থেকে handoff support করো।
+
+Input:
+- Completed video file/URL or manual metadata
+- Topic/niche, target audience, language (Bangla/English/mixed), region, long-form/Shorts, actual duration, target keyword
+- Transcript/captions if available
+
+Research:
+- Search intent, keyword variants, audience questions, competing public results, factual claims।
+- Perplexity ও You.com research করলে source URL, publication date, checked date ও claim-source mapping রাখবে।
+- Search result বা third-party metric থেকে পাওয়া তথ্যকে YouTube internal analytics বলে দেখাবে না।
+- Unsupported keyword volume/search difficulty invent করবে না।
+
+SEO package:
+1. 5–10 title options; recommended title ও rationale।
+2. Description with natural keyword placement, summary, CTA, links/chapters only when known।
+3. Primary/secondary keywords।
+4. Comma-separated tags; duplicates ও irrelevant tags flag।
+5. Relevant hashtags।
+6. Chapters/timestamps only from actual runtime/transcript; invented timestamps নয়।
+7. Pinned comment/community post optional।
+8. Thumbnail concept, composition, text options, subject/character consistency, mobile readability, safe margins।
+9. Shorts cutdown ideas, hook, title, description, hashtags।
+10. Readability/relevance/keyword stuffing/claims/copyright/policy checklist।
+
+Editing & export:
+- All fields editable; copy individually/all; export TXT/JSON; save drafts and version history if existing architecture supports it।
+- Connect final video render metadata, transcript, runtime and thumbnail assets from Video Studio.
+- Upload/publish/analytics only through official YouTube APIs and explicit OAuth consent. Without authorized API, provide manual copy/export; never pretend upload/analytics succeeded.
+- SEO score থাকলে স্পষ্টভাবে “heuristic estimate” বলবে; official YouTube score নয়।
+- Ranking, views, virality, CTR বা monetization guarantee নয়।
+
+Deliverables: UI, data model, provider adapters, research citations, export, tests, error states, manual fallback, user guide। Existing YouTube-related features/drafts/data preserve করবে।

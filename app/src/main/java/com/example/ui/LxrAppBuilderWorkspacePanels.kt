@@ -447,6 +447,40 @@ fun IdeBuildAndTermuxTab(
         Text("APK ও লগ যাচাই", color = Color.White, fontSize = 12.sp)
       }
     }
+
+    var directTermuxCmd by remember {
+      mutableStateOf(com.example.service.LxrDownloadStorage.termuxSyncDirectoriesCommand())
+    }
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      OutlinedTextField(
+        value = directTermuxCmd,
+        onValueChange = { directTermuxCmd = it },
+        label = { Text("Direct Termux Command", fontSize = 11.sp) },
+        singleLine = true,
+        textStyle = TextStyle(color = Color.White, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace),
+        colors =
+          OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = CYBER_CYAN,
+            unfocusedBorderColor = Color(0xFF334155),
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            focusedLabelColor = CYBER_CYAN,
+            unfocusedLabelColor = Color(0xFF94A3B8),
+          ),
+        modifier = Modifier.weight(1f).testTag("builder_direct_termux_cmd_input"),
+      )
+      Button(
+        onClick = { vm.runDirectTermuxCommand(directTermuxCmd) },
+        modifier = Modifier.heightIn(min = 48.dp).testTag("builder_run_direct_termux_cmd_btn"),
+        colors = ButtonDefaults.buttonColors(containerColor = CYBER_GREEN, contentColor = Color.Black),
+      ) {
+        Text("Run", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+      }
+    }
   }
 
   // 3. Error Panel + Automatic Error Fixing

@@ -1,0 +1,69 @@
+LXR--AI | PROMPT 3 — COMPLETE YOUTUBE VIDEO + SEO GROWTH STUDIO
+
+শুধু Prompt 1 audit এবং user-approved scope অনুসারে বিদ্যমান YouTube section-কে additiveভাবে সম্পূর্ণ করো। পুরোনো SEO feature মুছে ফেলবে না, rewrite করে behavior বদলাবে না; missing capability যোগ করবে।
+
+CORE PIPELINE (USER'S REQUIRED PROVIDER ROLES)
+1. FreeLLMAPI → SEO title alternatives, description, tags, hashtags, keyword clusters, script, hook, CTA, chapters draft and metadata text.
+2. OmniRoute → task অনুযায়ী উপযুক্ত LLM নির্বাচন/route করবে (language, task, context window, quality, latency, availability, allowed cost/free-tier). Route decision এবং fallback reason log করবে।
+3. Perplexity + You.com → research, source discovery, factual verification, current trend/topic context and citations. Use only verified official APIs and preserve source URLs, dates and citation snippets.
+4. Phind → optional extra research adapter ONLY if current official API, authentication, terms and working test are verified. Otherwise disabled with a clear reason.
+5. OpenMontage → video/visual production, thumbnail/scene visual pipeline only where verified. Do not misrepresent its actual capability.
+6. LXR--AI → orchestrate and combine all results into one editable SEO Package, deduplicate, resolve conflicts, retain citations and label uncertain claims.
+
+YOUTUBE STUDIO WORKFLOW
+A. New project: video upload or existing Video Studio project handoff; YouTube URL metadata import where permitted; manual entry fallback.
+B. Brief: topic, niche, target audience, language (Bangla/English/mixed), region, video format (long-form/Shorts), duration, primary keyword and goal.
+C. Analyze: topic intent, audience questions, keyword variants, competitor/public result research and factual claims. Cite sources and display last-checked dates.
+D. Generate SEO Package:
+   - 5–10 title options with keyword intent and concise rationale;
+   - recommended title plus editable alternatives;
+   - natural, useful description with opening lines, summary, chapters, CTA, links placeholder and disclosure where relevant;
+   - primary/secondary keywords and keyword clusters;
+   - YouTube tags (comma-separated, copy-ready) and hashtags;
+   - chapters/timestamps derived from actual runtime/transcript/scene timings; never invent timestamps;
+   - pinned comment idea and community post copy as optional extras;
+   - Bengali/English/mixed language variants when requested.
+E. Script Studio: hook options, full script, intro, sections, examples, transitions, CTA, ending, target duration, narration-friendly formatting and optional Shorts cutdown. Mark factual claims needing review and attach sources.
+F. Thumbnail Studio: generate multiple concepts/briefs and connect to actual image generation/editing API if available; 16:9 standard thumbnail, legible text, focal subject, contrast, safe margins, mobile preview; preserve character identity using supplied reference assets when supported. Never claim a thumbnail image was generated if only a text prompt was produced.
+G. Shorts Studio: vertical 9:16 creative brief, short hook, script, title, description, hashtags and optional thumbnail/cover.
+H. Optimize & validate: title/description relevance, keyword stuffing warnings, readability, factual claim checks, duplicate tags, policy/copyright reminders and checklist. Any score must be transparent heuristic, not official YouTube ranking score.
+I. Preview & export: editable metadata preview, copy individual fields, copy full package, export TXT/JSON, save drafts, version history and restore.
+J. Publish/analytics: do not auto-publish. If official YouTube Data API / Analytics API is configured with explicit OAuth consent, provide only authorized supported actions and real metrics. Otherwise provide manual copy/export. No fake views/rank/CTR analytics.
+
+SEO PACKAGE OUTPUT SHAPE
+- Video brief and language/region
+- Recommended title + alternatives
+- Description
+- Primary and secondary keywords
+- Tags (comma-separated)
+- Hashtags
+- Script + hook + CTA
+- Chapters with verified timestamps
+- Thumbnail concepts and actual asset links/status
+- Shorts adaptation (optional)
+- Research summary with citations and checked date
+- Optimization checklist, warnings and confidence/uncertainty notes
+
+QUALITY / HONESTY
+- Never promise 100% SEO, guaranteed ranking, viral reach, views or CTR. SEO tools can improve relevance and packaging; audience interest, retention, competition and platform systems affect results.
+- No fabricated keyword search volume, trend score, competitor data, ranking or analytics. Label estimates and explain source/method.
+- Research providers must not invent citations. Validate URL and source availability; distinguish source fact from generated suggestion.
+- Do not keyword-stuff or generate misleading titles/thumbnails.
+- Respect YouTube policies, copyright, privacy, music and image licensing.
+- API keys server-side only. Verify current official endpoints, pricing, quotas, terms and rate limits. Free does not mean unlimited. No paid API use without explicit approval.
+- Track real provider/model, latency, tokens/cost where returned, quota errors, retries and fallback; avoid duplicate requests.
+- If a provider is unavailable, skip it and transparently continue with available sources; never fake a response.
+
+UI / INTEGRATION
+- Keep existing YouTube menu and design; add a clear SEO Studio workflow with tabs/sections for Research, SEO Package, Script, Thumbnail, Shorts, Preview/Export and History.
+- Connect Video Studio final render directly to YouTube Studio.
+- Keep advanced provider controls optional/collapsible; default UX simple.
+- User can edit every generated field before copy/export.
+- Save draft automatically where supported; allow delete/export with confirmation.
+- Add loading, empty, error, quota exhausted, provider unavailable and offline states.
+
+TESTS / ACCEPTANCE
+- Test Bangla, English and mixed language; long-form and Shorts; missing transcript; no research providers; one provider failure; conflicting sources; stale source; quota exhaustion; app restart; export; thumbnail API unavailable; existing saved SEO drafts.
+- Ensure no existing feature regression and existing data remains readable.
+- Build and run regression/unit/integration/UI tests.
+- Deliver changed-file list, backend/env setup, official API docs, pricing/free-tier limitations, test results, known gaps and APK/build output.

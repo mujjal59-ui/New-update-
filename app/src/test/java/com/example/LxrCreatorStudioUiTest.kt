@@ -123,9 +123,11 @@ class LxrCreatorStudioUiTest {
     composeTestRule.onNodeWithTag("video_creator_screen_back_btn").performClick()
     composeTestRule.onNodeWithTag("section_btn_seo_studio").assertIsDisplayed()
 
-    // 3. Navigate to SEO Studio Screen and back
+    // 3. Navigate to SEO Studio Screen and verify live interactive inputs + back button
     composeTestRule.onNodeWithTag("section_btn_seo_studio").performClick()
     composeTestRule.onNodeWithTag("seo_studio_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("seo_topic_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("seo_generate_btn").assertIsDisplayed()
     composeTestRule.onNodeWithTag("seo_studio_screen_back_btn").performClick()
     composeTestRule.onNodeWithTag("section_btn_app_builder").assertIsDisplayed()
   }

@@ -1,0 +1,46 @@
+LXR--AI ALL-IN-ONE PACKAGE — ARCHITECTURE & ACCEPTANCE SPECIFICATION
+
+1. Product areas
+- LXR APK Build / General App Builder
+- LXR Video Make
+- LXR YouTube Video SEO
+- Existing assistant, voice, settings, navigation and Termux command execution
+
+2. Shared orchestration
+A task planner classifies the request and routes to a verified capability. The system records provider, model, API version, timestamp, source links, usage and errors. Results remain editable. A provider failure must be surfaced honestly, not silently replaced by fabricated output.
+
+3. Build lifecycle
+Inspect -> backup -> plan -> user approval -> minimal edits -> static checks -> tests -> build -> artifact verification -> ZIP integrity check -> report. A successful build requires actual command output and an existing artifact.
+
+4. Termux preservation acceptance criteria
+- Existing command path remains present and callable.
+- Same expected permissions/bridge and user interaction remain.
+- Output and exit status are passed back accurately.
+- Failures and unavailable Termux are handled honestly.
+- Risky commands require confirmation.
+- No secrets in logs.
+- Regression tests pass on a real device where required.
+
+5. Video acceptance criteria
+- Script/storyboard and scenes are editable.
+- Each asset is labeled by origin (generated, uploaded, stock, programmatic).
+- Render status reflects the actual rendering engine.
+- Export is verified by opening/inspecting the resulting file.
+- No unsupported generative video claims.
+
+6. YouTube SEO acceptance criteria
+- All generated fields are editable and exportable.
+- Research claims have source links and dates.
+- Chapters derive from actual runtime/transcript.
+- OAuth is explicit and optional.
+- No fake analytics or ranking promises.
+
+7. App builder acceptance criteria
+- Requirements and target platform are explicit.
+- Official docs and dependency compatibility checked.
+- Project changes are minimal and reviewable.
+- Build/test results are real and reproducible.
+- Rollback path exists.
+
+8. Release report
+Include changed files, preserved files, Termux test evidence, provider status, API/cost/security notes, build variant/signing, artifact paths, test results, known limitations and setup steps.

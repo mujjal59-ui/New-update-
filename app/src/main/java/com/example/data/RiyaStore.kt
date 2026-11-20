@@ -159,6 +159,14 @@ object Store {
 
   fun setApiKey(c: Context, v: String) = p(c).edit().putString("key", v.trim()).apply()
 
+  fun perplexityApiKey(c: Context): String = p(c).getString("perplexityKey", "") ?: ""
+
+  fun setPerplexityApiKey(c: Context, v: String) = p(c).edit().putString("perplexityKey", v.trim()).apply()
+
+  fun youApiKey(c: Context): String = p(c).getString("youKey", "") ?: ""
+
+  fun setYouApiKey(c: Context, v: String) = p(c).edit().putString("youKey", v.trim()).apply()
+
   fun model(c: Context): String {
     val m = p(c).getString("model", null) ?: legacyPrefs(c).getString("model", DEFAULT_LIVE_MODEL) ?: DEFAULT_LIVE_MODEL
     return if (m.contains("2.0-flash")) DEFAULT_LIVE_MODEL else m

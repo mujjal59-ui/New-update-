@@ -100,8 +100,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,9 +135,13 @@ import com.example.data.VoiceGender
 import com.example.data.VoiceMatchSensitivity
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
+import com.example.service.LxrCompanionAgent
 import com.example.service.RiyaVoiceManager
 import com.example.service.VoiceMatchManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 fun hasPerm(c: Context, p: String): Boolean =
   ContextCompat.checkSelfPermission(c, p) == PackageManager.PERMISSION_GRANTED
@@ -505,6 +511,8 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var voiceSpeed by remember { mutableFloatStateOf(Store.voiceSpeed(ctx)) }
   var whisperBoost by remember { mutableStateOf(Store.whisperBoost(ctx)) }
   var lowNetFast by remember { mutableStateOf(Store.lowNetFastMode(ctx)) }
+  var perplexityKey by remember { mutableStateOf(Store.perplexityApiKey(ctx)) }
+  var youKey by remember { mutableStateOf(Store.youApiKey(ctx)) }
   var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
   var show by remember { mutableStateOf(false) }
 
@@ -620,6 +628,8 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     Store.setLowNetFastMode(ctx, lowNetFast)
     Store.setVoiceMatchEnabled(ctx, vmEnabled)
     Store.setVoiceMatchSensitivity(ctx, vmSensitivity)
+    Store.setPerplexityApiKey(ctx, perplexityKey)
+    Store.setYouApiKey(ctx, youKey)
     RiyaVoiceManager.refreshVoicePreferences(ctx)
     RiyaState.live?.updatePlaybackSpeed(voiceSpeed)
   }
@@ -1276,10 +1286,50 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       }
     }
 
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_CYAN.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(
+        "ঐচ্ছিক অতিরিক্ত সার্চ ইঞ্জিন কী (Deep Research)",
+        color = Color.White,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.5.sp,
+      )
+      Text(
+        "Google Search ও DuckDuckGo/Wikipedia ফ্রি ও সক্রিয়। চাইলে নিচে আপনার অফিশিয়াল Perplexity / You.com কী যোগ করতে পারেন।",
+        color = Color(0xFFAAB4D0),
+        fontSize = 11.sp,
+      )
+      OutlinedTextField(
+        value = perplexityKey,
+        onValueChange = { perplexityKey = it },
+        modifier = Modifier.fillMaxWidth().testTag("perplexity_api_key_input"),
+        label = { Text("Perplexity Sonar API Key (ঐচ্ছিক)") },
+        singleLine = true,
+        colors = fieldColors,
+        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+      )
+      OutlinedTextField(
+        value = youKey,
+        onValueChange = { youKey = it },
+        modifier = Modifier.fillMaxWidth().testTag("you_api_key_input"),
+        label = { Text("You.com Search API Key (ঐচ্ছিক)") },
+        singleLine = true,
+        colors = fieldColors,
+        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+      )
+    }
+
     Button(
       onClick = {
         applyVoiceSettings()
-        Toast.makeText(ctx, "হয়েছে, বস! LXR--AI ভয়েস ও ভয়েস ম্যাচ সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, "হয়েছে, বস! LXR--AI ভয়েস, রিসার্চ ও ভয়েস ম্যাচ সেভ করা হয়েছে।", Toast.LENGTH_SHORT).show()
         back()
       },
       modifier = Modifier.fillMaxWidth().height(50.dp).testTag("save_key_voice_button"),
@@ -1293,14 +1343,23 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
 @Composable
 fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val ctx = LocalContext.current
+  val scope = rememberCoroutineScope()
   var refresh by remember { mutableIntStateOf(0) }
   var searchQuery by remember { mutableStateOf("") }
-  val used = remember(refresh) { Store.size(ctx) }
-  val text =
-    remember(refresh, searchQuery) {
-      if (searchQuery.isBlank()) Store.recent(ctx, 8000)
-      else Store.searchMemory(ctx, searchQuery, maxDays = Store.RETENTION_DAYS)
-    }
+  var used by remember { mutableLongStateOf(0L) }
+  var text by remember { mutableStateOf("") }
+  LaunchedEffect(refresh, searchQuery) {
+    val (sz, loaded) =
+      withContext(Dispatchers.IO) {
+        val u = Store.size(ctx)
+        val t =
+          if (searchQuery.isBlank()) Store.recent(ctx, 8000)
+          else Store.searchMemory(ctx, searchQuery, maxDays = Store.RETENTION_DAYS)
+        u to t
+      }
+    used = sz
+    text = loaded
+  }
   Column(
     Modifier.fillMaxSize().background(FULL_BG_GRADIENT).statusBarsPadding().padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1345,8 +1404,10 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     )
     OutlinedButton(
       onClick = {
-        Store.clear(ctx)
-        refresh++
+        scope.launch(Dispatchers.IO) {
+          Store.clear(ctx)
+          withContext(Dispatchers.Main) { refresh++ }
+        }
       },
       modifier = Modifier.fillMaxWidth().testTag("memory_clear_button"),
     ) {
@@ -1599,10 +1660,12 @@ private fun StateTile(
 @Composable
 fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val ctx = LocalContext.current
+  val scope = rememberCoroutineScope()
   var tick by remember { mutableIntStateOf(0) }
   var torchOn by remember { mutableStateOf(false) }
   var note by remember { mutableStateOf("") }
   var floatingOrbOn by remember { mutableStateOf(Store.floatingOrbEnabled(ctx)) }
+  val liveSnap by LxrCompanionAgent.snapshot.collectAsState()
   val health by AccessibilityStatusMonitor.healthState.collectAsState()
   val audioDevice by RiyaState.connectedAudioDevice.collectAsState()
   val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
@@ -1614,6 +1677,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
           torchOn = enabled
+          LxrCompanionAgent.notifyTorchState(enabled)
         }
       }
     try {
@@ -1628,14 +1692,16 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
 
   LaunchedEffect(Unit) {
     while (true) {
+      withContext(Dispatchers.IO) { LxrCompanionAgent.sampleNow(ctx) }
       delay(1500)
       tick++
     }
   }
-  val wifiOn = remember(tick) { wifiState(ctx) }
-  val btOn = remember(tick) { btState(ctx) }
-  val mode = remember(tick) { ringerLabel(ctx) }
-  val pct = remember(tick) { batteryPct(ctx) }
+  val wifiOn = liveSnap.wifiOn
+  val btOn = liveSnap.bluetoothOn
+  val mode = liveSnap.soundModeLabel
+  val pct = liveSnap.batteryPct
+  val isCharging = liveSnap.isCharging
 
   Column(
     Modifier
@@ -1660,15 +1726,16 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         val acc = com.example.service.RiyaAccessibilityService.instance
         if (acc != null) {
           note = if (!wifiOn) "Wi-Fi চালু করা হচ্ছে..." else "Wi-Fi বন্ধ করা হচ্ছে..."
-          Thread {
+          scope.launch(Dispatchers.IO) {
             acc.toggleQuickSettingTile(
               enable = !wifiOn,
               labels = listOf("wi-fi", "wifi", "wlan", "internet", "ওয়াইফাই"),
               excludeLabels = listOf("calling", "hotspot", "tethering", "scanning"),
               hardwareStateKnown = wifiOn,
             )
-            tick++
-          }.start()
+            LxrCompanionAgent.sampleNow(ctx)
+            withContext(Dispatchers.Main) { tick++ }
+          }
         } else {
           openIntent(ctx, Intent(Settings.ACTION_WIFI_SETTINGS))
           note = "Wi-Fi সেটিংস খোলা হয়েছে"
@@ -1678,15 +1745,16 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         val acc = com.example.service.RiyaAccessibilityService.instance
         if (acc != null) {
           note = if (!btOn) "Bluetooth চালু করা হচ্ছে..." else "Bluetooth বন্ধ করা হচ্ছে..."
-          Thread {
+          scope.launch(Dispatchers.IO) {
             acc.toggleQuickSettingTile(
               enable = !btOn,
               labels = listOf("bluetooth", "ব্লুটুথ"),
               excludeLabels = listOf("tethering", "scanning"),
               hardwareStateKnown = btOn,
             )
-            tick++
-          }.start()
+            LxrCompanionAgent.sampleNow(ctx)
+            withContext(Dispatchers.Main) { tick++ }
+          }
         } else {
           openIntent(ctx, Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
           note = "Bluetooth সেটিংস খোলা হয়েছে"
@@ -1697,14 +1765,25 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       StateTile(Modifier.weight(1f), "Flashlight", "torch", torchOn, if (torchOn) "ON" else "OFF") {
         val next = !torchOn
         torchOn = next
+        LxrCompanionAgent.notifyTorchState(next)
         note = setTorch(ctx, next)
       }
       StateTile(Modifier.weight(1f), "Sound mode", "sound", mode == "NORMAL", mode) {
         val next = when (mode) { "NORMAL" -> "vibrate"; "VIBRATE" -> "silent"; else -> "normal" }
         note = setRinger(ctx, next)
+        scope.launch(Dispatchers.IO) { LxrCompanionAgent.sampleNow(ctx) }
       }
     }
-    StateTile(Modifier.fillMaxWidth(), "Battery", "battery", true, if (pct >= 0) "$pct%" else "N/A") {}
+    StateTile(
+      Modifier.fillMaxWidth().testTag("settings_battery_tile"),
+      "Battery",
+      "battery",
+      true,
+      if (pct >= 0) "$pct%${if (isCharging) " ⚡" else ""}" else "N/A",
+    ) {
+      note = "ব্যাটারি: ${if (pct >= 0) "$pct%" else "N/A"} ${if (isCharging) "(চার্জিং চলছে ⚡)" else "(ব্যাটারি মোড)"}"
+      openIntent(ctx, Intent(Intent.ACTION_POWER_USAGE_SUMMARY))
+    }
 
     // LxR 50%-Opacity Rotating Planet Wake Orb ON/OFF + quick test card
     Row(

@@ -150,14 +150,18 @@ object AudioEchoGuard {
 class GeminiLive(private val ctx: Context) {
   private val client =
     OkHttpClient.Builder()
-      .connectTimeout(8, TimeUnit.SECONDS)
-      .writeTimeout(10, TimeUnit.SECONDS)
-      .pingInterval(15, TimeUnit.SECONDS)
+      .connectTimeout(10, TimeUnit.SECONDS)
+      .readTimeout(0, TimeUnit.SECONDS)
+      .writeTimeout(15, TimeUnit.SECONDS)
+      .pingInterval(20, TimeUnit.SECONDS)
       .retryOnConnectionFailure(true)
       .build()
   private val main = Handler(Looper.getMainLooper())
   private val playExec = Executors.newSingleThreadExecutor()
   private val toolExec = Executors.newSingleThreadExecutor()
+  private val obsExec = Executors.newSingleThreadExecutor { r ->
+    Thread(r, "LxrLiveScreenObs").apply { isDaemon = true }
+  }
   private var ws: WebSocket? = null
   private var rec: AudioRecord? = null
   private var track: AudioTrack? = null
@@ -190,25 +194,27 @@ class GeminiLive(private val ctx: Context) {
   private fun toolsJson() =
     (if (searchOn) """[{"googleSearch":{}},""" else "[") +
       """{"functionDeclarations":[
-      {"name":"open_app","description":"ফোনে ঠিক যে অ্যাপের নাম বলা হয়েছে সেটি সরাসরি ওপেন করে (imo, WhatsApp, Messenger ইত্যাদি কখনোই এলোমেলো বা অন্য অ্যাপ খোলে না, এবং অ্যাপ লক থাকলে অনুমতি ছাড়াই খুলে দেয়)।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
-      {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও (imo বললে imo, WhatsApp বললে WhatsApp)। এই টুল নিজেই অ্যাপ খোলে, অ্যাপ লক থাকলে সরাসরি খোলে, নাম খোঁজে, মেসেজ লেখে এবং ইমোজি বাদ দিয়ে সঠিক সেন্ড বাটনে ক্লিক করে।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
-      {"name":"unlock_phone","description":"ফোনের মেইন স্ক্রিন বন্ধ বা লক অবস্থায় থাকলে ডাবল ট্যাপ করে আলো জ্বালিয়ে স্ক্রিন আনলক করো। কখনোই পিন/পাসওয়ার্ড/ভল্ট অ্যাপে সেভ থাকার কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"open_app","description":"ফোনে ঠিক যে অ্যাপের নাম বলা হয়েছে সেটি সরাসরি ওপেন করে (imo বললে imo, WhatsApp বললে WhatsApp, Messenger বললে Messenger — কখনোই এলোমেলো বা অন্য অ্যাপ খোলে না, এবং অ্যাপ লক থাকলে খুলে দেয়)।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
+      {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
+      {"name":"inspect_contact_chat","description":"সঠিক মেসেজিং অ্যাপ (WhatsApp, imo বা Messenger) খুলে নির্দিষ্ট কন্টাক্টের চ্যাট থ্রেডে ঢুকে উপরের চ্যাট হেডার যাচাই করে বাম পাশের প্রাপ্ত মেসেজ, ডান পাশের নিজের পাঠানো মেসেজ এবং ইনকামিং বা মিসড ভয়েস/ভিডিও কল আছে কিনা সত্য তথ্য বের করো।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger"]},"contact_name":{"type":"STRING","description":"যে কন্টাক্টের চ্যাট বা কল যাচাই করতে হবে"}},"required":["app_name"]}},
+      {"name":"unlock_phone","description":"শুধুমাত্র বস সরাসরি 'ফোন বা স্ক্রিন আনলক করো' বললে এবং স্ক্রিন সত্যিই লক অবস্থায় থাকলে explicit=true দিয়ে আনলক করো। সাধারণ কথা, সময়, সার্চ বা রিড-অনলি কাজে কখনোই আনলক চালাবে না।","parameters":{"type":"OBJECT","properties":{"explicit":{"type":"BOOLEAN","description":"বস সরাসরি আনলক করতে বললে true"}},"required":["explicit"]}},
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে বসের অনুমতি না নিয়েই সরাসরি অ্যাপ লক খুলে দাও। ভেতরের সেটিংস বা পিনের কথা উল্লেখ করবে না।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে সরাসরি অ্যাপ লক খুলে দাও। পিন বা পাসওয়ার্ডের কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা জানতে চান, তখন LXR--AI এর সম্পূর্ণ ১ থেকে ১৪ এ টু জেড কাজের তালিকা (নতুন সীমাহীন AI ভিডিও স্টুডিওসহ) ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ (রিয়েল ক্যালকুলেটর, এআই অ্যাসিস্ট্যান্ট, মিনি গেম, নোট অ্যাপ বা কাস্টম অ্যাপ) বানাতে বললে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে, LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Termux-এ APK বিল্ড ও ফলাফল যাচাই শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
-      {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং ফাইল কোন ফোল্ডারে আছে তা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"run_termux_command","description":"Termux অ্যাপ খুলে বা সক্রিয় রেখে সরাসরি টার্মিনাল স্ক্রিনে ৩ সেকেন্ড ধরে রেখে, ২ সেকেন্ড অপেক্ষা করে Paste ক্লিক করে এবং Google Gboard-এর ডান-নিচের নীল এন্টার বাটন (↵) চেপে যেকোনো কমান্ড সরাসরি রান করো। পুরো সময় কিবোর্ড সবসময় অন থাকবে।","parameters":{"type":"OBJECT","properties":{"command":{"type":"STRING","description":"Termux টার্মিনালে যে কমান্ড বা কমান্ড লাইন চালাতে হবে"}},"required":["command"]}},
+      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা চান, তখন LXR--AI এর সম্পূর্ণ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"prepare_app_requirements","description":"বস নতুন কোনো Android অ্যাপ বা APK বানাতে চাইলে কোড লেখা ও Termux বিল্ড শুরু করার আগে ছোট আকারে অ্যাপের নাম, থিম এবং প্রধান ফিচারগুলো যাচাই করে সম্মতি নেওয়ার প্রশ্নমালা তৈরি করো।","parameters":{"type":"OBJECT","properties":{"idea":{"type":"STRING","description":"অ্যাপের মূল ধারণা"},"preferred_name":{"type":"STRING"},"theme":{"type":"STRING"},"features":{"type":"STRING"}},"required":["idea"]}},
+      {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ বানাতে সম্মতি দিলে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Download/LxR এবং Termux-এ APK বিল্ড শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
+      {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং Download/LxR ফোল্ডারের ফাইল অবস্থা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"run_termux_command","description":"Termux অ্যাপ খুলে বা সক্রিয় রেখে সরাসরি টার্মিনাল স্ক্রিনে ৩ সেকেন্ড ধরে রেখে, ২ সেকেন্ড অপেক্ষা করে Paste ক্লিক করে এবং Google Gboard-এর এন্টার বাটন চেপে যেকোনো কমান্ড সরাসরি রান করো।","parameters":{"type":"OBJECT","properties":{"command":{"type":"STRING","description":"Termux টার্মিনালে যে কমান্ড বা কমান্ড লাইন চালাতে হবে"}},"required":["command"]}},
       {"name":"find_and_open_item","description":"স্ক্রিনে বা অ্যাপে যেকোনো আইটেম নাম দিয়ে খুঁজে ট্যাপ করো, না পেলে Infinix Android 16 সার্চ বার দিয়ে সার্চ করো।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
-      {"name":"current_screen","description":"বস এখন কোন অ্যাপ বা স্ক্রিনে আছেন তা জানো"},
+      {"name":"current_screen","description":"বস এখন কোন অ্যাপ, চ্যাট বা স্ক্রিনে আছেন এবং লাইভ ০.১ সেকেন্ড স্ট্যাটাস কী তা জানো"},
       {"name":"read_screen","description":"এখন সম্পূর্ণ স্ক্রিনে কী কী লেখা, বাটন, সুইচ ও লেখার বক্স আছে তা পড়ো"},
       {"name":"click_text","description":"স্ক্রিনের এই টেক্সট/বাটনে ট্যাপ করো","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"}},"required":["text"]}},
-      {"name":"type_text","description":"স্ক্রিনের লেখার বক্সে টাইপ করো। নোটপ্যাড বা Notes অ্যাপে মূল নোট লিখতে target='body' দাও যাতে উপরের Title বক্সে না লিখে নিচের Note something down বক্সে লেখে। শুধু শিরোনামের জন্য target='title'।","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"},"target":{"type":"STRING","enum":["auto","body","title"],"description":"auto (ডিফল্ট body অগ্রাধিকার), body (নোট বা মূল লেখা), title (কেবল শিরোনাম)"}},"required":["text"]}},
+      {"name":"type_text","description":"স্ক্রিনের লেখার বক্সে টাইপ করো। নোটপ্যাড বা Notes অ্যাপে মূল নোট লিখতে target='body' দাও। শুধু শিরোনামের জন্য target='title'।","parameters":{"type":"OBJECT","properties":{"text":{"type":"STRING"},"target":{"type":"STRING","enum":["auto","body","title"],"description":"auto (ডিফল্ট body অগ্রাধিকার), body (নোট বা মূল লেখা), title (কেবল শিরোনাম)"}},"required":["text"]}},
       {"name":"global_action","description":"home, back, recents, notifications বা lock","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING"}},"required":["action"]}},
       {"name":"scroll","description":"স্ক্রিন স্ক্রল করো","parameters":{"type":"OBJECT","properties":{"direction":{"type":"STRING","description":"up বা down"}},"required":["direction"]}},
-      {"name":"call_contact","description":"ফোনের কন্টাক্ট লিস্ট চেক করে কল দাও","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
-      {"name":"search_contact","description":"কন্টাক্ট লিস্ট খুঁজে আসল নম্বর ও নাম চেক করো (অনুমান বা মিথ্যা বলবে না)","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
+      {"name":"call_contact","description":"১ম ধাপে confirmed=false দিয়ে কন্টাক্টের প্রথম শব্দ অনুযায়ী আসল নাম ও নম্বর বের করে বসকে পড়ে শোনাও; বস 'হ্যাঁ / ঠিক আছে' বলার পর confirmed=true দিয়ে প্রকৃত কল দাও।","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"বস নাম ও নম্বর শুনে 'হ্যাঁ / ঠিক আছে' বললে true, নইলে false"}},"required":["name"]}},
+      {"name":"search_contact","description":"কন্টাক্ট লিস্টের প্রথম শব্দ অনুযায়ী খুঁজে আসল নম্বর ও নাম চেক করো (অনুমান বা মিথ্যা বলবে না)","parameters":{"type":"OBJECT","properties":{"name":{"type":"STRING"}},"required":["name"]}},
       {"name":"play_youtube","description":"YouTube-এ গান বা ভিডিও প্লে করো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"গান বা ভিডিওর নাম"}},"required":["query"]}},
       {"name":"media_control","description":"মিডিয়া pause, play, next বা previous করো","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"pause, play, next, previous"}},"required":["action"]}},
       {"name":"toggle_flashlight","description":"ফ্ল্যাশলাইট চালু বা বন্ধ করো","parameters":{"type":"OBJECT","properties":{"enabled":{"type":"BOOLEAN"}},"required":["enabled"]}},
@@ -216,11 +222,12 @@ class GeminiLive(private val ctx: Context) {
       {"name":"control_bluetooth","description":"Bluetooth চালু বা বন্ধ করো","parameters":{"type":"OBJECT","properties":{"enabled":{"type":"BOOLEAN"}},"required":["enabled"]}},
       {"name":"get_battery_level","description":"ফোনের ব্যাটারি চার্জ শতাংশ জানো"},
       {"name":"set_sound_mode","description":"ফোন silent, vibrate বা normal করো","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","description":"silent, vibrate বা normal"}},"required":["mode"]}},
-      {"name":"check_notifications","description":"নোটিফিকেশন বারের নতুন মেসেজ ও আপডেট চেক করো"},
+      {"name":"check_notifications","description":"নোটিফিকেশন বারের নতুন মেসেজ, ভয়েস/ভিডিও কল ও আপডেট চেক করো"},
       {"name":"reply_to_incoming_message","description":"বস নতুন আসা WhatsApp/imo/Messenger মেসেজের রিপ্লাই দিতে বললে বা বাতিল করতে বললে এটি চালাও।","parameters":{"type":"OBJECT","properties":{"approve":{"type":"BOOLEAN","description":"রিপ্লাই পাঠাতে true, বাতিল করতে false"},"reply_text":{"type":"STRING","description":"বস নির্দিষ্ট উত্তর বললে সেটা, না বললে ফাঁকা রাখো"}},"required":["approve"]}},
-      {"name":"current_time","description":"ফোনের বর্তমান সময় ও তারিখ জানো"},
-      {"name":"web_search","description":"Google সার্চ করে সঠিক ও সংক্ষিপ্ত তথ্য খুঁজে আনো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}},
-      {"name":"search_memory","description":"গত ৩০ দিনের (১ মাসের) সংরক্ষিত স্মৃতি ও কথোপকথন থেকে ছোট্ট সূত্র, মানুষের নাম, তারিখ বা বিষয় খুঁজে আসল ঘটনা বের করো। বস পুরনো কোনো কথার সূত্র দিলেই সাথে সাথে এটি চালাও।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"সূত্র, মানুষের নাম, তারিখ বা মূল শব্দ"}},"required":["query"]}},
+      {"name":"current_time","description":"বাংলাদেশের বর্তমান সময় (Asia/Dhaka), তারিখ ও বার জানো"},
+      {"name":"web_search","description":"Google ও DuckDuckGo সার্চ করে যাচাইকৃত সঠিক তথ্য ও লিংক খুঁজে আনো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}},
+      {"name":"deep_research","description":"Google Search, Web Search, Wikipedia এবং কনফিগার করা থাকলে Perplexity ও You.com ব্যবহার করে আসল URL তথ্যসূত্রসহ গভীর রিসার্চ করো।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"},"engine":{"type":"STRING","description":"auto, google, perplexity, you"}},"required":["query"]}},
+      {"name":"search_memory","description":"গত ৩০ দিনের (১ মাসের) সংরক্ষিত স্মৃতি ও কথোপকথন থেকে ছোট্ট সূত্র, মানুষের নাম, তারিখ বা বিষয় খুঁজে আসল ঘটনা বের করো।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"সূত্র, মানুষের নাম, তারিখ বা মূল শব্দ"}},"required":["query"]}},
       {"name":"remember","description":"বসের জরুরি কথা মেমোরিতে সংরক্ষণ করো","parameters":{"type":"OBJECT","properties":{"fact":{"type":"STRING"}},"required":["fact"]}}
     ]}]"""
 
@@ -435,13 +442,18 @@ class GeminiLive(private val ctx: Context) {
       override fun run() {
         if (stopped) return
         liveWatchTick++
-        try {
-          observeLiveLockAndScreen1s()
-          val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
-          if (liveWatchTick % imageEveryTicks == 0) {
-            watchScreen()
+        if (!obsExec.isShutdown) {
+          obsExec.execute {
+            if (stopped) return@execute
+            try {
+              observeLiveLockAndScreen1s()
+              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
+              if (liveWatchTick % imageEveryTicks == 0) {
+                watchScreen()
+              }
+            } catch (_: Exception) {}
           }
-        } catch (_: Exception) {}
+        }
         main.postDelayed(this, 1000L)
       }
     }
@@ -455,21 +467,23 @@ class GeminiLive(private val ctx: Context) {
           if (watchdogTick % 5 == 0) refreshSlowNetworkState()
           val now = System.currentTimeMillis()
           val qBytes = ws?.queueSize() ?: 0L
+          val bossTurnElapsed = if (lastBossTurnAtMs > 0L) now - lastBossTurnAtMs else 0L
+          val serverSilence = if (lastServerActivityMs > 0L) now - lastServerActivityMs else 0L
           if (ready && !isExecutingTool) {
-            if (qBytes > 320_000L) {
-              fail("নেটওয়ার্ক বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
-            } else if (
-              waitingServerReply &&
-                lastBossTurnAtMs > 0L &&
-                (now - lastBossTurnAtMs) > 16_000L &&
-                (now - lastServerActivityMs) > 12_000L
+            if (
+              NetworkStabilityGuard.shouldWatchdogReconnect(
+                waitingServerReply = waitingServerReply,
+                bossTurnElapsedMs = bossTurnElapsed,
+                serverSilenceMs = serverSilence,
+                queueBytes = qBytes,
+              )
             ) {
               waitingServerReply = false
-              fail("সার্ভারের উত্তর বিলম্বিত — পুনরায় সংযোগ হচ্ছে…")
+              fail("সার্ভারের উত্তর বিলম্বিত বা বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
             }
           }
         } catch (_: Throwable) {}
-        if (!stopped) main.postDelayed(this, 3000L)
+        if (!stopped) main.postDelayed(this, 4000L)
       }
     }
 
@@ -638,32 +652,21 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun observeLiveLockAndScreen1s() {
+    val obs = LxrCompanionAgent.sampleNow(ctx)
     val acc = RiyaAccessibilityService.instance
-    val report = LockVaultManager.describeLivePhoneState(ctx, acc)
-    val openChat = if (!report.isLocked && acc != null) MessageAgent.extractOpenChatName(acc)?.let { " | খোলা চ্যাট: $it" }.orEmpty() else ""
-    val stateKey = "${report.phase}:${report.activePackage}:$openChat"
-    val previousSummaryTail =
-      RiyaAccessibilityService.currentScreenSummary.substringAfter("| স্ক্রিন দৃশ্য:", "").trim()
-    val updatedSummary =
-      if (report.isLocked) {
-        "[লক সতর্কতা: ${report.summaryBn}] | বর্তমান অ্যাপ: ${report.activePackage}"
-      } else if (previousSummaryTail.isNotEmpty() && RiyaAccessibilityService.currentApp == report.activePackage) {
-        "বর্তমান অ্যাপ: ${report.activePackage}$openChat | স্ক্রিন দৃশ্য: $previousSummaryTail"
-      } else {
-        "বর্তমান অ্যাপ: ${report.activePackage}$openChat"
-      }
-    RiyaAccessibilityService.currentScreenSummary = updatedSummary
+    val openChat = obs.openChatName?.let { " | খোলা চ্যাট: $it" }.orEmpty()
+    val stateKey = "${obs.lockPhase}:${obs.foregroundPackage}:$openChat"
 
     if (ready && !stopped && stateKey != lastObservedPhoneStateKey && !RiyaState.cameraOn) {
       lastObservedPhoneStateKey = stateKey
-      // Only push a realtime lock alert when the phone/app is genuinely locked—never spam "স্ক্রিন আনলক আছে / খোলা আছে"!
-      if (report.isLocked && (ws?.queueSize() ?: 0L) < 8_000L) {
+      // Push live realtime lock alert ONLY when genuinely locked — never spam "স্ক্রিন আনলক আছে / খোলা আছে"!
+      if (obs.isLocked && (ws?.queueSize() ?: 0L) < 8_000L) {
         try {
           ws?.send(
             JSONObject()
               .put(
                 "realtimeInput",
-                JSONObject().put("text", "[লক সতর্কতা]: ${report.summaryBn}"),
+                JSONObject().put("text", "[লক সতর্কতা]: ${obs.lockSummaryBn}"),
               )
               .toString(),
           )
@@ -672,18 +675,17 @@ class GeminiLive(private val ctx: Context) {
     }
 
     // Proactively detect incoming/missed voice or video calls visible on screen inside messaging apps (e.g. imo, WhatsApp, Messenger)
-    if (!report.isLocked && acc != null && ChatScreenGeometryParser.isMessagingPackage(report.activePackage)) {
+    if (!obs.isLocked && acc != null && ChatScreenGeometryParser.isMessagingPackage(obs.foregroundPackage)) {
       val snapshot = RiyaRuntimeBridge.latestScreenSnapshot.value
-      if (snapshot.nodes.isNotEmpty() && snapshot.packageName == report.activePackage) {
+      if (snapshot.nodes.isNotEmpty() && snapshot.packageName == obs.foregroundPackage) {
         val dm = ctx.resources.displayMetrics
-        val chatName = MessageAgent.extractOpenChatName(acc)
         val visibleCalls =
           ChatScreenGeometryParser.extractVisibleVoiceCalls(
             nodes = snapshot.nodes,
-            pkg = report.activePackage,
+            pkg = obs.foregroundPackage,
             screenWidth = dm.widthPixels.coerceAtLeast(720),
             screenHeight = dm.heightPixels.coerceAtLeast(1280),
-            openChatName = chatName,
+            openChatName = obs.openChatName,
           )
         for (vc in visibleCalls) {
           val rec = RiyaRuntimeBridge.recordDetectedVoiceCall(vc.appLabel, vc.callerName, vc.callSummaryBn)
@@ -749,6 +751,7 @@ class GeminiLive(private val ctx: Context) {
     stopped = false
     micNoiseSuppressor.reset()
     refreshSlowNetworkState()
+    LxrCompanionAgent.start(ctx)
     LxrFloatingOverlayManager.onInterruptSpeakRequest = { interruptSpeakerForBoss() }
     RiyaVoiceManager.onBeforeLocalTtsPlay = { interruptSpeakerForBoss() }
     RiyaVoiceManager.isLiveAudioActivelyPlaying = { isAiSpeakingRecently() || activeTurnHasStartedOutput }
@@ -766,7 +769,7 @@ class GeminiLive(private val ctx: Context) {
     startMic()
     connect()
     main.post(screenLoop)
-    main.postDelayed(watchdogLoop, 2500L)
+    main.postDelayed(watchdogLoop, 4000L)
   }
 
   private fun registerNetworkCallbackSafe() {
@@ -793,7 +796,14 @@ class GeminiLive(private val ctx: Context) {
             if (stopped) return
             main.post {
               if (!stopped && ready) {
-                fail("ইন্টারনেট সংযোগ বিচ্ছিন্ন হয়েছে — পুনরায় সংযোগ হচ্ছে...")
+                val cmCheck = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                if (
+                  NetworkStabilityGuard.shouldTreatNetworkLossAsOffline(
+                    NetworkStabilityGuard.hasValidatedInternet(cmCheck)
+                  )
+                ) {
+                  fail("ইন্টারনেট সংযোগ বিচ্ছিন্ন হয়েছে — পুনরায় সংযোগ হচ্ছে...")
+                }
               }
             }
           }
@@ -837,6 +847,9 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
     try {
       toolExec.shutdownNow()
+    } catch (_: Throwable) {}
+    try {
+      obsExec.shutdownNow()
     } catch (_: Throwable) {}
 
     synchronized(recLock) {
@@ -1019,21 +1032,21 @@ class GeminiLive(private val ctx: Context) {
 
   private fun setup(): JSONObject {
     val now = nowText()
-    val liveLock = LockVaultManager.describeLivePhoneState(ctx, RiyaAccessibilityService.instance)
+    val liveSnap = LxrCompanionAgent.sampleNow(ctx)
     val screenContext =
-      RiyaAccessibilityService.currentScreenSummary.ifBlank { liveLock.summaryBn }
+      RiyaAccessibilityService.currentScreenSummary.ifBlank { liveSnap.toCompactContextBn() }
     val accStatus =
       if (Keep.accessibilityOn(ctx)) "ACTIVE"
-      else "OFF (কাজ শুরু করতে না পারলে বসকে জানাবে)"
+      else "OFF (সত্য বলো ও চালু করতে বলো)"
 
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
       - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI
-      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Live Screen Watch: EVERY 1 SECOND | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
-      - Current Lock Status: ${liveLock.summaryBn}
+      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Live Observation: EVERY 0.1s (BACKGROUND) | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
-      - Response Speed & Zero-Delay Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ হওয়া মাত্রই কোনো দেরি বা থামা ছাড়া সাথে সাথে শূন্য সেকেন্ডে পরিষ্কার বাংলায় একটি পূর্ণাঙ্গ, বুদ্ধিদীপ্ত ও আদুরে উত্তর দেবে (দ্বিখণ্ডিত/ডাবল উত্তর দেবে না)। কখনো বসের কমান্ডে অজুহাত দেবে না।
+      - Response Speed & Zero-Delay Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ হওয়া মাত্রই পরিষ্কার বাংলায় একক, স্থির ও প্রাকৃতিক কণ্ঠে একটি পূর্ণাঙ্গ উত্তর দেবে (দ্বিখণ্ডিত/দ্বৈত কণ্ঠ নয়)। স্ক্রিন আনলক থাকলে কখনোই আনলকের কথা বারবার বলবে না।
 
       ${RiyaPersona.TEXT}
 
@@ -1331,33 +1344,29 @@ class GeminiLive(private val ctx: Context) {
 
   private fun runTool(name: String, a: JSONObject): String {
     val acc = RiyaAccessibilityService.instance
-    val skipUnlockTools =
-      setOf(
-        "current_time",
-        "remember",
-        "search_memory",
-        "web_search",
-        "get_battery_level",
-        "get_capabilities_a_to_z",
-        "build_android_app",
-        "check_termux_build_status",
-        "show_wake_orb",
-        "lock_phone",
-        "unlock_phone",
+    val genuinelyLocked = LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
+    val explicitUnlock = a.optBoolean("explicit", false)
+    val shouldAutoUnlock =
+      UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool(
+        toolName = name,
+        genuinelyLocked = genuinelyLocked,
+        explicitUnlockArg = explicitUnlock,
       )
-    if (name !in skipUnlockTools) {
-      if (LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)) {
-        val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
-        if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
-          turnUnlockedMainScreenByLxr = true
-        } else if (unlockRes.status != UnlockStatus.ALREADY_UNLOCKED) {
-          return unlockRes.messageBn
-        }
+    if (shouldAutoUnlock) {
+      val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
+      if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
+        turnUnlockedMainScreenByLxr = true
+      } else if (unlockRes.status != UnlockStatus.ALREADY_UNLOCKED) {
+        return unlockRes.messageBn
       }
     }
 
-    // Autonomous App Lock detection BEFORE running non-lock tools (no Boss permission prompt)
-    if (acc != null && name != "lock_phone" && name != "unlock_phone" && LockVaultManager.isAppLockScreenShowing(acc)) {
+    // Autonomous App Lock detection BEFORE running physical messaging/app tools when already unlocked
+    if (
+      acc != null &&
+        name in setOf("open_app", "send_message", "inspect_contact_chat", "unlock_locked_app", "play_youtube") &&
+        LockVaultManager.isAppLockScreenShowing(acc)
+    ) {
       LockVaultManager.unlockAppLockIfPresent(ctx, acc)
       Thread.sleep(160L)
     }
@@ -1365,13 +1374,17 @@ class GeminiLive(private val ctx: Context) {
     val watch = Store.screenWatch(ctx) && acc != null && Keep.accessibilityOn(ctx)
     if (!watch || name !in actionTools) {
       val r = runToolRaw(name, a)
-      if (acc != null && (name == "open_app" || name == "send_message") && LockVaultManager.isAppLockScreenShowing(acc)) {
+      if (
+        acc != null &&
+          (name == "open_app" || name == "send_message" || name == "inspect_contact_chat") &&
+          LockVaultManager.isAppLockScreenShowing(acc)
+      ) {
         LockVaultManager.unlockAppLockIfPresent(ctx, acc)
         Thread.sleep(180L)
       }
       val base = if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
-      return if (turnUnlockedMainScreenByLxr && name !in skipUnlockTools) {
-        "$base\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না এবং পিন/পাসওয়ার্ডের কথা মুখে আনবে না।"
+      return if (turnUnlockedMainScreenByLxr && shouldAutoUnlock) {
+        "$base\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না।"
       } else {
         base
       }
@@ -1386,21 +1399,24 @@ class GeminiLive(private val ctx: Context) {
     }
     val r = runToolRaw(name, a)
     Thread.sleep(if (name == "open_app" || name == "play_youtube") 260L else 150L)
-    if ((name == "open_app" || name == "send_message" || name == "play_youtube") && LockVaultManager.isAppLockScreenShowing(acc)) {
+    if (
+      (name == "open_app" || name == "send_message" || name == "inspect_contact_chat" || name == "play_youtube") &&
+        LockVaultManager.isAppLockScreenShowing(acc)
+    ) {
       LockVaultManager.unlockAppLockIfPresent(ctx, acc)
       Thread.sleep(220L)
     }
     var after = screenSnapshot()
     val lockNote =
-      if (turnUnlockedMainScreenByLxr) "\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না এবং পিন/পাসওয়ার্ডের কথা মুখে আনবে না।"
+      if (turnUnlockedMainScreenByLxr) "\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না।"
       else ""
     if (name in needsFind && (r.contains("খুঁজে পাওয়া যায়নি") || r.contains("সার্চ বাটন চাপতে পারিনি"))) {
       val r2 = runToolRaw(name, a)
       Thread.sleep(160)
       after = screenSnapshot()
-      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(বসকে কিছু জিজ্ঞেস না করে নিজেই পরের ধাপ দ্রুত শেষ করো এবং স্বাভাবিক ও স্পষ্ট বাংলায় একবারে ফলাফল জানাও—মুখস্থ সমাপনী বাক্য বারবার বলবে না)"
+      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote"
     }
-    return "$r\n[এখনকার স্ক্রিন]:\n$after$lockNote\n(স্ক্রিন দেখে কাজ হয়েছে কিনা যাচাই করো এবং সহজ ও স্বাভাবিক বাংলায় একবারে ফলাফল জানাও—'দারুন হয়েছে বস এবার কি করবো' টাইপের পুনরাবৃত্তি করবে না)"
+    return "$r\n[এখনকার স্ক্রিন]:\n$after$lockNote"
   }
 
   private fun runToolRaw(name: String, a: JSONObject): String =
@@ -1410,18 +1426,33 @@ class GeminiLive(private val ctx: Context) {
       when (name) {
         "open_app" -> openApp(a.optString("app_name"))
         "send_message" -> messageSend(a)
+        "inspect_contact_chat" -> {
+          if (acc == null) noAcc
+          else MessageAgent.inspectContactChat(ctx, acc, a.optString("app_name"), a.optString("contact_name"))
+        }
         "unlock_phone" -> {
           turnUnlockedMainScreenByLxr = false
-          val devRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
-          if (
-            (devRes.status == UnlockStatus.ALREADY_UNLOCKED ||
-              devRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) &&
-              LockVaultManager.isAppLockScreenShowing(acc)
-          ) {
-            val appRes = LockVaultManager.unlockAppLockWithResult(ctx, acc)
-            "${devRes.messageBn} এবং ${appRes.messageBn}"
-          } else {
-            devRes.messageBn
+          val explicit = a.optBoolean("explicit", false)
+          val genuinelyLocked = LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
+          val appLocked = LockVaultManager.isAppLockScreenShowing(acc)
+          when {
+            !genuinelyLocked && !appLocked ->
+              "ফোনের স্ক্রিন আগে থেকেই খোলা আছে (অযথা আনলক করার দরকার নেই)।"
+            !explicit ->
+              "বসের স্পষ্ট 'আনলক করো' নির্দেশ না থাকায় স্বয়ংক্রিয় আনলক করা হয়নি।"
+            else -> {
+              val devRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
+              if (
+                (devRes.status == UnlockStatus.ALREADY_UNLOCKED ||
+                  devRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) &&
+                  LockVaultManager.isAppLockScreenShowing(acc)
+              ) {
+                val appRes = LockVaultManager.unlockAppLockWithResult(ctx, acc)
+                "${devRes.messageBn} এবং ${appRes.messageBn}"
+              } else {
+                devRes.messageBn
+              }
+            }
           }
         }
         "lock_phone" -> {
@@ -1447,6 +1478,17 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         "get_capabilities_a_to_z" -> RiyaPersona.CAPABILITIES_A_TO_Z_BN
+        "prepare_app_requirements" -> {
+          val idea = a.optString("idea").ifBlank { "Custom Android App" }
+          val appName = a.optString("preferred_name").ifBlank { "কাস্টম নাম" }
+          val theme = a.optString("theme").ifBlank { "Dark / Light / Cyber" }
+          val features = a.optString("features").ifBlank { "হোম স্ক্রিন, ডেটা স্টোরেজ ও প্রধান ফিচার" }
+          "নতুন অ্যাপ '$idea' বানানোর আগে বসের কাছে সংক্ষেপে এই ৩টি বিষয় নিশ্চিত করো:\n" +
+            "১) অ্যাপের নাম: '$appName' নাকি অন্য কোনো নাম দেবো?\n" +
+            "২) কালার থিম ও ডিজাইন: Dark Neon, Cyber Blue নাকি Light Elegant?\n" +
+            "৩) মূল ফিচার: $features — এর সাথে আর কিছু যোগ করতে হবে কি?\n" +
+            "বস 'হ্যাঁ / ঠিক আছে' বললেই `build_android_app` দিয়ে কোড তৈরি ও Termux APK বিল্ড শুরু করো।"
+        }
         "build_android_app" ->
           AppBuilderRuntimeBridge.startVoiceAppBuild(
             context = ctx,
@@ -1464,12 +1506,7 @@ class GeminiLive(private val ctx: Context) {
           if (RiyaState.cameraOn) {
             "লাইভ ব্যাক ক্যামেরা এখন চালু আছে। ইনকামিং ভিডিও স্ট্রিম থেকে পাওয়া সর্বশেষ ক্যামেরা ফ্রেম দেখে সরাসরি উত্তর দাও।"
           } else {
-            val report = LockVaultManager.describeLivePhoneState(ctx, acc)
-            if (report.isLocked) {
-              "${report.summaryBn}\n${RiyaAccessibilityService.currentScreenSummary.ifBlank { "অ্যাপ: ${report.activePackage}" }}"
-            } else {
-              RiyaAccessibilityService.currentScreenSummary.ifBlank { "বর্তমান অ্যাপ: ${report.activePackage}" }
-            }
+            LxrCompanionAgent.sampleNow(ctx).toCompactContextBn()
           }
         "read_screen" ->
           if (RiyaState.cameraOn) {
@@ -1477,7 +1514,7 @@ class GeminiLive(private val ctx: Context) {
           } else {
             val report = LockVaultManager.describeLivePhoneState(ctx, acc)
             if (report.isLocked) {
-              "${report.summaryBn}\n(ফোন/অ্যাপ লক আছে, ভেতরের অ্যাপ পড়ার আগে অবশ্যই আনলক করতে হবে।)"
+              "${report.summaryBn}\n(ফোন/অ্যাপ লক আছে; আনলক করার নির্দেশ দিলে তবেই ভেতর পড়া যাবে।)"
             } else {
               acc?.readScreen() ?: noAcc
             }
@@ -1490,7 +1527,7 @@ class GeminiLive(private val ctx: Context) {
           ) ?: noAcc
         "global_action" -> acc?.global(a.optString("action")) ?: noAcc
         "scroll" -> acc?.scroll(a.optString("direction")) ?: noAcc
-        "call_contact" -> callContact(a.optString("name"))
+        "call_contact" -> callContact(a.optString("name"), a.optBoolean("confirmed", false))
         "search_contact" -> searchContact(a.optString("name"))
         "play_youtube" -> playYoutube(a.optString("query"))
         "media_control" -> mediaControl(a.optString("action"))
@@ -1507,6 +1544,15 @@ class GeminiLive(private val ctx: Context) {
           )
         "current_time" -> nowText()
         "web_search" -> webSearch(a.optString("query"))
+        "deep_research" -> {
+          val report =
+            LxrResearchEngine.research(
+              context = ctx,
+              query = a.optString("query"),
+              preferredEngine = a.optString("engine", "auto").ifBlank { "auto" },
+            )
+          "${report.summaryBn}\n[ইঞ্জিন স্ট্যাটাস]: ${report.engineStatuses.joinToString(", ")}"
+        }
         "search_memory" -> Store.searchMemory(ctx, a.optString("query"), maxDays = Store.RETENTION_DAYS)
         "remember" -> {
           Store.remember(ctx, "FACT: " + a.optString("fact"))
@@ -1786,95 +1832,69 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
+  private fun loadPhoneContactEntries(): Pair<Int, List<Pair<String, String>>> {
+    val entries = mutableListOf<Pair<String, String>>()
+    var scanned = 0
+    try {
+      val cursor =
+        ctx.contentResolver.query(
+          ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+          arrayOf(
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+          ),
+          null,
+          null,
+          null,
+        )
+      cursor?.use { c ->
+        while (c.moveToNext()) {
+          scanned++
+          val name = c.getString(0)?.trim() ?: continue
+          val num = c.getString(1)?.trim().orEmpty()
+          if (name.isNotBlank() && num.isNotBlank()) {
+            entries.add(name to num)
+          }
+        }
+      }
+    } catch (_: Exception) {}
+    return scanned to entries
+  }
+
   private fun searchContact(n: String): String {
     val q = n.trim()
     if (q.isBlank()) return "কোন কন্টাক্ট চেক করবো বলোনি বস।"
-    fun norm(x: String) = x.lowercase().replace(Regex("[\\s._\\-]+"), "")
-    val qn = norm(q)
-    val qDigits = q.filter { it.isDigit() }
-    val hits = mutableListOf<Pair<Int, String>>()
-    var scanned = 0
-    val cursor =
-      ctx.contentResolver.query(
-        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-        arrayOf(
-          ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-          ContactsContract.CommonDataKinds.Phone.NUMBER,
-        ),
-        null,
-        null,
-        null,
-      )
-    cursor?.use { c ->
-      while (c.moveToNext()) {
-        scanned++
-        val name = c.getString(0) ?: continue
-        val num = c.getString(1) ?: ""
-        val nn = norm(name)
-        val score =
-          when {
-            nn == qn -> 100
-            nn.startsWith(qn) -> 80
-            nn.contains(qn) -> 60
-            qn.length >= 3 && qn.contains(nn) -> 50
-            qDigits.length >= 4 && num.filter { it.isDigit() }.contains(qDigits) -> 70
-            else -> 0
-          }
-        if (score > 0) hits.add(score to "$name: $num")
-      }
-    }
-    val top = hits.distinct().sortedByDescending { it.first }.take(5).map { it.second }
-    return if (top.isNotEmpty()) {
-      "কন্টাক্ট তালিকার $scanned টি নম্বর চেক করে পাওয়া গেছে বস:\n" + top.joinToString("\n")
+    val (scanned, entries) = loadPhoneContactEntries()
+    val ranked = ContactFirstWordMatcher.rankMatches(q, entries, maxResults = 5)
+    return if (ranked.isNotEmpty()) {
+      "কন্টাক্ট তালিকার $scanned টি নম্বর থেকে প্রথম শব্দ অনুযায়ী পাওয়া গেছে:\n" +
+        ranked.mapIndexed { idx, m -> "${idx + 1}. ${m.displayName}: ${m.phoneNumber}" }.joinToString("\n")
     } else {
       "কন্টাক্ট তালিকার $scanned টি নম্বর পুরোটা চেক করেছি বস, '$q' নামে বা নম্বরে কিছু পাইনি।"
     }
   }
 
-  private fun callContact(n: String): String {
+  private fun callContact(n: String, confirmed: Boolean = false): String {
     val clean = n.trim()
-    val resolver = ctx.contentResolver
-    val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
-    val projection =
-      arrayOf(
-        ContactsContract.CommonDataKinds.Phone.NUMBER,
-        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-      )
-    var num: String? = null
-    var foundName: String? = null
-
-    var cursor: Cursor? = null
-    try {
-      cursor =
-        resolver.query(
-          uri,
-          projection,
-          "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-          arrayOf("%$clean%"),
-          null,
-        )
-      if (cursor != null && cursor.moveToFirst()) {
-        num = cursor.getString(0)
-        foundName = cursor.getString(1)
-      }
-    } catch (_: Exception) {
-    } finally {
-      cursor?.close()
+    if (clean.isBlank()) return "কাকে কল দেবো বলোনি বস।"
+    val (_, entries) = loadPhoneContactEntries()
+    val matches = ContactFirstWordMatcher.rankMatches(clean, entries, maxResults = 5)
+    if (matches.isEmpty()) {
+      return "কন্টাক্ট তালিকায় '$clean' নামের প্রথম অংশ দিয়ে খুঁজেও কোনো কল নম্বর পাইনি বস।"
     }
-
-    if (num.isNullOrBlank()) {
-      val sRes = searchContact(clean)
-      return "কন্টাক্ট লিস্টে '$clean' এর কোনো কল নম্বর খুঁজে পাইনি বস।\n$sRes"
+    if (!confirmed) {
+      return ContactFirstWordMatcher.buildReadBackConfirmationPrompt(clean, matches, "কল")
     }
-
+    val chosen = matches.first()
     ctx.startActivity(
-      Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      Intent(Intent.ACTION_CALL, Uri.parse("tel:${chosen.phoneNumber}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     )
     RiyaState.markTaskCompleted(
-      "$foundName ($num) কে কল লাগানো হয়েছে।",
+      "${chosen.displayName} (${chosen.phoneNumber}) কে কল লাগানো হয়েছে।",
       "",
     )
-    return "$foundName ($num) কে কল লাগিয়েছি বস।"
+    return "${chosen.displayName} (${chosen.phoneNumber})-কে কল লাগিয়েছি বস।"
   }
 
   private fun setFlashlight(on: Boolean): String {
@@ -1952,6 +1972,7 @@ class GeminiLive(private val ctx: Context) {
 
     if (hardwareSucceeded) {
       isTorchOn = on
+      LxrCompanionAgent.notifyTorchState(on)
       val msg =
         if (on) "ফ্ল্যাশলাইট জ্বালিয়ে দিয়েছি বস।"
         else "ফ্ল্যাশলাইট বন্ধ করে দিয়েছি বস।"
@@ -2219,86 +2240,18 @@ class GeminiLive(private val ctx: Context) {
     }
   }
 
-  private fun nowText(): String {
-    val d = java.util.Date()
-    val bn =
-      java.text.SimpleDateFormat("EEEE, d MMMM yyyy, HH:mm (z)", java.util.Locale("bn", "BD"))
-        .format(d)
-    val en =
-      java.text.SimpleDateFormat("EEEE d MMMM yyyy, hh:mm a", java.util.Locale.US).format(d)
-    return "ফোনের ঘড়ি অনুযায়ী এখন: $bn | $en"
-  }
+  private fun nowText(): String = LxrCompanionAgent.formatBangladeshFullClock()
 
   private fun webSearch(q: String): String {
     if (q.isBlank()) return "কী সার্চ করবো বুঝলাম না"
-    val key = Store.apiKey(ctx)
     RiyaState.status.value = "সার্চ করছি বস…"
-    val body =
-      JSONObject()
-        .put(
-          "contents",
-          JSONArray()
-            .put(
-              JSONObject()
-                .put(
-                  "parts",
-                  JSONArray()
-                    .put(
-                      JSONObject()
-                        .put(
-                          "text",
-                          "$q\n\n(গুগল সার্চ করে সঠিক ও সংক্ষিপ্ত তথ্য পরিষ্কার বাংলায় দাও)",
-                        )
-                    ),
-                )
-            ),
-        )
-        .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
-    val http = client.newBuilder().readTimeout(15, TimeUnit.SECONDS).build()
-    var err = ""
-    if (key.isNotBlank()) {
-      for (m in listOf("gemini-flash-latest", "gemini-2.5-flash")) {
-        try {
-          val req =
-            Request.Builder()
-              .url("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=$key")
-              .post(body.toString().toRequestBody("application/json".toMediaType()))
-              .build()
-          http.newCall(req).execute().use { r ->
-            val t = r.body?.string() ?: ""
-            if (r.isSuccessful) {
-              val parts =
-                JSONObject(t)
-                  .getJSONArray("candidates")
-                  .getJSONObject(0)
-                  .getJSONObject("content")
-                  .getJSONArray("parts")
-              val sb = StringBuilder()
-              for (i in 0 until parts.length()) sb.append(parts.getJSONObject(i).optString("text"))
-              if (sb.isNotBlank()) return sb.toString().take(3000)
-            } else {
-              err =
-                "HTTP " +
-                  r.code +
-                  " " +
-                  (try {
-                    JSONObject(t).getJSONObject("error").optString("message").take(80)
-                  } catch (_: Exception) {
-                    ""
-                  })
-            }
-          }
-        } catch (e: Exception) {
-          err = e.message ?: "error"
-        }
-      }
+    val report = LxrResearchEngine.research(ctx, q, preferredEngine = "auto")
+    return if (report.sources.isNotEmpty() || !report.summaryBn.startsWith("দুঃখিত")) {
+      report.summaryBn
+    } else {
+      RiyaState.addLog("সার্চ ব্যর্থ: ${report.engineStatuses.joinToString(", ")}")
+      report.summaryBn
     }
-    val d = ddgSearch(q)
-    if (d.isNotBlank()) {
-      return "ওয়েব সার্চের ফলাফল। শুধু এখান থেকে যা নিশ্চিত তাই বাংলায় সংক্ষেপে বসকে জানাও:\n" + d
-    }
-    RiyaState.addLog("সার্চ ব্যর্থ: $err")
-    return "সার্চ করা গেল না ($err)"
   }
 
   private fun ddgSearch(q: String): String {

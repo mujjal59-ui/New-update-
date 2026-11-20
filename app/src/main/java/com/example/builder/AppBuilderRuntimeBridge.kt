@@ -389,7 +389,7 @@ object AppBuilderRuntimeBridge {
     verifiedPrebuilt: ApkVerificationResult? = null,
   ) {
     val exportName = "${project.slug}-${project.buildMode.name.lowercase()}.apk"
-    val savedDownload = repo.saveApkToDownloads(apkFile, exportName).getOrDefault("Downloads/LXR-AppBuilder/$exportName")
+    val savedDownload = repo.saveApkToDownloads(apkFile, exportName, project.slug).getOrDefault("Downloads/LxR/APK/${project.slug}/$exportName")
     val baseVerified =
       verifiedPrebuilt ?: repo.verifyApkFile(apkFile, project.buildMode, savedDownload)
     val verified = baseVerified.copy(downloadExportPath = savedDownload)

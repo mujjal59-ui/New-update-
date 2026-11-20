@@ -1002,4 +1002,110 @@ object MessageAgent {
     }
     return "${app.label}${if (app.isAi) "" else " / $recipientLabel"}: $res — পাঠানো লেখা: \"$cleanMsg\" (${elapsed}ms)"
   }
+
+  fun inspectContactChat(
+    ctx: Context,
+    acc: RiyaAccessibilityService,
+    appName: String,
+    contactName: String = "",
+  ): String {
+    val app = find(appName) ?: return "নির্দিষ্ট মেসেজিং অ্যাপ '$appName' চিনতে পারিনি বস (WhatsApp, imo বা Messenger বলুন)।"
+    if (app.isAi) return "${app.label} চ্যাট থ্রেড নয় বস; সরাসরি মেসেজ পাঠাতে `send_message` ব্যবহার করুন।"
+    if (!openApp(ctx, acc, app)) {
+      return "'${app.label}' অ্যাপটি ফোনে খোলা যায়নি বা ইনস্টল করা নেই বস।"
+    }
+    if (LockVaultManager.isAppLockScreenShowing(acc)) {
+      LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+      Thread.sleep(320)
+    }
+    acc.readEntireScreenTree()
+
+    val cleanContact = contactName.trim()
+    if (cleanContact.isNotBlank()) {
+      val openHdr = extractOpenChatName(acc)
+      val alreadyInChat =
+        isChatScreenOpen(acc) &&
+          (headerHas(acc, cleanContact) || (openHdr != null && matchesContactName(openHdr, cleanContact)))
+      if (!alreadyInChat) {
+        prepareChatSurface(ctx, acc, app, cleanContact)
+        if (!openChat(acc, cleanContact)) {
+          val screenText = acc.readScreen().take(1200)
+          return "${app.label}-এ '$cleanContact' নামের চ্যাট খুঁজে পাওয়া যায়নি বস।\n[বর্তমান তালিকা]:\n$screenText"
+        }
+        Thread.sleep(450)
+        if (LockVaultManager.isAppLockScreenShowing(acc)) {
+          LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+          Thread.sleep(300)
+        }
+        acc.readEntireScreenTree()
+      }
+    }
+
+    val verifiedPkg = rootPkg(acc)
+    val verifiedHeader = extractOpenChatName(acc)
+    val w = screenW(acc).coerceAtLeast(720)
+    val h = screenH(acc).coerceAtLeast(1280)
+    val snapshotNodes =
+      RiyaRuntimeBridge.latestScreenSnapshot.value.let { snap ->
+        if (snap.nodes.isNotEmpty() && snap.packageName == verifiedPkg) {
+          snap.nodes
+        } else {
+          all(acc).map { n ->
+            val r = bounds(n)
+            ScreenNodeInfo(
+              text = n.text?.toString()?.trim().orEmpty(),
+              contentDescription = n.contentDescription?.toString()?.trim().orEmpty(),
+              className = n.className?.toString().orEmpty(),
+              viewId = n.viewIdResourceName.orEmpty(),
+              isClickable = n.isClickable,
+              isEditable = n.isEditable,
+              isScrollable = n.isScrollable,
+              bounds = r,
+            )
+          }
+        }
+      }
+
+    val visibleCalls =
+      ChatScreenGeometryParser.extractVisibleVoiceCalls(
+        nodes = snapshotNodes,
+        pkg = verifiedPkg,
+        screenWidth = w,
+        screenHeight = h,
+        openChatName = verifiedHeader ?: cleanContact.ifBlank { null },
+      )
+
+    val incomingLines = mutableListOf<String>()
+    val outgoingLines = mutableListOf<String>()
+    for (node in snapshotNodes) {
+      if (node.isEditable) continue
+      val r = node.bounds
+      if (r.top < (h * 0.14f).toInt() || r.bottom > (h * 0.87f).toInt()) continue
+      val txt = node.text.trim()
+      if (txt.length < 2 || !isLikelyChatHeaderContactText(txt)) continue
+      if (ChatScreenGeometryParser.isIncomingMissedOrVoiceCallText(txt)) continue
+      when (ChatScreenGeometryParser.classifyBubbleDirection(r.left, r.right, w, txt, node.viewId, verifiedPkg)) {
+        ChatBubbleDirection.INCOMING_LEFT -> if (txt !in incomingLines) incomingLines.add(txt)
+        ChatBubbleDirection.OUTGOING_RIGHT -> if (txt !in outgoingLines) outgoingLines.add(txt)
+        ChatBubbleDirection.SYSTEM_CENTER -> Unit
+      }
+    }
+
+    return buildString {
+      appendLine("অ্যাপ যাচাইকৃত: ${app.label} ($verifiedPkg)")
+      appendLine("খোলা চ্যাট হেডার: ${verifiedHeader ?: "তালিকা/মেইন স্ক্রিন"}")
+      if (visibleCalls.isNotEmpty()) {
+        appendLine("[ভয়েস/ভিডিও কল]:")
+        visibleCalls.forEach { appendLine("- ${it.callSummaryBn} (${it.rawText})") }
+      } else {
+        appendLine("[ভয়েস/ভিডিও কল]: দৃশ্যমান কোনো মিসড/ইনকামিং কল নেই")
+      }
+      appendLine("[অপর প্রান্তের মেসেজ (বাম দিক)]:")
+      if (incomingLines.isEmpty()) appendLine("- কোনো প্রাপ্ত মেসেজ দৃশ্যমান নয়")
+      else incomingLines.takeLast(6).forEach { appendLine("- $it") }
+      appendLine("[আমার পাঠানো মেসেজ (ডান দিক)]:")
+      if (outgoingLines.isEmpty()) appendLine("- কোনো পাঠানো মেসেজ দৃশ্যমান নয়")
+      else outgoingLines.takeLast(6).forEach { appendLine("- $it") }
+    }.trim()
+  }
 }

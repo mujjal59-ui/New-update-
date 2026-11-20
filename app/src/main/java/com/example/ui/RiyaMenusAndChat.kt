@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -86,7 +86,9 @@ import com.example.service.Keep
 import com.example.service.RiyaAccessibilityService
 import com.example.service.RiyaVoiceManager
 import com.example.service.SystemHealthSnapshot
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 val CYBER_RED = Color(0xFFFF0D55)
 val CYBER_BLUE = Color(0xFF0051FF)
@@ -547,20 +549,24 @@ fun RiyaChatDialog(close: () -> Unit) {
 
     // Fallback via Firebase AI Logic so Chat ALWAYS works smoothly even when Voice Live isn't started!
     RiyaState.addLog("বস: $q")
-    Store.remember(ctx, "Boss(text): $q")
     generating = true
     streamText = ""
     scope.launch {
       try {
-        val snap = RiyaAccessibilityService.instance?.readEntireScreenTree()
-        val accOk = Keep.accessibilityOn(ctx)
-        val settings = prefs.currentSettings()
-        val memMatches = Store.searchMemory(ctx, q, maxDays = Store.RETENTION_DAYS)
-        val memRecent = Store.recent(ctx, 2200)
-        val combinedMemory =
-          buildString {
-            if (memMatches.isNotBlank()) appendLine(memMatches)
-            if (memRecent.isNotBlank()) appendLine(memRecent)
+        val (snap, accOk, settings, combinedMemory, lowNetFast) =
+          withContext(Dispatchers.IO) {
+            Store.remember(ctx, "Boss(text): $q")
+            val s = RiyaAccessibilityService.instance?.readEntireScreenTree()
+            val a = Keep.accessibilityOn(ctx)
+            val st = prefs.currentSettings()
+            val matches = Store.searchMemory(ctx, q, maxDays = Store.RETENTION_DAYS)
+            val recent = Store.recent(ctx, 2200)
+            val mem =
+              buildString {
+                if (matches.isNotBlank()) appendLine(matches)
+                if (recent.isNotBlank()) appendLine(recent)
+              }
+            Tuple5(s, a, st, mem, Store.lowNetFastMode(ctx))
           }
         var finalReply = ""
         aiRepo
@@ -568,7 +574,7 @@ fun RiyaChatDialog(close: () -> Unit) {
             userPrompt = q,
             screenSummary = snap?.summaryLines?.take(12)?.joinToString(", ").orEmpty(),
             accessibilityActive = accOk,
-            preferFastLowNet = Store.lowNetFastMode(ctx),
+            preferFastLowNet = lowNetFast,
             memoryContext = combinedMemory,
           )
           .collect { partial ->
@@ -577,7 +583,7 @@ fun RiyaChatDialog(close: () -> Unit) {
           }
         if (finalReply.isNotBlank()) {
           RiyaState.addLog("LXR--AI: $finalReply")
-          Store.remember(ctx, "LXR--AI: $finalReply")
+          withContext(Dispatchers.IO) { Store.remember(ctx, "LXR--AI: $finalReply") }
           if (settings.voiceOutputEnabled) {
             RiyaVoiceManager.initialize(ctx)
             RiyaVoiceManager.speak(finalReply)
@@ -619,7 +625,7 @@ fun RiyaChatDialog(close: () -> Unit) {
     text = {
       Column {
         LazyColumn(Modifier.heightIn(max = 280.dp)) {
-          items(log) { line ->
+          itemsIndexed(log, key = { idx, _ -> idx }) { _, line ->
             Text(line, Modifier.padding(vertical = 3.dp), fontSize = 14.sp, color = Color.White)
           }
           if (streamText.isNotBlank()) {
@@ -668,3 +674,11 @@ fun RiyaChatDialog(close: () -> Unit) {
     },
   )
 }
+
+private data class Tuple5<A, B, C, D, E>(
+  val first: A,
+  val second: B,
+  val third: C,
+  val fourth: D,
+  val fifth: E,
+)

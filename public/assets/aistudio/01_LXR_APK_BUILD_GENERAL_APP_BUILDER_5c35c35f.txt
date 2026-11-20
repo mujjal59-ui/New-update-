@@ -1,0 +1,27 @@
+LXR SECTION 1 — APK BUILD + GENERAL APP BUILDER + REPLICA-INSPIRED WORKFLOW
+
+Inspect the existing LXR source first; do not rewrite it. Preserve all unrelated features, UI, navigation, data, settings, permissions and voices.
+
+Implement an app development workflow inspired by the uploaded Replica Skill Guide:
+Recon -> Architect -> Design -> Build -> Backend -> Test -> Diff -> Entrepreneur -> Brand -> Launch -> Deploy.
+Recon maps only publicly available or user-authorized screens, flows, features and data models. Architect plans modules/database/API. Design creates original design tokens and UI. Build implements code. Backend adds authorized services. Test verifies flows and edge cases. Diff compares with permitted references. Entrepreneur analyzes public user reviews for unmet needs, noting bias. Brand creates original identity. Launch prepares store assets/disclosures. Deploy requires explicit approval and valid credentials.
+Save each stage's output in a project workspace so the next stage can reuse it. Provide stage-by-stage checkpoints, progress from real task state, and an editable report.
+
+General app creation: gather requirements/platform, research official docs, plan architecture, generate/edit code, inspect errors, test, build and package where toolchains exist. Android first; other platforms only where supported. Verify actual SDK/JDK/Gradle availability. Never claim a build without real output and artifact verification.
+
+CRITICAL TERMUX PRESERVATION:
+Keep the exact existing direct Termux command execution implementation. Trace intents/bridge/companion apps, permissions, command path, working directory, stdout/stderr, exit codes, callbacks and error handling. Do not replace with a simulated/remote terminal.
+Add an in-app Live Termux Console/Build Monitor on top of the current bridge:
+- command preview and confirmation
+- real command and working directory
+- queued/running/succeeded/failed/cancelled/unknown state
+- stdout/stderr, timestamps and exit code
+- live streaming only if the bridge really supports it; otherwise buffered output
+- real build stages/progress only when supplied by Gradle/process
+- created/changed file list when detectable
+- actual APK path, variant and signing status
+- logs/history and error details with secrets redacted
+No fake progress/ETA/success. Destructive commands need explicit confirmation. Test success, failure, output, exit code, timeout, cancellation and Termux unavailable on a real device.
+If bridge output visibility is not currently supported, document exact limitation and propose a backward-compatible extension; do not break the working command path.
+
+Do not copy third-party source code, logos, artwork, trademarks, private APIs or paywalled/unauthorized content. Recreate general functionality with original implementation/assets. Preserve Google voices: Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat.

@@ -1,0 +1,34 @@
+# PROMPT 3 — LXR VIDEO CREATION STUDIO
+LXR--AI-তে পূর্ণ Video Creation Studio implement করো; approved audit ও scope অনুসরণ করো।
+
+Workflow:
+Idea/prompt → research/brief → story outline → script → scenes → storyboard/shot list → characters/visual references → narration/voice → assets → timeline edit → preview → render/export → handoff to YouTube SEO Studio।
+
+Features:
+- Topic, audience, language, platform, duration, aspect ratio, style ও target outcome।
+- Script with hook, intro, sections, transitions, CTA, ending; target runtime ও narration formatting।
+- Scene editor: scene order, trim/split, transitions, text overlays, captions/subtitles, background/audio tracks।
+- Character and asset library; character consistency references; source/licensing metadata।
+- Voice Studio; existing Google voices Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat unchanged রাখতে হবে।
+- Aspect ratios 16:9, 9:16, 1:1 where supported; preview ও export settings।
+- Render queue, actual job status, retry/resume/cancel only if underlying engine supports it; logs/errors।
+- Export MP4 or actually supported format/codec/resolution/frame rate।
+- Completed video metadata, transcript/captions, runtime ও thumbnail brief YouTube SEO Studio-তে pass করবে।
+
+Provider responsibilities:
+- FreeLLMAPI: title/description/tags/script/hooks/CTA এবং text tasks।
+- OmniRoute: task requirement, model capability, context, availability, latency, approved cost/quota অনুযায়ী LLM route করবে; এটি নিজে LLM নয়।
+- Perplexity ও You.com: research/source discovery/fact checking; citations, URLs, publication dates সংরক্ষণ।
+- Phind: কেবল official working API/auth/terms যাচাই হলে optional research provider; না হলে disabled।
+- OpenMontage: কেবল verified capability অনুযায়ী video/visual production pipeline।
+- Remotion/FFmpeg/GSAP/SVG দিয়ে motion graphics বা timeline render করলে সেটিকে generative text-to-video বলে দাবি করবে না।
+- সত্যিকারের text-to-video/image-to-video-এর জন্য আলাদা verified provider API দরকার হলে integration proposal দেবে।
+
+Truthfulness:
+- Fake progress, fake ETA, fake quota, fake generation, fake preview নয়।
+- LLM token usage, video credits, render compute, storage আলাদা track করবে।
+- Paid API/cloud render-এর আগে user approval।
+- Stock/media licensing ও attribution track করবে।
+- Failed render-এর error, stage ও recovery action দেখাবে।
+
+Deliverables: UI, backend/API contracts, scene/timeline data model, provider adapters, render pipeline, tests, sample project, export guide এবং limitations report। Existing app behavior বা voice list পরিবর্তন নয়।

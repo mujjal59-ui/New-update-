@@ -203,13 +203,17 @@ object TermuxBuildBridge {
 
     echo "LXR_PROGRESS:STEP=5:VERIFY_APK"
     OUT_APK="${'$'}(find app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+    LXR_APK_DIR="/sdcard/Download/LxR/APK/$slug"
+    LXR_LOG_DIR="/sdcard/Download/LxR/Logs/$slug"
+    mkdir -p "${'$'}LXR_APK_DIR" "${'$'}LXR_LOG_DIR"
     if [ "${'$'}BUILD_EXIT" -eq 0 ] && [ -n "${'$'}OUT_APK" ] && [ -f "${'$'}OUT_APK" ]; then
       cp -f "${'$'}OUT_APK" "${'$'}SRC_DIR/$apkOutName"
       cp -f "${'$'}OUT_APK" "${'$'}SHARED_ROOT/$apkOutName"
-      cp -f "${'$'}OUT_APK" "${'$'}DL_PUBLIC/$apkOutName"
+      cp -f "${'$'}OUT_APK" "${'$'}LXR_APK_DIR/$apkOutName"
+      cp -f "${'$'}LOG_FILE" "${'$'}LXR_LOG_DIR/build.log" 2>/dev/null || true
       APK_SIZE=${'$'}(wc -c < "${'$'}SRC_DIR/$apkOutName")
-      echo "SUCCESS: Built $apkOutName (${'$'}APK_SIZE bytes) -> ${'$'}SRC_DIR/$apkOutName"
-      JSON_LINE=${'$'}(printf '{"status":"success","exitCode":0,"apkPath":"%s","sizeBytes":%s}' "${'$'}SRC_DIR/$apkOutName" "${'$'}APK_SIZE")
+      echo "SUCCESS: Built $apkOutName (${'$'}APK_SIZE bytes) -> ${'$'}LXR_APK_DIR/$apkOutName"
+      JSON_LINE=${'$'}(printf '{"status":"success","exitCode":0,"apkPath":"%s","sizeBytes":%s}' "${'$'}LXR_APK_DIR/$apkOutName" "${'$'}APK_SIZE")
       printf '%s\n' "${'$'}JSON_LINE" > "${'$'}RESULT_JSON"
       echo "LXR_RESULT_JSON=${'$'}JSON_LINE"
       exit 0

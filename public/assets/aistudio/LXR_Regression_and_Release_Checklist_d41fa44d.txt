@@ -1,0 +1,54 @@
+LXR RELEASE + REGRESSION CHECKLIST
+
+BEFORE EDITING
+[ ] Latest source ZIP received
+[ ] Full project inventory and baseline build/test recorded
+[ ] Backup/branch created
+[ ] Termux integration traced by exact file/class/function
+[ ] Existing screens, settings, data, navigation and voices documented
+
+TERMUX + IN-APP CONSOLE
+[ ] Existing direct Termux path remains intact
+[ ] Command preview and risky-command confirmation work
+[ ] Actual stdout/stderr visible in LXR
+[ ] Live streaming is claimed only if genuinely supported
+[ ] Buffered output clearly labeled when not streaming
+[ ] Working directory, timestamps, status and exit code correct
+[ ] Timeout/cancel/unavailable-Termux cases handled
+[ ] No false success/progress/ETA
+[ ] Secrets redacted
+
+APP BUILDER / REPLICA-INSPIRED
+[ ] Recon uses only public/authorized data
+[ ] Architect/design artifacts saved
+[ ] Build/backend changes minimal
+[ ] Tests and Diff report complete
+[ ] Entrepreneur review analysis cites public sources and notes bias
+[ ] Original brand/assets used
+[ ] Launch/deploy require explicit approval
+[ ] No third-party proprietary code/assets/private API copied
+
+VIDEO MAKE
+[ ] Script/storyboard/scenes editable
+[ ] Asset origins/licensing recorded
+[ ] Timeline/editing functions tested
+[ ] Actual rendering engine and capabilities documented
+[ ] Output video exists and is playable
+[ ] No fake generative-video claim
+
+YOUTUBE SEO
+[ ] Titles, description, tags, hashtags editable
+[ ] Research source URLs and dates retained
+[ ] Chapters match actual transcript/runtime
+[ ] Thumbnail generation claims truthful
+[ ] OAuth consent explicit
+[ ] No fake analytics or ranking guarantee
+
+SECURITY / RELEASE
+[ ] API keys absent from APK/source/logs
+[ ] Paid calls gated by approval
+[ ] Provider endpoints/auth/pricing/quota verified
+[ ] Existing voices unchanged: Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat
+[ ] Build variant/signing status reported
+[ ] Actual artifact path and logs supplied
+[ ] ZIP integrity verified

@@ -171,25 +171,58 @@ class AppBuilderFileRepository(private val context: Context) {
           zos.closeEntry()
         }
       }
-      val publicLocation = saveFileToDownloads(internalZip, zipName, "application/zip")
-      internalZip to publicLocation
+      val lxrCat =
+        if (includeBackupSuffix) com.example.service.LxrStorageCategory.BACKUPS
+        else com.example.service.LxrStorageCategory.APPS
+      val lxrCopy =
+        com.example.service.LxrDownloadStorage.copyFileDeliverable(
+          context = context,
+          srcFile = internalZip,
+          category = lxrCat,
+          projectSlug = project.slug,
+          desiredFileName = zipName,
+        )
+      val publicLocation = saveFileToDownloads(internalZip, zipName, "application/zip", "${Environment.DIRECTORY_DOWNLOADS}/LxR/${lxrCat.folderName}/${project.slug}")
+      val finalPath = lxrCopy.getOrNull()?.absolutePath ?: publicLocation
+      internalZip to finalPath
     }
   }
 
-  fun saveApkToDownloads(apkFile: File, targetFileName: String): Result<String> {
+  fun saveApkToDownloads(apkFile: File, targetFileName: String, projectSlug: String = "lxr_app"): Result<String> {
     return runCatching {
       require(apkFile.exists() && apkFile.length() > 0L) { "APK ফাইলটি পাওয়া যায়নি বা খালি।" }
-      saveFileToDownloads(apkFile, targetFileName, "application/vnd.android.package-archive")
+      val cleanSlug = com.example.service.LxrDownloadStorage.sanitizeSlug(projectSlug)
+      val lxrCopy =
+        com.example.service.LxrDownloadStorage.copyFileDeliverable(
+          context = context,
+          srcFile = apkFile,
+          category = com.example.service.LxrStorageCategory.APK,
+          projectSlug = cleanSlug,
+          desiredFileName = targetFileName,
+        )
+      val mediaPath =
+        saveFileToDownloads(
+          source = apkFile,
+          fileName = targetFileName,
+          mimeType = "application/vnd.android.package-archive",
+          relativeSubdir = "${Environment.DIRECTORY_DOWNLOADS}/LxR/APK/$cleanSlug",
+        )
+      lxrCopy.getOrNull()?.let { "Downloads/LxR/APK/$cleanSlug/${it.name}" } ?: mediaPath
     }
   }
 
-  private fun saveFileToDownloads(source: File, fileName: String, mimeType: String): String {
+  private fun saveFileToDownloads(
+    source: File,
+    fileName: String,
+    mimeType: String,
+    relativeSubdir: String = "${Environment.DIRECTORY_DOWNLOADS}/LXR-AppBuilder",
+  ): String {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       val resolver = context.contentResolver
       val values = ContentValues().apply {
         put(MediaStore.Downloads.DISPLAY_NAME, fileName)
         put(MediaStore.Downloads.MIME_TYPE, mimeType)
-        put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/LXR-AppBuilder")
+        put(MediaStore.Downloads.RELATIVE_PATH, relativeSubdir)
         put(MediaStore.Downloads.IS_PENDING, 1)
       }
       val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -200,12 +233,12 @@ class AppBuilderFileRepository(private val context: Context) {
         values.clear()
         values.put(MediaStore.Downloads.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
-        return "Downloads/LXR-AppBuilder/$fileName"
+        return "$relativeSubdir/$fileName"
       }
     }
     val fallbackDir = File(exportsRootDir(), "downloads").apply { mkdirs() }
-    val dest = File(fallbackDir, fileName)
-    source.copyTo(dest, overwrite = true)
+    val dest = com.example.service.LxrDownloadStorage.uniqueTargetFile(fallbackDir, fileName)
+    source.copyTo(dest, overwrite = false)
     return dest.absolutePath
   }
 
@@ -291,6 +324,8 @@ class AppBuilderFileRepository(private val context: Context) {
       add(File(sharedDir, "app/build/outputs/apk/debug/app-debug.apk"))
       add(File(sharedDir, "app/build/outputs/apk/release/app-release.apk"))
       val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+      add(File(dl, "LxR/APK/$slug/$expectedDebug"))
+      add(File(dl, "LxR/APK/$slug/$expectedRelease"))
       add(File(dl, "LXR-AppBuilder/$expectedDebug"))
       add(File(dl, "LXR-AppBuilder/$expectedRelease"))
       add(File(dl, expectedDebug))
@@ -299,7 +334,7 @@ class AppBuilderFileRepository(private val context: Context) {
     val directFound = candidates.firstOrNull { it.exists() && it.canRead() && it.length() > 1024L }
     if (directFound != null) {
       val cached = copyToInstallableCache(directFound, directFound.name) ?: directFound
-      val res = verifyApkFile(cached, project.buildMode, "Downloads/LXR-AppBuilder/${directFound.name}")
+      val res = verifyApkFile(cached, project.buildMode, "Downloads/LxR/APK/$slug/${directFound.name}")
       if (res.exists) return res
     }
 

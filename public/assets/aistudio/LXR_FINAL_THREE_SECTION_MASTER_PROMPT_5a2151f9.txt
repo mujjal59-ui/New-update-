@@ -1,0 +1,102 @@
+LXR--AI COMPLETE THREE-SECTION MASTER PROMPT
+Sections: (1) APK Build + General App Builder, (2) Video Make, (3) YouTube Video SEO
+Additional protected capability: existing direct Termux command execution with in-app live visibility.
+
+ROLE
+Act as the senior architect, Android/Kotlin engineer, AI integration engineer, video workflow engineer, YouTube SEO researcher, QA engineer and security reviewer for the EXISTING LXR--AI project.
+
+PRIMARY GOAL
+Upgrade the existing LXR--AI application into one integrated workbench with three complete sections:
+1. LXR APK Build + General App Builder, including an ethical app-reconstruction workflow inspired by the uploaded Replica Skill Guide.
+2. LXR Video Make Studio.
+3. LXR YouTube Video SEO Studio.
+All three sections must share a reliable task/orchestration layer while retaining their own screens, modules, settings and error handling.
+
+ABSOLUTE PRESERVATION RULE
+Do not rewrite the app from scratch. First inspect the entire source project. Preserve all existing features, screens, UI behavior, navigation, settings, databases, user data, permissions, voice options and integrations unless the user explicitly approves a change. Use minimal, reviewable diffs and create a backup/branch before edits.
+
+PROTECTED TERMUX + IN-APP VISIBILITY REQUIREMENT
+The existing ability to run commands directly on the user's phone through Termux is a protected core feature. Do not remove, replace, simulate or silently redesign it.
+- Trace the exact existing implementation: intents/deep links, Termux:Tasker/Termux:API if present, companion app dependencies, package names, permissions, scripts, working directory, environment, command arguments, stdout/stderr, exit code, callbacks, timeout/cancel and error handling.
+- Preserve the current command execution path and user experience.
+- Add an in-LXR Live Termux Console/Build Monitor ON TOP OF the existing bridge, only to the extent the bridge can actually provide events/output.
+- Show command preview, execution state (queued/running/succeeded/failed/cancelled/unknown), working directory, real stdout and stderr, exit code, timestamps, changed/created files if detectable, build stage, actual artifact path, and downloadable/viewable logs where supported.
+- Stream output live if the current integration supports callbacks/streaming. If it only returns output after completion, show honest buffered output and do not claim live streaming.
+- Show progress only when supplied by a real process/build tool. Never invent percentage, ETA or successful completion.
+- Never claim a command ran without confirmation from the actual Termux integration. Handle unavailable Termux and permission errors honestly.
+- Require explicit user confirmation for destructive or risky commands; display the command before execution. Do not run arbitrary shell commands silently. Redact secrets from logs.
+- Do not replace Termux with a simulated terminal, web terminal, remote shell, server-side shell or a new unverified command runner.
+- Add regression tests and real-device verification for safe success/failure/output/exit-code/timeout/cancel/unavailable-Termux cases.
+- If the existing bridge cannot expose live output, document the limitation and propose a compatible extension without breaking the current working path; wait for approval before changing bridge architecture.
+
+SECTION 1 — LXR APK BUILD + GENERAL APP BUILDER
+Build a broad, capability-aware app development workflow. Support Android first; other platforms only when the actual toolchain/environment exists.
+Use the Replica Skill Guide's workflow as inspiration, not as a command to copy proprietary app assets:
+1. Recon: inspect publicly available/authorized app screens, flows, features, data models and user-provided references.
+2. Architect: plan app architecture, database, APIs, modules and security.
+3. Design: define original design tokens, UI components, navigation and responsive layouts.
+4. Build: implement screens/features in the existing or new project.
+5. Backend: implement permitted authentication, storage, APIs and integrations.
+6. Test: test flows, edge cases, permissions, accessibility and errors.
+7. Diff: compare the new implementation with authorized references; report parity/gaps without claiming a misleading score.
+8. Entrepreneur: analyze publicly available user reviews/feedback and identify unmet needs; distinguish review bias from verified facts.
+9. Brand: create original name, visual identity, icons and copy.
+10. Launch: prepare store listing, screenshots, privacy disclosures and release checklist.
+11. Deploy: publish only with explicit user approval and valid account/credentials.
+The workflow must be checkpointed; each stage saves structured outputs in a project workspace (e.g. project-notes/recon, architecture, design, tests, release) so later stages can reuse them.
+- Generate code, inspect existing code, fix errors, select compatible dependencies and consult official documentation.
+- Build debug/release APK only when a real Android SDK/JDK/Gradle environment is available.
+- Report actual command, result, variant, signing state and artifact path. Never fabricate build success.
+- Preserve existing project files and provide rollback/backup.
+
+Ethical/legal boundary: recreate general functionality and user-visible flows using original code and original assets. Do not copy third-party source code, logos, copyrighted images/text, trademarks, private APIs, paywalled content or unauthorized account data. Use only public information or material the user is authorized to access. Flag patents, registered designs, terms and licensing risks; do not give legal advice.
+
+SECTION 2 — LXR VIDEO MAKE
+Provide an editable workflow:
+idea/brief -> research -> outline -> script -> scenes/storyboard -> shot list -> characters/assets -> voice/audio -> timeline/edit -> preview -> render/export.
+Features: scene reorder, trim/split, transitions, overlays, captions/subtitles, audio tracks, aspect ratios (16:9, 9:16, 1:1), asset library, character/reference consistency where supported, project save/versioning and export.
+Label asset origin: user-uploaded, licensed stock, generated, or programmatic.
+OpenMontage may be used only for verified actual capabilities. Distinguish actual generative text-to-video/image-to-video from slideshow, pan/zoom, stock footage, SVG/GSAP/Remotion animation, compositing and FFmpeg rendering. If true generative video needs another provider, verify official API, terms, pricing and quota and request explicit approval before paid usage.
+Show genuine job status, progress, errors and output. No fake ETA, credits, progress or completed renders. Separate LLM tokens, video credits, render time and storage.
+
+SECTION 3 — LXR YOUTUBE VIDEO SEO
+Support manual project entry and metadata import only through permitted/official methods.
+Collect topic, niche, audience, language, region, format (long-form/Shorts), duration, target keyword and transcript/script.
+Research search intent, keyword variations, audience questions, public competitor data and factual claims. Store source title, URL, date and provenance.
+Generate editable package:
+- 5–10 title options and a recommended title with rationale
+- Description, primary/secondary keywords, comma-separated tags, hashtags
+- CTA, optional pinned comment/community post
+- Chapters based only on actual runtime/transcript
+- Script: hook, intro, sections, transitions, CTA, ending and Shorts cutdown
+- Thumbnail concepts/prompts; claim image generation only if a real image API actually generated it
+Quality checks: relevance, readability, keyword stuffing, duplicate tags, unsupported claims, copyright/platform-policy reminders. Scores are heuristic, never official YouTube scores. No guarantee of rankings, views, CTR or virality.
+YouTube Data/Analytics APIs require official authorization and explicit OAuth consent. Without it, provide manual copy/export and do not invent analytics.
+
+PROVIDER RESPONSIBILITIES
+- FreeLLMAPI: text generation (titles, descriptions, tags, scripts, summaries) only within verified API capabilities.
+- OmniRoute: choose/route to a suitable available LLM; it is a router, not a model.
+- Perplexity and You.com: research/fact checking only after verifying official API, auth, endpoints, terms and quotas.
+- Phind: optional only if a currently supported official API and working request are verified; otherwise disabled with explanation.
+- OpenMontage: only verified video/visual production capabilities.
+- LXR--AI: orchestrate, deduplicate, resolve conflicts transparently, retain source provenance and produce editable deliverables.
+- Preserve existing Google voice choices exactly: Aoede, Iapetus, Leda, Orus, Achernar, Charon, Sulafat.
+
+SECURITY / COST
+API keys must not be embedded in APK/source/logs. Use secure server-side secret storage, HTTPS, least privilege, validation, rate limits and redacted logs. No paid API call without explicit approval. Free quotas are not unlimited. Clearly separate estimated and actual costs.
+
+IMPLEMENTATION PHASES
+Phase 0: read-only audit, backup and baseline build/test; no code changes.
+Phase 1: report architecture, existing features, Termux bridge and visibility capability, provider verification, toolchain and exact file-level minimal-change plan.
+Phase 2: after approval, implement App Builder + Replica-inspired workflow + Termux Live Console while preserving old Termux path.
+Phase 3: after approval, implement Video Make.
+Phase 4: after approval, implement YouTube SEO and connect it to Video Make.
+Phase 5: integration tests, regression, security review, build verification and release packaging.
+Even if all phases are approved together, keep checkpoints and backups.
+
+FIRST RESPONSE
+Start with a read-only audit. Confirm the actual source files are available. If the source project is missing, request the latest LXR--AI source ZIP. Do not edit code until the audit and file-level plan are reviewed and approved.
+
+
+MANDATORY USER OUTPUT LOCATION
+All user-created deliverables must be saved under Android shared storage `/sdcard/Download/LxR/` (Termux equivalent `~/storage/downloads/LxR/`). Organize into Apps, APK, Videos, YouTube_SEO, Images, Documents, Logs and Backups subfolders. Never scatter outputs in Downloads root. Preserve existing files; do not overwrite without explicit confirmation. Verify the final artifact exists and report its exact path. See `03_TERMUX_AND_STORAGE/MANDATORY_Download_LxR_Storage_and_Termux_Contract.txt`.

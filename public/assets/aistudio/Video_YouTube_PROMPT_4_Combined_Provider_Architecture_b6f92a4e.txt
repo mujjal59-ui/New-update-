@@ -1,0 +1,28 @@
+LXR--AI | PROMPT 4 — UNIFIED PROVIDER ORCHESTRATION ARCHITECTURE
+
+Implement only after the individual Video Studio and YouTube Studio scopes are approved.
+
+Build a single backend orchestration layer with provider adapters and capability registry:
+- FreeLLMAPI: text generation tasks (SEO title/description/tags/script, outline, rewrite).
+- OmniRoute: choose an appropriate LLM endpoint/model for each text task; enforce allowed provider/cost policy.
+- Perplexity and You.com: research/search/fact-check with source URLs, dates and citations.
+- Phind: optional research adapter only after official API and live request verification.
+- OpenMontage: visual/video production adapter limited to verified capabilities.
+- LXR--AI orchestrator: normalize, deduplicate, validate and combine outputs into Video Project and SEO Package.
+
+Requirements:
+1. Capability registry records provider, supported task types, endpoint version, auth type, status, limits, pricing/free tier, region, terms URL and last verification time.
+2. Provider health checks must be safe and rate-limited. A configured key does not mean provider is operational.
+3. Route by task requirements, not brand preference. Research requests go to research providers; script/metadata generation goes to LLMs; media render jobs go to video pipeline.
+4. Preserve provenance: each factual research claim maps to source URL/date; generated creative suggestions are labeled as generated.
+5. Normalize provider response schema and errors. Never discard citations or silently merge conflicting facts.
+6. Fallback policy: only providers approved by user and within cost/quota rules; no paid fallback by default. Stop cleanly if no eligible provider.
+7. Cost and quota accounting uses actual response usage/provider dashboard data where available. Mark unknown when not returned. Never infer remaining quota.
+8. Secrets in backend secret store/environment only; redact logs; authenticated user access; per-user rate limits.
+9. Job queue uses idempotency keys, bounded retries, backoff, cancellation and persistent job state.
+10. Separate LLM token usage from video generation credits, rendering minutes, storage and stock-asset licensing.
+11. Provide user-facing provider status and reason: connected, unconfigured, unavailable, rate-limited, unsupported, paid approval required.
+12. Add integration tests with mocked providers and controlled live smoke tests; do not send paid calls without explicit approval.
+13. Expose one final normalized SEO Package object containing brief, title alternatives, description, keywords, tags, hashtags, script, chapters, thumbnail concepts/assets, Shorts adaptation, citations, warnings and provenance.
+14. Keep Video Studio and YouTube Studio loosely coupled: a completed render can be handed to SEO Studio, but either section can operate independently.
+15. Do not claim guaranteed SEO score, ranking or virality. No fake analytics or provider success.

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -9,11 +10,14 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,8 +37,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoGraph
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DashboardCustomize
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -43,15 +50,23 @@ import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Widgets
-import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,11 +87,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,6 +105,13 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.service.LxrDownloadStorage
+import com.example.service.LxrResearchEngine
+import com.example.service.LxrStorageCategory
+import com.example.service.YoutubeSeoPackage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Rounded octagonal / chamfered hexagonal futuristic card shape matching the LXR--AI dock cards.
@@ -530,83 +555,80 @@ fun VideoCreatorScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
   VideoCreatorStudioScreen(back = back, onNavigate = onNavigate)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SeoStudioScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
   BackHandler(onBack = back)
-  StudioScaffoldScreen(
-    screenTag = "seo_studio_screen",
-    title = stringResource(R.string.seo_studio_screen_title),
-    subtitle = stringResource(R.string.seo_studio_screen_subtitle),
-    statusNote = stringResource(R.string.seo_studio_status_note),
-    topBarIcon = Icons.Filled.PlayArrow,
-    accentPrimary = Color(0xFFFF179E),
-    accentSecondary = CYBER_PURPLE,
-    modules =
-      listOf(
-        StudioModulePreview(
-          icon = Icons.Filled.Search,
-          title = "Title & Keyword Hub",
-          subtitle = "বাংলা ও ইংরেজি YouTube সার্চ টাইটেল এবং কিওয়ার্ড সেকশন",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.Tag,
-          title = "Tags & Description",
-          subtitle = "ভাইরাল হ্যাশট্যাগ, ভিডিও ডেসক্রিপশন এবং চ্যাপ্টার লেআউট",
-        ),
-        StudioModulePreview(
-          icon = Icons.Filled.AutoGraph,
-          title = "SEO Score Preview",
-          subtitle = "রিচ, সিটিআর এবং থাম্বনেইল পারফরম্যান্স ইনডিকেটর কাঠামো",
-        ),
-      ),
-    back = back,
-    onNavigate = onNavigate,
-  )
-}
+  val ctx = LocalContext.current
+  val clipboard = LocalClipboardManager.current
+  val scope = rememberCoroutineScope()
 
-private data class StudioModulePreview(
-  val icon: ImageVector,
-  val title: String,
-  val subtitle: String,
-)
-
-@Composable
-private fun StudioScaffoldScreen(
-  screenTag: String,
-  title: String,
-  subtitle: String,
-  statusNote: String,
-  topBarIcon: ImageVector,
-  accentPrimary: Color,
-  accentSecondary: Color,
-  modules: List<StudioModulePreview>,
-  back: () -> Unit,
-  onNavigate: (String) -> Unit,
-) {
-  var selectedIndex by remember { mutableIntStateOf(0) }
+  val title = stringResource(R.string.seo_studio_screen_title)
+  val subtitle = stringResource(R.string.seo_studio_screen_subtitle)
+  val statusNote = stringResource(R.string.seo_studio_status_note)
   val badgeLabel = stringResource(R.string.studio_ui_only_badge)
   val backHomeLabel = stringResource(R.string.back_to_home_label)
+
+  val accentPrimary = Color(0xFFFF179E)
+  val accentSecondary = CYBER_PURPLE
+
+  var topic by remember { mutableStateOf("") }
+  var audienceGoal by remember { mutableStateOf("সাধারণ দর্শক ও সার্চ ট্রাফিক") }
+  var languageLabel by remember { mutableStateOf("বাংলা ও ইংরেজি (Bilingual)") }
+  var loading by remember { mutableStateOf(false) }
+  var seoResult by remember { mutableStateOf<YoutubeSeoPackage?>(null) }
+  var exportMessage by remember { mutableStateOf("") }
+
+  fun copyBlock(label: String, content: String) {
+    clipboard.setText(AnnotatedString(content))
+    Toast.makeText(ctx, "$label কপি হয়েছে ✓", Toast.LENGTH_SHORT).show()
+  }
+
+  fun runSeoGeneration() {
+    val cleanTopic = topic.trim().ifBlank { "AI Bangla Tutorial" }
+    if (topic.isBlank()) topic = cleanTopic
+    loading = true
+    exportMessage = ""
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          LxrResearchEngine.generateYoutubeSeoPackage(
+            context = ctx,
+            topic = cleanTopic,
+            languageLabel = languageLabel,
+            audienceGoal = audienceGoal.ifBlank { "সাধারণ দর্শক" },
+          )
+        }
+      seoResult = result
+      loading = false
+      exportMessage = "তৈরি সম্পন্ন ✓ (${result.providerLabel} • ${result.checkedAtDhaka})"
+    }
+  }
 
   Column(
     modifier =
       Modifier
         .fillMaxSize()
-        .testTag(screenTag)
+        .testTag("seo_studio_screen")
         .background(FULL_BG_GRADIENT)
         .statusBarsPadding()
         .navigationBarsPadding()
-        .verticalScroll(rememberScrollState())
         .padding(16.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(14.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Column(
-      modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(),
-      verticalArrangement = Arrangement.spacedBy(14.dp),
+      modifier =
+        Modifier
+          .weight(1f)
+          .widthIn(max = 600.dp)
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       SubPageTopBar(
         title = title,
-        icon = topBarIcon,
+        icon = Icons.Filled.PlayArrow,
         iconColors = listOf(accentPrimary, accentSecondary),
         onBack = back,
         onNavigate = onNavigate,
@@ -617,125 +639,242 @@ private fun StudioScaffoldScreen(
         modifier =
           Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(
               Brush.linearGradient(
                 listOf(accentSecondary.copy(alpha = 0.24f), CYBER_CARD, accentPrimary.copy(alpha = 0.16f))
               )
             )
-            .border(
-              1.6.dp,
-              Brush.linearGradient(listOf(accentPrimary, accentSecondary)),
-              RoundedCornerShape(20.dp),
-            )
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .border(1.5.dp, Brush.linearGradient(listOf(accentPrimary, accentSecondary)), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
           PremiumIconBadge(
-            icon = topBarIcon,
+            icon = Icons.Filled.PlayArrow,
             contentDescription = title,
             colors = listOf(accentPrimary, accentSecondary),
-            sizeDp = 44,
+            sizeDp = 40,
           )
-          Spacer(Modifier.width(12.dp))
+          Spacer(Modifier.width(10.dp))
           Column(Modifier.weight(1f)) {
-            Text(
-              text = title,
-              color = Color.White,
-              fontWeight = FontWeight.ExtraBold,
-              fontSize = 18.sp,
-            )
-            Text(
-              text = subtitle,
-              color = Color(0xFFC9D4F0),
-              fontSize = 12.sp,
-            )
+            Text(title, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
+            Text(subtitle, color = Color(0xFFC9D4F0), fontSize = 11.5.sp)
+          }
+          Box(
+            modifier =
+              Modifier
+                .background(accentPrimary.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+                .border(1.dp, accentPrimary.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 3.dp)
+          ) {
+            Text(badgeLabel, color = Color.White, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
           }
         }
+        Text(statusNote, color = Color(0xFFE0E7FF), fontSize = 12.sp, lineHeight = 17.sp)
+      }
 
-        Box(
-          modifier =
-            Modifier
-              .background(accentPrimary.copy(alpha = 0.18f), RoundedCornerShape(10.dp))
-              .border(1.dp, accentPrimary.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
-              .padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-          Text(
-            text = badgeLabel,
-            color = Color.White,
-            fontSize = 10.5.sp,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-
-        Text(
-          text = statusNote,
-          color = Color(0xFFE0E7FF),
-          fontSize = 13.sp,
-          lineHeight = 19.sp,
+      val fieldColors =
+        OutlinedTextFieldDefaults.colors(
+          focusedTextColor = Color.White,
+          unfocusedTextColor = Color.White,
+          focusedBorderColor = accentPrimary,
+          unfocusedBorderColor = Color(0xFF475073),
+          focusedLabelColor = accentPrimary,
+          unfocusedLabelColor = Color(0xFFAAB4D0),
         )
-      }
 
-      // Preview Module Cards (UI selection only — no backend or AI calls)
-      modules.forEachIndexed { idx, item ->
-        val selected = idx == selectedIndex
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .heightIn(min = 68.dp)
-              .clip(RoundedCornerShape(16.dp))
-              .background(if (selected) accentPrimary.copy(alpha = 0.16f) else CYBER_CARD)
-              .border(
-                width = if (selected) 1.5.dp else 1.dp,
-                color = if (selected) accentPrimary else Color.White.copy(alpha = 0.10f),
-                shape = RoundedCornerShape(16.dp),
-              )
-              .clickable { selectedIndex = idx }
-              .padding(14.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          PremiumIconBadge(
-            icon = item.icon,
-            contentDescription = item.title,
-            colors = if (selected) listOf(accentPrimary, accentSecondary) else listOf(Color(0xFF334155), Color(0xFF1E293B)),
-            sizeDp = 38,
+      OutlinedTextField(
+        value = topic,
+        onValueChange = { topic = it },
+        modifier = Modifier.fillMaxWidth().testTag("seo_topic_input"),
+        label = { Text("ভিডিওর বিষয় / টপিক লিখুন (যেমন: 3D Cartoon Story Bangla)") },
+        singleLine = true,
+        colors = fieldColors,
+      )
+
+      OutlinedTextField(
+        value = audienceGoal,
+        onValueChange = { audienceGoal = it },
+        modifier = Modifier.fillMaxWidth().testTag("seo_audience_input"),
+        label = { Text("দর্শক / লক্ষ্য") },
+        singleLine = true,
+        colors = fieldColors,
+      )
+
+      Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(
+          "বাংলা ও ইংরেজি (Bilingual)",
+          "শুধু বাংলা",
+          "English Global",
+        ).forEach { lang ->
+          FilterChip(
+            selected = languageLabel == lang,
+            onClick = { languageLabel = lang },
+            label = { Text(lang, fontSize = 11.sp) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = accentPrimary, selectedLabelColor = Color.White),
           )
-          Spacer(Modifier.width(12.dp))
-          Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-              text = item.title,
-              color = Color.White,
-              fontWeight = FontWeight.Bold,
-              fontSize = 14.sp,
-            )
-            Text(
-              text = item.subtitle,
-              color = Color(0xFFAAB4D0),
-              fontSize = 12.sp,
-              lineHeight = 17.sp,
-            )
-          }
         }
       }
 
-      Spacer(Modifier.height(4.dp))
-
-      OutlinedButton(
-        onClick = back,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("${screenTag}_back_btn"),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+      Button(
+        onClick = { runSeoGeneration() },
+        enabled = !loading,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("seo_generate_btn"),
+        colors = ButtonDefaults.buttonColors(containerColor = accentPrimary, contentColor = Color.White),
       ) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-          contentDescription = null,
-          tint = accentPrimary,
-          modifier = Modifier.size(18.dp),
-        )
+        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
-        Text(text = backHomeLabel, fontWeight = FontWeight.Bold)
+        Text(
+          if (loading) "রিসার্চ ও SEO তৈরি হচ্ছে…" else "SEO তৈরি ও রিসার্চ করুন",
+          fontWeight = FontWeight.Bold,
+        )
+      }
+
+      if (loading) {
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = accentPrimary)
+      }
+
+      if (exportMessage.isNotBlank()) {
+        Text(exportMessage, color = CYBER_CYAN, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+      }
+
+      val pkg = seoResult
+      if (pkg != null) {
+        SeoResultCard(
+          title = "SEO শিরোনামসমূহ (${pkg.titles.size}টি)",
+          icon = Icons.Filled.AutoGraph,
+          accent = accentPrimary,
+          body = pkg.titles.mapIndexed { idx, t -> "${idx + 1}. $t" }.joinToString("\n"),
+          onCopy = { copyBlock("Titles", pkg.titles.joinToString("\n")) },
+        )
+
+        SeoResultCard(
+          title = "থাম্বনেইল হুক ও প্রথম ৩০ সেকেন্ডের স্ক্রিপ্ট",
+          icon = Icons.Filled.SmartDisplay,
+          accent = CYBER_CYAN,
+          body = "থাম্বনেইল টেক্সট: ${pkg.thumbnailTextIdea}\n\nভিডিও হুক:\n${pkg.scriptHookBn}",
+          onCopy = { copyBlock("Hook & Thumbnail", "${pkg.thumbnailTextIdea}\n${pkg.scriptHookBn}") },
+        )
+
+        SeoResultCard(
+          title = "সার্চ কিওয়ার্ড ও হ্যাশট্যাগ",
+          icon = Icons.Filled.Tag,
+          accent = CYBER_PURPLE,
+          body = "Keywords:\n${pkg.keywords.joinToString(", ")}\n\nHashtags:\n${pkg.hashtags.joinToString(" ")}",
+          onCopy = { copyBlock("Keywords & Hashtags", "${pkg.keywords.joinToString(", ")}\n${pkg.hashtags.joinToString(" ")}") },
+        )
+
+        SeoResultCard(
+          title = "ভিডিও ডেসক্রিপশন",
+          icon = Icons.Filled.Subtitles,
+          accent = CYBER_BLUE,
+          body = pkg.description,
+          onCopy = { copyBlock("Description", pkg.description) },
+        )
+
+        SeoResultCard(
+          title = "ক্রিয়েটর SEO চেকলিস্ট",
+          icon = Icons.Filled.Layers,
+          accent = CYBER_GREEN,
+          body = pkg.checklist.joinToString("\n") { "✓ $it" },
+          onCopy = { copyBlock("Checklist", pkg.checklist.joinToString("\n")) },
+        )
+
+        if (pkg.sources.isNotEmpty()) {
+          SeoResultCard(
+            title = "যাচাইকৃত রিসার্চ সোর্স (${pkg.sources.size}টি)",
+            icon = Icons.Filled.Search,
+            accent = CYBER_AMBER,
+            body = pkg.sources.joinToString("\n") { "• [${it.engine}] ${it.title}\n  ${it.url}" },
+            onCopy = { copyBlock("Sources", pkg.sources.joinToString("\n") { "${it.title}: ${it.url}" }) },
+          )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          Button(
+            onClick = {
+              scope.launch {
+                val res =
+                  withContext(Dispatchers.IO) {
+                    LxrDownloadStorage.saveTextDeliverable(
+                      context = ctx,
+                      category = LxrStorageCategory.YOUTUBE_SEO,
+                      projectSlug = pkg.topic,
+                      fileName = "youtube_seo.md",
+                      content = pkg.toExportMarkdown(),
+                    )
+                  }
+                exportMessage =
+                  res.fold(
+                    onSuccess = { f -> "সেভ হয়েছে ✓: ${f.absolutePath}" },
+                    onFailure = { e -> "সেভ ব্যর্থ: ${e.message}" },
+                  )
+              }
+            },
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("seo_export_btn"),
+            colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
+          ) {
+            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("LxR ফোল্ডারে সেভ", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+          }
+          OutlinedButton(
+            onClick = { onNavigate("video_creator") },
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("seo_send_to_video_btn"),
+          ) {
+            Icon(Icons.Filled.Movie, contentDescription = null, tint = accentPrimary, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("ভিডিও স্টুডিও", color = Color.White, fontSize = 11.5.sp, maxLines = 1)
+          }
+        }
       }
     }
+
+    // Pinned outside the scroll container so `seo_studio_screen_back_btn` is always immediately accessible
+    OutlinedButton(
+      onClick = back,
+      modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth().heightIn(min = 48.dp).testTag("seo_studio_screen_back_btn"),
+      colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+    ) {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+        contentDescription = null,
+        tint = accentPrimary,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(Modifier.width(8.dp))
+      Text(text = backHomeLabel, fontWeight = FontWeight.Bold)
+    }
+  }
+}
+
+@Composable
+private fun SeoResultCard(
+  title: String,
+  icon: ImageVector,
+  accent: Color,
+  body: String,
+  onCopy: () -> Unit,
+) {
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(16.dp))
+        .background(CYBER_CARD)
+        .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+        .padding(12.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+      Spacer(Modifier.width(8.dp))
+      Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+      IconButton(onClick = onCopy, modifier = Modifier.size(48.dp)) {
+        Icon(Icons.Filled.ContentCopy, contentDescription = "কপি করুন", tint = accent, modifier = Modifier.size(18.dp))
+      }
+    }
+    Text(body, color = Color(0xFFDCE6FF), fontSize = 12.sp, lineHeight = 18.sp)
   }
 }

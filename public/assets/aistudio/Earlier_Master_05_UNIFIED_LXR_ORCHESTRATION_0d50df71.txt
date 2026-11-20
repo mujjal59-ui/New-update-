@@ -1,0 +1,38 @@
+# PROMPT 5 — UNIFIED LXR--AI ORCHESTRATION (APP + VIDEO + YOUTUBE SEO)
+LXR--AI-এর তিনটি module-কে এক consistent workflow-তে orchestrate করো: (1) APK Build & Any-App Development, (2) Video Creation Studio, (3) YouTube Video SEO Studio।
+
+Provider role boundaries:
+- FreeLLMAPI: configured LLM gateway for text generation — app specifications/code assistance where supported, SEO title/description/tags/script/hooks/CTA and other text tasks।
+- OmniRoute: selects/routs an appropriate available LLM based on task, capability, context, quality, latency and user-approved budget/quota। OmniRoute নিজে generative model নয়।
+- Perplexity + You.com: research, source discovery and fact-checking with source URL/date/citations।
+- Phind: optional research provider only after official API, auth, terms, limits and successful test verified; otherwise disabled.
+- OpenMontage: visual/video production only within verified real capabilities.
+- Actual text-to-video/image-to-video needs separate provider adapters unless verified OpenMontage capability exists.
+- LXR--AI orchestrates, deduplicates, resolves conflicts transparently, records provenance, and creates editable outputs.
+
+Unified user journey:
+A. User selects Apps / Video / YouTube SEO.
+B. Intent parser converts request into structured task; asks only essential clarifying questions.
+C. Planner creates steps, dependencies, required providers, estimated resource categories (only if measurable).
+D. Research phase collects citations and flags uncertainty.
+E. Generation/build/render phase runs only supported actions.
+F. QA validates outputs, source claims, tests, media metadata, policy/security.
+G. User review/approval gate before paid calls, publishing, signing, deployment, destructive changes.
+H. Deliver outputs with editable artifacts, source references, logs, errors, export files.
+
+Shared architecture:
+- Provider adapter interface; capability registry; health checks; auth state; quotas/rate limits; retry/backoff; timeout; cancellation.
+- Task/job state machine with persisted status and real progress events.
+- Secure backend secret management; never expose API keys in APK/client/logs.
+- Usage ledger separates LLM tokens, research calls, video credits, render compute, storage and paid costs.
+- Audit trail records provider, model, source, timestamp, request status, user approval and output version.
+- User settings for provider enable/disable and budget ceiling.
+- Fallback to manual workflows when integrations unavailable.
+
+Non-negotiable:
+- Verify current official API docs, endpoints, authentication, pricing, quota, licensing and terms before implementation.
+- Never fabricate endpoint, API response, source, citations, analytics, progress, ETA, quota or success.
+- No paid provider call without explicit consent.
+- Preserve existing app functionality, navigation, data, settings, persona and Google voice list.
+- Run tests/build and report exact changed files, exact commands, outcomes and known limitations.
+- Do not claim “all kinds of apps/videos guaranteed”; clearly state platform, provider and environment constraints.

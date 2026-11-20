@@ -65,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -97,6 +98,8 @@ import com.example.video.VideoStudioCatalog
 import com.example.video.VideoStudioUiState
 import com.example.video.VideoStudioViewModel
 import com.example.video.VideoType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -382,10 +385,18 @@ private fun OneLinePromptCard(
     if (state.userMediaItems.isNotEmpty()) {
       Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         state.userMediaItems.forEach { item ->
-          val thumbBmp = remember(item.cachedFilePath) {
-            if (item.kind == UserMediaKind.IMAGE || item.kind == UserMediaKind.SCREENSHOT) {
-              runCatching { BitmapFactory.decodeFile(item.cachedFilePath) }.getOrNull()
-            } else null
+          val thumbBmp by produceState<android.graphics.Bitmap?>(initialValue = null, item.cachedFilePath, item.kind) {
+            value =
+              if (item.kind == UserMediaKind.IMAGE || item.kind == UserMediaKind.SCREENSHOT) {
+                withContext(Dispatchers.IO) {
+                  runCatching {
+                    val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                    BitmapFactory.decodeFile(item.cachedFilePath, opts)
+                  }.getOrNull()
+                }
+              } else {
+                null
+              }
           }
           Row(
             modifier = Modifier
@@ -395,9 +406,10 @@ private fun OneLinePromptCard(
               .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            if (thumbBmp != null) {
+            val bmp = thumbBmp
+            if (bmp != null) {
               Image(
-                bitmap = thumbBmp.asImageBitmap(),
+                bitmap = bmp.asImageBitmap(),
                 contentDescription = item.displayName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)),

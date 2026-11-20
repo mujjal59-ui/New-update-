@@ -1,0 +1,18 @@
+LXR--AI — COMPLETE VIDEO MAKE STUDIO
+
+Implement after approval and after the read-only audit.
+
+Workflow: brief/idea -> research -> outline -> script -> scenes/shot list -> characters/assets -> voice/audio -> timeline/edit -> preview -> render/export.
+
+Include editable scenes, reorder, trim/split, transitions, overlays, captions/subtitles, audio tracks, aspect ratios, asset library, project save/versioning and export where supported. Character consistency and reference images only where technically supported.
+
+Provider rules:
+- FreeLLMAPI creates text assets (scripts, titles, descriptions, tags) only within verified API capabilities.
+- OmniRoute selects a suitable available LLM; it is a router, not a model.
+- Perplexity and You.com perform research only with verified official APIs.
+- Phind remains optional and disabled unless an official working API is verified.
+- OpenMontage handles only its verified video/visual capabilities.
+- Distinguish actual generative text/image-to-video from stock footage, slideshow, pan/zoom, SVG/GSAP/Remotion animation, compositing and FFmpeg rendering.
+- If generative video requires another provider, document it and request approval before paid usage.
+
+Show real job state/progress/errors from the engine. No fake ETA, progress, credits or success. Separate LLM tokens, video credits, render time, storage and costs. Preserve all existing UI/features/voices unless explicitly approved. Add tests and document limitations.

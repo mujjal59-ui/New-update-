@@ -1,0 +1,26 @@
+LXR THREE-SECTION WORKFLOW & ACCEPTANCE CRITERIA
+
+APP BUILDER WORKFLOW
+Recon -> Architect -> Design -> Build -> Backend -> Test -> Diff -> Entrepreneur -> Brand -> Launch -> Deploy.
+Every stage produces a saved, reviewable artifact. Do not deploy without explicit approval. Use only public/authorized references and original code/assets.
+
+TERMUX VISIBILITY
+The in-app console must reflect the actual existing Termux process. Minimum useful record: command, cwd, timestamps, status, stdout/stderr, exit code, error, artifact path. Live streaming is conditional on actual bridge support. Buffered result is acceptable if honestly labeled. No simulated terminal.
+
+VIDEO WORKFLOW
+Idea -> script -> storyboard -> scenes -> assets -> audio -> edit -> preview -> render -> export. Distinguish generative video from other rendering methods.
+
+YOUTUBE SEO WORKFLOW
+Brief -> research -> source validation -> title/description/tags/script/chapters -> quality checks -> editable export/publish assistance. OAuth for official API features.
+
+GLOBAL ACCEPTANCE
+- Existing feature inventory captured before changes.
+- Backup and rollback available.
+- Termux path unchanged and regression-tested.
+- In-app output matches real Termux output.
+- No fake build/render/progress/analytics.
+- API/provider claims verified from official sources.
+- Paid usage requires consent.
+- All changes documented with exact files.
+- Build/test/artifact claims backed by actual logs.
+- ZIP integrity verified.

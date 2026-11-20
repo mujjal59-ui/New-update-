@@ -1,0 +1,19 @@
+LXR--AI — COMPLETE YOUTUBE VIDEO + SEO STUDIO
+
+Implement after approval and connect to Video Make Studio.
+
+Support manual entry and permitted metadata import. Gather topic, niche, audience, language, region, format (long/Shorts), duration, target keyword and transcript/script.
+
+Research search intent, keyword variations, audience questions, public competitor information and factual claims. Attach source URLs, publication/access dates and provenance. Cross-check material claims.
+
+Create editable package:
+- 5–10 title options and recommended title with rationale
+- Description, primary/secondary keywords, comma-separated tags, hashtags
+- CTA, optional pinned comment/community post
+- Chapters only from actual transcript/runtime; do not invent timestamps
+- Script with hook, intro, sections, transitions, CTA, ending and Shorts cutdown
+- Thumbnail concepts/prompts; claim actual image generation only when a real image API ran
+
+Quality checks: relevance, readability, keyword stuffing, duplicate tags, unsupported claims, copyright/platform-policy reminders. Any score is heuristic, not an official YouTube score or ranking guarantee.
+
+Use YouTube Data/Analytics APIs only with official authorization and explicit OAuth consent. Without it, provide manual copy/export; do not fabricate analytics. No guaranteed rankings, views, virality or CTR. Keep SEO results editable and connect them to the associated video project.

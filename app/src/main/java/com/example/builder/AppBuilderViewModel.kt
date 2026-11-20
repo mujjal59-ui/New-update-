@@ -554,7 +554,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
 
       if (foundApk != null && foundApk.exists) {
         val exportName = "${project.slug}-${project.buildMode.name.lowercase()}.apk"
-        val savedDownload = repo.saveApkToDownloads(File(foundApk.apkFilePath), exportName).getOrDefault(foundApk.downloadExportPath)
+        val savedDownload = repo.saveApkToDownloads(File(foundApk.apkFilePath), exportName, project.slug).getOrDefault(foundApk.downloadExportPath)
         val verified = foundApk.copy(downloadExportPath = savedDownload)
         val updated =
           repo.saveProject(
@@ -670,6 +670,41 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
     }
   }
 
+  fun runDirectTermuxCommand(rawCommand: String) {
+    val cmd = rawCommand.trim()
+    if (cmd.isBlank()) {
+      _uiState.update { it.copy(statusBanner = "Termux-এ চালানোর জন্য একটি কমান্ড লিখুন।") }
+      return
+    }
+    val safeLabel = cmd.take(100)
+    _uiState.update { cur ->
+      cur.copy(
+        consoleLogs = (cur.consoleLogs + "▶ Termux cmd: $safeLabel").takeLast(140),
+        statusBanner = "Termux কমান্ড চালানো হচ্ছে...",
+      )
+    }
+    viewModelScope.launch(Dispatchers.IO) {
+      val acc = com.example.service.RiyaAccessibilityService.instance
+      val resultText =
+        if (!TermuxBuildBridge.isPackageInstalled(ctx, TermuxBuildBridge.TERMUX_PACKAGE)) {
+          "✗ Termux অ্যাপ ইনস্টল করা নেই।"
+        } else if (acc != null && com.example.service.Keep.accessibilityOn(ctx)) {
+          acc.executeTermuxCommandViaUi(ctx, cmd)
+        } else {
+          val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+          cm.setPrimaryClip(android.content.ClipData.newPlainText("Termux Cmd", cmd))
+          TermuxBuildBridge.openTermuxApp(ctx)
+          "✓ কমান্ড ক্লিপবোর্ডে কপি করে Termux খোলা হয়েছে (সরাসরি পেস্ট অটোমেশনের জন্য Accessibility চালু করুন)।"
+        }
+      _uiState.update { cur ->
+        cur.copy(
+          consoleLogs = (cur.consoleLogs + resultText).takeLast(140),
+          statusBanner = resultText.take(120),
+        )
+      }
+    }
+  }
+
   fun downloadApkToPublicFolder() {
     val project = _uiState.value.activeProject ?: return
     val apk = project.apkResult
@@ -678,7 +713,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
       return
     }
     viewModelScope.launch(Dispatchers.IO) {
-      val res = repo.saveApkToDownloads(File(apk.apkFilePath), "${project.slug}.apk")
+      val res = repo.saveApkToDownloads(File(apk.apkFilePath), "${project.slug}.apk", project.slug)
       _uiState.update {
         it.copy(
           statusBanner =

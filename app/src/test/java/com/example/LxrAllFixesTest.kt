@@ -28,18 +28,24 @@ import android.graphics.Rect
 import com.example.service.AudioEchoGuard
 import com.example.service.ChatBubbleDirection
 import com.example.service.ChatScreenGeometryParser
+import com.example.service.ContactFirstWordMatcher
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
 import com.example.service.LiveVadConfig
 import com.example.service.LockVaultManager
 import com.example.service.LxrAudioNoiseSuppressor
+import com.example.service.LxrCompanionAgent
+import com.example.service.LxrDownloadStorage
+import com.example.service.LxrStorageCategory
 import com.example.service.MessageAgent
+import com.example.service.NetworkStabilityGuard
 import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaVoiceManager
 import com.example.service.ScreenNodeInfo
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
+import com.example.service.UnlockPolicyGuard
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.LxrAppBuilderWorkspace
@@ -346,9 +352,16 @@ class LxrAllFixesTest {
   fun autoReplyTemplate_matchesExactRequestedBengaliTextAndMigratesLegacyTemplates() {
     val expected =
       "আসসালামু আলাইকুম। আশা করি ভালো আছেন।\n\n" +
-        "আমি LXR--AI,বস এই মুহূর্তে কিছুটা ব্যস্ত রয়েছেন। তিনি অবসর হলেই আপনার সঙ্গে যত দ্রুত সম্ভব যোগাযোগ করবেন, ইনশাআল্লাহ।\n\n" +
-        "ততক্ষণ পর্যন্ত আপনার সদয় অপেক্ষার জন্য কৃতজ্ঞতা প্রকাশ করছি ধন্যবাদ।"
+        "আমি LXR, বস এই মুহূর্তে কিছুটা ব্যস্ত রয়েছেন। তিনি অবসর হলেই আপনার সঙ্গে যত দ্রুত সম্ভব যোগাযোগ করবেন, ইনশাআল্লাহ❤️📢"
     assertEquals(expected, RiyaPreferences.DEFAULT_BUSY_REPLY_TEMPLATE_BN)
+    assertEquals(
+      expected,
+      RiyaPreferences.normalizeTemplate(
+        "আসসালামু আলাইকুম। আশা করি ভালো আছেন।\n\n" +
+          "আমি LXR--AI,বস এই মুহূর্তে কিছুটা ব্যস্ত রয়েছেন। তিনি অবসর হলেই আপনার সঙ্গে যত দ্রুত সম্ভব যোগাযোগ করবেন, ইনশাআল্লাহ।\n\n" +
+          "ততক্ষণ পর্যন্ত আপনার সদয় অপেক্ষার জন্য কৃতজ্ঞতা প্রকাশ করছি ধন্যবাদ।"
+      ),
+    )
     assertEquals(
       expected,
       RiyaPreferences.normalizeTemplate("হ্যালো, বস এই মুহূর্তে ব্যস্ত আছেন। আমি LXR--AI, কিছুক্ষণ পর বস আপনার সাথে যোগাযোগ করবেন।"),
@@ -576,5 +589,91 @@ class LxrAllFixesTest {
 
     val ctx = ApplicationProvider.getApplicationContext<Context>()
     assertFalse(LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, null))
+  }
+
+  @Test
+  fun unlockPolicy_blocksCasualAndPassiveToolsAndAllowsExplicitOrActionOnlyWhenLocked() {
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("current_time", genuinelyLocked = true))
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("search_memory", genuinelyLocked = true))
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("deep_research", genuinelyLocked = true))
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("unlock_phone", genuinelyLocked = true, explicitUnlockArg = false))
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("unlock_phone", genuinelyLocked = false, explicitUnlockArg = true))
+    assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("open_app", genuinelyLocked = false))
+
+    assertTrue(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("unlock_phone", genuinelyLocked = true, explicitUnlockArg = true))
+    assertTrue(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("open_app", genuinelyLocked = true))
+    assertTrue(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("send_message", genuinelyLocked = true))
+  }
+
+  @Test
+  fun networkStabilityGuard_preventsFalseReconnectDropsDuringHealthyIdleOrValidatedSwitch() {
+    assertFalse(NetworkStabilityGuard.shouldTreatNetworkLossAsOffline(hasRemainingValidatedInternet = true))
+    assertTrue(NetworkStabilityGuard.shouldTreatNetworkLossAsOffline(hasRemainingValidatedInternet = false))
+    assertFalse(
+      NetworkStabilityGuard.shouldWatchdogReconnect(
+        waitingServerReply = true,
+        bossTurnElapsedMs = 16_000L,
+        serverSilenceMs = 16_000L,
+        queueBytes = 0L,
+      )
+    )
+    assertFalse(
+      NetworkStabilityGuard.shouldWatchdogReconnect(
+        waitingServerReply = false,
+        bossTurnElapsedMs = 60_000L,
+        serverSilenceMs = 60_000L,
+        queueBytes = 0L,
+      )
+    )
+    assertTrue(
+      NetworkStabilityGuard.shouldWatchdogReconnect(
+        waitingServerReply = true,
+        bossTurnElapsedMs = 46_000L,
+        serverSilenceMs = 36_000L,
+        queueBytes = 0L,
+      )
+    )
+  }
+
+  @Test
+  fun contactFirstWordMatcher_prioritizesFirstWordAndBuildsConfirmationPrompt() {
+    val entries =
+      listOf(
+        "Karim Ullah" to "+8801711000001",
+        "Md Rakib Hossain" to "+8801711000002",
+        "Rakib Vai Dhaka" to "+8801811000003",
+      )
+    val matches = ContactFirstWordMatcher.rankMatches("Rakib ভাই", entries)
+    assertTrue(matches.isNotEmpty())
+    assertTrue(matches.first().displayName.contains("Rakib"))
+    assertTrue(matches.first().matchedByFirstWord)
+
+    val confirmPrompt = ContactFirstWordMatcher.buildReadBackConfirmationPrompt("Rakib ভাই", matches)
+    assertTrue(confirmPrompt.contains("confirmed=true"))
+    assertTrue(confirmPrompt.contains(matches.first().phoneNumber))
+  }
+
+  @Test
+  fun bangladeshClock_formatsDhakaTimeAndDateAccurately() {
+    val (timeStr, dateStr, dayStr) = LxrCompanionAgent.bangladeshNowSnapshot(1_760_000_000_000L)
+    assertTrue(timeStr.isNotBlank())
+    assertTrue(dateStr.isNotBlank())
+    assertTrue(dayStr.isNotBlank())
+    assertTrue(LxrCompanionAgent.formatBangladeshFullClock(1_760_000_000_000L).contains("BST"))
+  }
+
+  @Test
+  fun lxrDownloadStorage_createsStandardDirectoriesAndUniqueDeliverableFiles() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    val tempProjectDir = java.io.File(ctx.cacheDir, "lxr_storage_test_${System.nanoTime()}").apply { mkdirs() }
+    val f1 = LxrDownloadStorage.uniqueTargetFile(tempProjectDir, "youtube_seo.md")
+    f1.writeText("first")
+    val f2 = LxrDownloadStorage.uniqueTargetFile(tempProjectDir, "youtube_seo.md")
+    assertEquals("youtube_seo.md", f1.name)
+    assertEquals("youtube_seo_v2.md", f2.name)
+    assertTrue(LxrStorageCategory.entries.any { it.folderName == "YouTube_SEO" })
+    assertTrue(LxrStorageCategory.entries.any { it.folderName == "APK" })
+    assertTrue(LxrDownloadStorage.termuxSyncDirectoriesCommand().contains("YouTube_SEO"))
+    tempProjectDir.deleteRecursively()
   }
 }
