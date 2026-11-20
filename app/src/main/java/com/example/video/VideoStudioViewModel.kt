@@ -4,6 +4,8 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.service.LxrStudioHandoff
+import com.example.service.LxrUsageLedger
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -461,6 +463,7 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
   }
 
   private suspend fun runPipelineInternal(startFromStageIndex: Int, allowNetworkCloudTry: Boolean) {
+    val renderStartMs = System.currentTimeMillis()
     val st0 = _uiState.value
     val prompt = st0.promptInput.trim().ifBlank { VideoStudioCatalog.DEFAULT_EXAMPLE_PROMPT }
     val slug = buildSlug(prompt)
@@ -699,6 +702,22 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
           "[Export] Saved MP4 (${artifacts.mp4SizeBytes / 1024} KB) + TXT + WAV + SRT + OpenMontage ZIP to ${artifacts.publicDownloadFolderLabel}",
       )
 
+      val renderSec = ((System.currentTimeMillis() - renderStartMs).coerceAtLeast(100L)) / 1000.0
+      LxrUsageLedger.recordRenderMetrics(
+        renderDurationSec = renderSec,
+        outputBytes = artifacts.mp4SizeBytes,
+      )
+      LxrUsageLedger.refreshStorageUsage(ctx)
+      LxrStudioHandoff.publishVideoHandoff(
+        projectTitle = finalProj.title,
+        scriptSummary = finalProj.topicAnalysisSummary,
+        actualDurationSec = finalProj.customDurationSeconds,
+        aspectRatioLabel = finalProj.settings.aspectRatio.labelBn,
+        sceneHeadlines = finalProj.scenes.map { it.overlayHeadline },
+        mp4Path = artifacts.mp4Path,
+        publicFolderLabel = artifacts.publicDownloadFolderLabel,
+      )
+
       _uiState.update { st ->
         val updatedSeries = if (finalProj.seriesId.isNotBlank()) {
           val nextList = st.seriesProjects.map { sp ->
@@ -926,6 +945,34 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
         lastActionBanner = res.getOrElse { err -> err.message ?: "Termux চালু করা যায়নি" }
       )
     }
+  }
+
+  fun sendActiveVideoToSeoStudio(onNavigate: (String) -> Unit) {
+    val st = _uiState.value
+    val proj = st.activeProject
+    if (proj != null) {
+      LxrStudioHandoff.publishVideoHandoff(
+        projectTitle = proj.title,
+        scriptSummary = proj.topicAnalysisSummary.ifBlank { proj.prompt },
+        actualDurationSec = proj.customDurationSeconds,
+        aspectRatioLabel = proj.settings.aspectRatio.labelBn,
+        sceneHeadlines = proj.scenes.map { it.overlayHeadline },
+        mp4Path = proj.artifacts.mp4Path,
+        publicFolderLabel = proj.artifacts.publicDownloadFolderLabel,
+      )
+    } else {
+      val cleanTopic = st.promptInput.trim().ifBlank { "LXR 3D Cartoon Video" }.take(80)
+      LxrStudioHandoff.publishVideoHandoff(
+        projectTitle = cleanTopic,
+        scriptSummary = st.promptInput.trim(),
+        actualDurationSec = st.customDurationSec,
+        aspectRatioLabel = st.settings.aspectRatio.labelBn,
+        sceneHeadlines = emptyList(),
+        mp4Path = "",
+        publicFolderLabel = "Download/LxR/Videos",
+      )
+    }
+    onNavigate("seo_studio")
   }
 
   private fun buildSlug(prompt: String): String {

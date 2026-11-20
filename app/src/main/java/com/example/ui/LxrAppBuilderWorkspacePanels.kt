@@ -78,7 +78,10 @@ import com.example.builder.AppBuilderViewModel
 import com.example.builder.BuildStatus
 import com.example.builder.BuilderConfirmationRequest
 import com.example.builder.DevelopmentStage
+import com.example.builder.ReplicaPipelineStage
 import com.example.builder.TermuxBuildBridge
+import com.example.builder.TermuxExecutionState
+import com.example.service.LxrSecretRedactor
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -329,6 +332,81 @@ fun IdeBuildAndTermuxTab(
     }
   }
 
+  // 1.2 Replica 11-Stage Pipeline Tracker Strip (Recon..Deploy with Deploy Approval Gate)
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .testTag("builder_replica_stage_strip")
+        .clip(RoundedCornerShape(16.dp))
+        .background(Color(0xFF0B1225))
+        .border(1.dp, CYBER_PURPLE.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+        .padding(12.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+      Text(
+        text = "Replica 11-Stage Pipeline (${state.replicaStage.stepNumber}/11: ${state.replicaStage.titleEn})",
+        color = CYBER_CYAN,
+        fontWeight = FontWeight.Bold,
+        fontSize = 12.sp,
+        modifier = Modifier.weight(1f),
+      )
+      Text(
+        text = state.replicaStage.titleBn,
+        color = Color(0xFFE2E8F0),
+        fontSize = 10.5.sp,
+      )
+    }
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      ReplicaPipelineStage.entries.forEach { st ->
+        val done = st in state.completedReplicaStages
+        val active = st == state.replicaStage
+        val bg =
+          when {
+            done -> CYBER_GREEN.copy(alpha = 0.22f)
+            active -> CYBER_CYAN.copy(alpha = 0.22f)
+            else -> Color(0xFF151E3B)
+          }
+        val borderCol =
+          when {
+            done -> CYBER_GREEN
+            active -> CYBER_CYAN
+            st.requiresApproval -> CYBER_AMBER.copy(alpha = 0.7f)
+            else -> Color(0xFF283459)
+          }
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(bg)
+              .border(1.dp, borderCol, RoundedCornerShape(8.dp))
+              .padding(horizontal = 8.dp, vertical = 5.dp),
+        ) {
+          Text(
+            text = "${st.stepNumber}.${st.titleEn}${if (done) " ✓" else ""}",
+            color = if (done) CYBER_GREEN else if (active) CYBER_CYAN else Color(0xFFCBD5E1),
+            fontSize = 10.sp,
+            fontWeight = if (active || done) FontWeight.Bold else FontWeight.Normal,
+          )
+        }
+      }
+    }
+    if (state.activeProject != null) {
+      OutlinedButton(
+        onClick = { vm.requestDeployProject() },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("builder_deploy_approval_btn"),
+      ) {
+        Icon(Icons.Filled.InstallMobile, contentDescription = null, tint = CYBER_AMBER, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Stage 11 Deploy / Install (অনুমতিসহ)", color = CYBER_AMBER, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+      }
+    }
+  }
+
   // 1.5 Interactive Live Preview Card visible right inside Build tab too
   LxrLiveAppPreviewCard(
     appName = state.activeProject?.name ?: state.projectName,
@@ -371,6 +449,35 @@ fun IdeBuildAndTermuxTab(
       fontWeight = FontWeight.SemiBold,
     )
     Text(termux.setupSummaryBn, color = Color(0xFFCBD5E1), fontSize = 11.5.sp)
+    val tel = state.termuxTelemetry
+    val telStateColor =
+      when (tel.state) {
+        TermuxExecutionState.SUCCEEDED -> CYBER_GREEN
+        TermuxExecutionState.FAILED, TermuxExecutionState.CANCELLED -> CYBER_RED
+        TermuxExecutionState.RUNNING, TermuxExecutionState.QUEUED -> CYBER_CYAN
+        TermuxExecutionState.IDLE -> Color(0xFF94A3B8)
+      }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("builder_termux_telemetry_box")
+          .clip(RoundedCornerShape(10.dp))
+          .background(Color(0xFF070C1A))
+          .border(1.dp, Color(0xFF233052), RoundedCornerShape(10.dp))
+          .padding(9.dp),
+      verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text("Execution State: ${tel.state.labelBn}", color = telStateColor, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Exit: ${tel.exitCode?.toString() ?: "—"} • ${tel.outputMode}", color = Color(0xFFCBD5E1), fontSize = 10.sp)
+      }
+      Text("Working Dir: ${tel.workingDir}", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+      Text("Variant: ${tel.apkVariantLabel} • Changed: ${tel.changedFilesSummary}", color = CYBER_CYAN, fontSize = 10.sp)
+      if (tel.startedAtLabel.isNotBlank()) {
+        Text("Started: ${tel.startedAtLabel}${if (tel.finishedAtLabel.isNotBlank()) " • Finished: ${tel.finishedAtLabel}" else ""}", color = Color(0xFF94A3B8), fontSize = 10.sp)
+      }
+    }
     if (termux.sharedDownloadDirPath.isNotBlank()) {
       Text(
         text = "Shared Download Folder:\n${termux.sharedDownloadDirPath}",
@@ -645,7 +752,7 @@ fun IdeBuildAndTermuxTab(
     }
     val logText =
       if (state.consoleLogs.isEmpty()) "প্রস্তুত — কোনো বিল্ড লগ এখনো তৈরি হয়নি।"
-      else state.consoleLogs.joinToString("\n")
+      else LxrSecretRedactor.redactSecrets(state.consoleLogs.joinToString("\n"))
     Text(
       text = logText,
       color = Color(0xFFCBD5E1),

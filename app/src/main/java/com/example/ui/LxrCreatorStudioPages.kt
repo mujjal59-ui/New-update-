@@ -62,6 +62,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -106,8 +107,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.service.LxrDownloadStorage
+import com.example.service.LxrProviderRegistry
 import com.example.service.LxrResearchEngine
 import com.example.service.LxrStorageCategory
+import com.example.service.LxrStudioHandoff
 import com.example.service.YoutubeSeoPackage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -578,6 +581,8 @@ fun SeoStudioScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
   var loading by remember { mutableStateOf(false) }
   var seoResult by remember { mutableStateOf<YoutubeSeoPackage?>(null) }
   var exportMessage by remember { mutableStateOf("") }
+  val handoff by LxrStudioHandoff.latestVideoHandoff.collectAsState()
+  val providers = remember { LxrProviderRegistry.inspectProviders(ctx) }
 
   fun copyBlock(label: String, content: String) {
     clipboard.setText(AnnotatedString(content))
@@ -672,6 +677,68 @@ fun SeoStudioScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
           }
         }
         Text(statusNote, color = Color(0xFFE0E7FF), fontSize = 12.sp, lineHeight = 17.sp)
+      }
+
+      // Honest Provider Status Strip (BYO Keys vs Open Free Sources)
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("seo_provider_registry_strip"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        providers.forEach { p ->
+          val chipColor = if (p.isConfigured) CYBER_GREEN else Color(0xFF94A3B8)
+          Box(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(chipColor.copy(alpha = 0.14f))
+                .border(1.dp, chipColor.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+          ) {
+            Text(
+              text = "${p.displayName.substringBefore(" (")}: ${if (p.isConfigured) "Active" else "Not configured"}",
+              color = chipColor,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+        }
+      }
+
+      handoff?.let { h ->
+        Column(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .testTag("seo_handoff_banner")
+              .clip(RoundedCornerShape(14.dp))
+              .background(Color(0xFF101F3A))
+              .border(1.dp, CYBER_CYAN.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+              .padding(12.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            "🎬 ভিডিও স্টুডিও থেকে প্রস্তুত: ${h.projectTitle}",
+            color = CYBER_CYAN,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.5.sp,
+          )
+          Text(
+            "${h.aspectRatioLabel} (${h.actualDurationSec}s) • ${h.publicFolderLabel}",
+            color = Color(0xFFCBD5E1),
+            fontSize = 11.sp,
+          )
+          Button(
+            onClick = {
+              topic = h.projectTitle
+              val summaryScenes = h.sceneHeadlines.take(3).joinToString(", ")
+              audienceGoal = "${h.aspectRatioLabel} (${h.actualDurationSec}s)${if (summaryScenes.isNotBlank()) " • $summaryScenes" else ""}"
+            },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("seo_import_handoff_btn"),
+            colors = ButtonDefaults.buttonColors(containerColor = CYBER_CYAN, contentColor = Color.Black),
+          ) {
+            Text("ভিডিও থেকে ইম্পোর্ট করুন", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+          }
+        }
       }
 
       val fieldColors =

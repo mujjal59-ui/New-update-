@@ -244,14 +244,14 @@ object LockVaultManager {
           phase = LivePhoneLockPhase.APP_LOCKED,
           isLocked = true,
           activePackage = activePkg.ifBlank { "applock" },
-          summaryBn = "স্ক্রিনের অবস্থা: অ্যাপ লক স্ক্রিন খোলা আছে ($activePkg — কাজ করার আগে অ্যাপ লক খুলতে হবে)",
+          summaryBn = "স্ক্রিনের অবস্থা: অ্যাপ লক পর্দা লক অবস্থায় আছে ($activePkg — কাজ করার আগে অ্যাপ লক খুলতে হবে)",
         )
       }
       LivePhoneStateReport(
         phase = LivePhoneLockPhase.UNLOCKED,
         isLocked = false,
         activePackage = activePkg.ifBlank { "unknown" },
-        summaryBn = "স্ক্রিনের অবস্থা: খোলা ও আনলক আছে (অ্যাপ: ${activePkg.ifBlank { "Home/Unknown" }})",
+        summaryBn = "স্ক্রিনের অবস্থা: স্বাভাবিক ও প্রস্তুত (অ্যাপ: ${activePkg.ifBlank { "Home/Unknown" }})",
       )
     } catch (_: Throwable) {
       LivePhoneStateReport(
@@ -589,14 +589,34 @@ object LockVaultManager {
     }
   }
 
+  private val nonAppLockPackages =
+    setOf(
+      "com.aistudio.riyaai.krmxvp",
+      "com.example",
+      "com.whatsapp",
+      "com.imo.android.imoim",
+      "com.facebook.orca",
+      "org.telegram.messenger",
+      "com.android.chrome",
+      "com.google.android.googlequicksearchbox",
+      "com.android.settings",
+      "com.termux",
+    )
+
   fun isAppLockScreenShowing(acc: RiyaAccessibilityService?): Boolean {
     if (acc == null) return false
+    val activeRoot = acc.rootInActiveWindow
+    val activePkg = activeRoot?.packageName?.toString()?.lowercase()?.trim().orEmpty()
     val roots = collectAllRoots(acc)
     for (root in roots) {
-      val pkg = root.packageName?.toString()?.lowercase().orEmpty()
+      val pkg = root.packageName?.toString()?.lowercase()?.trim().orEmpty()
       if (pkg in appLockPackages) return true
     }
-    val textDump = collectCompactScreenText(roots)
+    if (activeRoot == null) return false
+    if (activePkg in nonAppLockPackages || activePkg.contains("launcher") || activePkg.contains("browser")) {
+      return false
+    }
+    val textDump = collectCompactScreenText(listOf(activeRoot))
     return matchesAppLockHint(textDump)
   }
 

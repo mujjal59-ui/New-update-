@@ -16,6 +16,7 @@ import com.example.builder.AppDesignTheme
 import com.example.builder.AppProjectGenerator
 import com.example.builder.AppProjectTemplates
 import com.example.builder.ProgrammingLanguage
+import com.example.builder.ReplicaPipelineStage
 import com.example.builder.TermuxBuildBridge
 import android.app.Notification
 import android.content.Context
@@ -31,12 +32,16 @@ import com.example.service.ChatScreenGeometryParser
 import com.example.service.ContactFirstWordMatcher
 import com.example.service.EditableFieldCandidate
 import com.example.service.EditableFieldMatcher
+import com.example.service.LiveObservationSnapshot
 import com.example.service.LiveVadConfig
 import com.example.service.LockVaultManager
 import com.example.service.LxrAudioNoiseSuppressor
 import com.example.service.LxrCompanionAgent
 import com.example.service.LxrDownloadStorage
+import com.example.service.LxrSecretRedactor
 import com.example.service.LxrStorageCategory
+import com.example.service.LxrStudioHandoff
+import com.example.service.LxrUsageLedger
 import com.example.service.MessageAgent
 import com.example.service.NetworkStabilityGuard
 import com.example.service.RiyaNotificationListenerService
@@ -46,6 +51,7 @@ import com.example.service.ScreenNodeInfo
 import com.example.service.TermuxUiAutomation
 import com.example.service.TermuxWindowNodeInfo
 import com.example.service.UnlockPolicyGuard
+import com.example.service.VoiceMatchEngine
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_RED
 import com.example.ui.LxrAppBuilderWorkspace
@@ -269,14 +275,14 @@ class LxrAllFixesTest {
       RiyaVoiceManager.ALLOW_ANDROID_SYSTEM_TTS_FALLBACK,
     )
     assertEquals("START_SENSITIVITY_HIGH", LiveVadConfig.START_SENSITIVITY)
-    assertEquals("END_SENSITIVITY_HIGH", LiveVadConfig.END_SENSITIVITY)
+    assertEquals("END_SENSITIVITY_LOW", LiveVadConfig.END_SENSITIVITY)
     assertTrue(
-      "Silence window should respond fast (~0.6s) after denoised hangover",
-      LiveVadConfig.SILENCE_DURATION_MS in 500..750,
+      "Silence window should stay in natural anti-cutoff window (700..900ms)",
+      LiveVadConfig.SILENCE_DURATION_MS in 700..900,
     )
     assertTrue(
-      "Mic hangover should stay crisp so total delay stays ~0.8-1.5s",
-      LiveVadConfig.MIC_HANGOVER_MS in 150L..350L,
+      "Mic hangover should bridge brief syllable pauses cleanly (280..400ms)",
+      LiveVadConfig.MIC_HANGOVER_MS in 280L..400L,
     )
     val cfg = LiveVadConfig.buildRealtimeInputConfigJson().getJSONObject("automaticActivityDetection")
     assertFalse(cfg.getBoolean("disabled"))
@@ -400,7 +406,7 @@ class LxrAllFixesTest {
     assertTrue(RiyaPersona.TEXT.contains("ZERO-EXCUSE"))
     assertTrue(RiyaPersona.TEXT.contains("3D Cartoon Animation, Movie & Episodic Series Studio"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
-    assertTrue("Zero-delay flush must stay <= 200ms", LiveVadConfig.END_OF_TURN_FLUSH_MS <= 200L)
+    assertTrue("End-of-turn flush window must stay balanced to avoid clipping", LiveVadConfig.END_OF_TURN_FLUSH_MS in 200L..600L)
     assertTrue("Prefix padding must stay tight", LiveVadConfig.PREFIX_PADDING_MS <= 30)
   }
 
@@ -675,5 +681,79 @@ class LxrAllFixesTest {
     assertTrue(LxrStorageCategory.entries.any { it.folderName == "APK" })
     assertTrue(LxrDownloadStorage.termuxSyncDirectoriesCommand().contains("YouTube_SEO"))
     tempProjectDir.deleteRecursively()
+  }
+
+  @Test
+  fun emptyTurnFlushGuardAndLockSilence_preventPhantomReconnectsAndUnlockedChatter() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    assertTrue(NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(0))
+    assertTrue(NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(1))
+    assertFalse(NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(2))
+
+    val unlockedReport = LockVaultManager.describeLivePhoneState(ctx, null)
+    assertFalse(unlockedReport.summaryBn.contains("খোলা ও আনলক আছে"))
+    assertFalse(unlockedReport.summaryBn.contains("অ্যাপস লক খোলা আছে"))
+
+    val unlockedSnap =
+      LiveObservationSnapshot(
+        foregroundPackage = "com.whatsapp",
+        openChatName = "Boss Chat",
+        isLocked = false,
+        batteryPct = 82,
+        isCharging = false,
+        accessibilityOn = true,
+        dhakaTimeBn = "02:00 PM",
+      )
+    val compact = unlockedSnap.toCompactContextBn()
+    assertFalse(compact.contains("আনলক"))
+    assertFalse(compact.contains("খোলা আছে"))
+  }
+
+  @Test
+  fun providerOrchestratorAndReplica11StagePipeline_redactSecretsAndRemainHonest() {
+    val ctx = ApplicationProvider.getApplicationContext<Context>()
+    val dirtyLog = "Push failed for github_pat_11CS4URXI0cs4JITl4njlq_ABC123 and AIzaSyDummySecret1234567 and Bearer my_secret_token_999"
+    val cleanLog = LxrSecretRedactor.redactSecrets(dirtyLog)
+    assertFalse(cleanLog.contains("github_pat_"))
+    assertFalse(cleanLog.contains("AIzaSyDummy"))
+    assertFalse(cleanLog.contains("my_secret_token_999"))
+    assertTrue(cleanLog.contains("[REDACTED]"))
+
+    LxrUsageLedger.resetForTest()
+    val snap0 = LxrUsageLedger.snapshot.value
+    assertEquals("Unknown / Not reported", snap0.llmTokensLabelBn())
+    assertTrue(snap0.videoCreditsLabelBn().contains("Not reported"))
+
+    LxrStudioHandoff.clear()
+    LxrStudioHandoff.publishVideoHandoff(
+      projectTitle = "3D Cartoon Village",
+      scriptSummary = "Educational kids cartoon",
+      actualDurationSec = 30,
+      aspectRatioLabel = "9:16 Portrait",
+      sceneHeadlines = listOf("Scene 1", "Scene 2"),
+      mp4Path = "/tmp/demo.mp4",
+      publicFolderLabel = "Download/LxR/Videos",
+    )
+    assertEquals("3D Cartoon Village", LxrStudioHandoff.latestVideoHandoff.value?.projectTitle)
+    LxrStudioHandoff.clear()
+
+    assertEquals(11, ReplicaPipelineStage.entries.size)
+    assertTrue(ReplicaPipelineStage.DEPLOY.requiresApproval)
+    assertFalse(ReplicaPipelineStage.BUILD.requiresApproval)
+    assertFalse(ctx.packageName.isBlank())
+  }
+
+  @Test
+  fun voiceMatchShortOnsetExtraction_succeedsWithoutFailingQuickSpeechOnsets() {
+    val samples = 1100 // ~68ms at 16kHz (< 3200 threshold) -> should extract with minRequiredFrames = 2
+    val pcm = ByteArray(samples * 2)
+    for (i in 0 until samples) {
+      val v = (6500.0 * sin(2.0 * PI * 210.0 * i / 16000.0)).toInt().coerceIn(-32768, 32767)
+      pcm[i * 2] = (v and 0xFF).toByte()
+      pcm[i * 2 + 1] = ((v ushr 8) and 0xFF).toByte()
+    }
+    val sig = VoiceMatchEngine.extractSignature(pcm)
+    assertNotNull("Short voiced onset buffer (~68ms) should produce a valid signature", sig)
+    assertTrue(sig!!.voicedFrames >= 2)
   }
 }

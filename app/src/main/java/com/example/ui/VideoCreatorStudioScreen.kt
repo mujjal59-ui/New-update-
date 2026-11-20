@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -83,7 +84,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.service.LxrUsageLedger
 import com.example.service.RiyaVoiceManager
+import java.util.Locale
 import com.example.video.DurationPreset
 import com.example.video.MotionChoreography
 import com.example.video.OpenMontageFrameworkBridge
@@ -110,6 +113,7 @@ fun VideoCreatorStudioScreen(
 ) {
   BackHandler(onBack = back)
   val state by vm.uiState.collectAsState()
+  val usage by LxrUsageLedger.snapshot.collectAsState()
   val ctx = LocalContext.current
 
   val pickVisualLauncher =
@@ -204,6 +208,76 @@ fun VideoCreatorStudioScreen(
           }
         }
 
+        // 0. MINI PRODUCTION WORLD (9 Stations) + HONEST USAGE LEDGER
+        Column(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .testTag("mini_production_world_strip")
+              .clip(RoundedCornerShape(16.dp))
+              .background(Color(0xFF0C142B))
+              .border(1.dp, CYBER_CYAN.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+              .padding(12.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            "LXR--AI Mini Production World (৯ স্টেশন দ্রুত অ্যাক্সেস)",
+            color = CYBER_CYAN,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+          )
+          val stations =
+            listOf(
+              "Story Room" to { vm.selectToolTab(ProductionToolTab.SCRIPT) },
+              "Character Studio" to { vm.toggleCartoonSeriesStudio(true) },
+              "Animation Studio" to { vm.toggleCartoonSeriesStudio(true) },
+              "Voice Studio" to { vm.selectToolTab(ProductionToolTab.VOICE_OVER) },
+              "Camera & Scene" to { vm.setShowSettingsSheet(true) },
+              "Editing Room" to { vm.selectToolTab(ProductionToolTab.EDIT) },
+              "Rendering Center" to { vm.startFullPipeline() },
+              "AI Engine Center" to { vm.setShowOpenMontageDetails(true) },
+              "Resource Center" to { vm.selectToolTab(ProductionToolTab.IMAGE_VIDEO) },
+            )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            stations.forEach { (stationTitle, action) ->
+              OutlinedButton(
+                onClick = action,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
+              ) {
+                Text(stationTitle, color = Color.White, fontSize = 11.sp)
+              }
+            }
+          }
+
+          Column(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .testTag("video_usage_ledger_strip")
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF070C1A))
+                .border(1.dp, Color(0xFF233052), RoundedCornerShape(10.dp))
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            Text(
+              "প্রকৃত ব্যবহার (Honest Telemetry) • LLM: ${usage.llmTokensLabelBn()} • Credits: ${usage.videoCreditsLabelBn()}",
+              color = CYBER_GREEN,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+              "Render: ${String.format(Locale.US, "%.1fs", usage.renderTimeSec)} • Download/LxR: ${usage.storageLabelBn()}",
+              color = Color(0xFFCBD5E1),
+              fontSize = 10.sp,
+            )
+          }
+        }
+
         // 1. ONE LINE TO VIDEO PROMPT BOX + GALLERY UPLOAD
         OneLinePromptCard(
           state = state,
@@ -241,7 +315,12 @@ fun VideoCreatorStudioScreen(
         OpenMontageIntegrationCard(state = state, vm = vm)
 
         // 4. 12-STAGE PROGRESS DASHBOARD & EXPORTS
-        ProgressDashboardCard(progress = state.progress, project = state.activeProject, vm = vm)
+        ProgressDashboardCard(
+          progress = state.progress,
+          project = state.activeProject,
+          vm = vm,
+          onNavigate = onNavigate,
+        )
 
         Spacer(Modifier.height(18.dp))
       }

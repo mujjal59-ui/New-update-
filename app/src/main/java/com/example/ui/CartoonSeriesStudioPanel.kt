@@ -56,10 +56,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.video.AnimationFormat
 import com.example.video.CameraShotType
 import com.example.video.CharacterAgeGroup
@@ -139,6 +141,32 @@ fun CartoonSeriesStudioPanel(
       ) {
         Text(if (state.showCartoonSeriesStudio) "সংক্ষেপ" else "পূর্ণ স্টুডিও", color = CYBER_AMBER, fontSize = 11.5.sp)
       }
+    }
+
+    // Visual 3D Character Expression Reference Sheet Preview
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("cartoon_character_reference_sheet_card")
+          .clip(RoundedCornerShape(12.dp))
+          .background(Color(0xFF0A1024))
+          .border(1.dp, CYBER_CYAN.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+          .padding(8.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Image(
+        painter = painterResource(id = R.drawable.character_reference_sheet),
+        contentDescription = "3D Character Reference Sheet: Happy, Surprised, Thinking, Winking, Sad, Angry",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxWidth().height(128.dp).clip(RoundedCornerShape(8.dp)),
+      )
+      Text(
+        "অভিব্যক্তি সেট (Reference Sheet): Happy • Surprised • Thinking • Winking • Sad • Angry",
+        color = CYBER_CYAN,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+      )
     }
 
     // 1. UNLIMITED CHARACTER LIBRARY (1–4 simultaneous actors + Reference Image binding)

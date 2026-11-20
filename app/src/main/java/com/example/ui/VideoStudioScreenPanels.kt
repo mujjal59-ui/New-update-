@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
@@ -578,6 +580,7 @@ fun ProgressDashboardCard(
   progress: StudioProgressState,
   project: VideoProject?,
   vm: VideoStudioViewModel,
+  onNavigate: (String) -> Unit = {},
 ) {
   val ctx = LocalContext.current
   Column(
@@ -698,6 +701,16 @@ fun ProgressDashboardCard(
         ArtifactShareChip("Voice .WAV", art.voiceWavPath, "audio/wav")
         ArtifactShareChip("Subtitle .SRT", art.subtitleSrtPath, "application/x-subrip")
         ArtifactShareChip("OpenMontage .ZIP", art.projectBundleZipPath, "application/zip")
+      }
+
+      Button(
+        onClick = { vm.sendActiveVideoToSeoStudio(onNavigate) },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("video_send_to_seo_btn"),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF179E), contentColor = Color.White),
+      ) {
+        Icon(Icons.Filled.AutoGraph, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("YouTube SEO স্টুডিওতে পাঠান", fontWeight = FontWeight.Bold, fontSize = 12.sp)
       }
     }
   }

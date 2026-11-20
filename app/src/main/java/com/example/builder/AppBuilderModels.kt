@@ -152,6 +152,46 @@ enum class DevelopmentStage(val stepNumber: Int, val titleBn: String) {
   APPLICATION_BUILD(10, "Application Build & Verify"),
 }
 
+enum class ReplicaPipelineStage(
+  val stepNumber: Int,
+  val titleEn: String,
+  val titleBn: String,
+  val requiresApproval: Boolean = false,
+) {
+  RECON(1, "Recon", "প্রজেক্ট ও স্ট্রাকচার বিশ্লেষণ"),
+  ARCHITECT(2, "Architect", "আর্কিটেকচার ও প্যাকেজ পরিকল্পনা"),
+  DESIGN(3, "Design", "Material 3 ও থিম ডিজাইন"),
+  BUILD(4, "Build", "সোর্স কোড ও রিসোর্স তৈরি"),
+  BACKEND(5, "Backend", "লোকাল/ডেটা স্টোরেজ লেয়ার"),
+  TEST(6, "Test", "বিল্ড ও স্ট্রাকচার যাচাই"),
+  DIFF(7, "Diff", "পরিবর্তিত ফাইল সামারি"),
+  ENTREPRENEUR(8, "Entrepreneur", "ব্যবহারকারীর মান ও প্রোডাক্ট যাচাই"),
+  BRAND(9, "Brand", "নাম, আইকন ও প্লে-স্টোর প্রস্তুতি"),
+  LAUNCH(10, "Launch", "Download/LxR ও Termux প্যাকেজ"),
+  DEPLOY(11, "Deploy", "APK এক্সপোর্ট ও ইনস্টল (অনুমতিসহ)", requiresApproval = true),
+}
+
+enum class TermuxExecutionState(val labelBn: String) {
+  IDLE("Idle"),
+  QUEUED("Queued"),
+  RUNNING("Running"),
+  SUCCEEDED("Succeeded"),
+  FAILED("Failed"),
+  CANCELLED("Cancelled"),
+}
+
+data class TermuxCommandTelemetry(
+  val commandPreview: String = "",
+  val workingDir: String = "~/storage/downloads/LxR/Apps",
+  val outputMode: String = "Buffered Callback",
+  val state: TermuxExecutionState = TermuxExecutionState.IDLE,
+  val exitCode: Int? = null,
+  val startedAtLabel: String = "",
+  val finishedAtLabel: String = "",
+  val changedFilesSummary: String = "0 files",
+  val apkVariantLabel: String = "Debug APK (debugConfig)",
+)
+
 enum class BuildStatus(val labelBn: String) {
   IDLE("প্রস্তুত"),
   GENERATING("কোড ও স্ট্রাকচার তৈরি হচ্ছে..."),
@@ -251,5 +291,12 @@ sealed class BuilderConfirmationRequest {
     BuilderConfirmationRequest() {
     override val title = "ফাইল Overwrite নিশ্চিত করুন"
     override val message = "'$filePath' ফাইলে পূর্বের পরিবর্তনের ওপর নতুন কোড সংরক্ষণ করা হবে।"
+  }
+
+  data class DeployProject(val projectName: String, val onConfirmDeploy: () -> Unit) :
+    BuilderConfirmationRequest() {
+    override val title = "Deploy / Install নিশ্চিত করবেন?"
+    override val message =
+      "'$projectName' প্রজেক্টের চূড়ান্ত Deploy ধাপ (APK এক্সপোর্ট ও ইনস্টল প্রস্তুতি) শুরু করতে আপনার অনুমতি দিন।"
   }
 }

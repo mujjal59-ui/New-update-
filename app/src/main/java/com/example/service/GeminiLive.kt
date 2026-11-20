@@ -68,12 +68,12 @@ data class PendingIncomingMessage(
 
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
-  const val END_SENSITIVITY = "END_SENSITIVITY_HIGH"
+  const val END_SENSITIVITY = "END_SENSITIVITY_LOW"
   const val PREFIX_PADDING_MS = 20
-  // Combined with 150ms hangover + 175ms audioStreamEnd flush -> instant zero-delay replies after Boss finishes speaking
-  const val SILENCE_DURATION_MS = 500
-  const val MIC_HANGOVER_MS = 150L
-  const val END_OF_TURN_FLUSH_MS = 175L
+  // Balanced anti-cutoff timings: never chop Boss mid-sentence on brief breaths while keeping replies crisp
+  const val SILENCE_DURATION_MS = 740
+  const val MIC_HANGOVER_MS = 320L
+  const val END_OF_TURN_FLUSH_MS = 460L
 
   fun buildRealtimeInputConfigJson(): JSONObject =
     JSONObject().put(
@@ -447,7 +447,7 @@ class GeminiLive(private val ctx: Context) {
             if (stopped) return@execute
             try {
               observeLiveLockAndScreen1s()
-              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
+              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 10 else 8
               if (liveWatchTick % imageEveryTicks == 0) {
                 watchScreen()
               }
@@ -466,6 +466,9 @@ class GeminiLive(private val ctx: Context) {
           watchdogTick++
           if (watchdogTick % 5 == 0) refreshSlowNetworkState()
           val now = System.currentTimeMillis()
+          if (waitingServerReply && lastSpeakerWriteMs > lastBossTurnAtMs) {
+            waitingServerReply = false
+          }
           val qBytes = ws?.queueSize() ?: 0L
           val bossTurnElapsed = if (lastBossTurnAtMs > 0L) now - lastBossTurnAtMs else 0L
           val serverSilence = if (lastServerActivityMs > 0L) now - lastServerActivityMs else 0L
@@ -478,8 +481,13 @@ class GeminiLive(private val ctx: Context) {
                 queueBytes = qBytes,
               )
             ) {
-              waitingServerReply = false
-              fail("সার্ভারের উত্তর বিলম্বিত বা বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
+              val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+              if (!NetworkStabilityGuard.hasValidatedInternet(cm)) {
+                RiyaState.status.value = "ইন্টারনেট সংযোগের অপেক্ষায়…"
+              } else {
+                waitingServerReply = false
+                fail("সার্ভারের উত্তর বিলম্বিত বা বাফার জমে গেছে — পুনরায় সংযোগ হচ্ছে…")
+              }
             }
           }
         } catch (_: Throwable) {}
@@ -703,7 +711,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun watchScreen() {
-    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
+    if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || activeTurnHasStartedOutput || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
     if ((ws?.queueSize() ?: 0L) > 1_500L) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
@@ -937,11 +945,16 @@ class GeminiLive(private val ctx: Context) {
       RiyaState.status.value = "Menu থেকে API Key দিন"
       return
     }
+    waitingServerReply = false
+    suppressStaleModelAudio = false
+    activeTurnHasStartedOutput = false
     audioPlaybackEpoch.incrementAndGet()
     try {
       ws?.cancel()
     } catch (_: Exception) {}
-    RiyaState.status.value = "Connecting…"
+    if (failCount == 0) {
+      RiyaState.status.value = "Connecting…"
+    }
     val url =
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$key"
     var me: WebSocket? = null
@@ -1015,18 +1028,22 @@ class GeminiLive(private val ctx: Context) {
 
   private fun fail(msg: String) {
     ready = false
+    waitingServerReply = false
+    activeTurnHasStartedOutput = false
     if (stopped) return
     lastErr = msg
     failCount++
-    RiyaState.status.value = "পুনরায় সংযোগ হচ্ছে…"
+    RiyaState.status.value =
+      if (failCount <= 1) "সংযোগ স্থাপন হচ্ছে…" else "পুনরায় সংযোগ হচ্ছে…"
     if (pending) return
     pending = true
+    val retryDelayMs = (minOf(failCount, 4) * 900L).coerceIn(1000L, 4500L)
     main.postDelayed(
       {
         pending = false
         if (!stopped) connect()
       },
-      1200,
+      retryDelayMs,
     )
   }
 
@@ -1046,7 +1063,8 @@ class GeminiLive(private val ctx: Context) {
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Live Observation: EVERY 0.1s (BACKGROUND) | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
       - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
-      - Response Speed & Zero-Delay Turn Discipline (ULTRA-CRITICAL): বসের কথা শেষ হওয়া মাত্রই পরিষ্কার বাংলায় একক, স্থির ও প্রাকৃতিক কণ্ঠে একটি পূর্ণাঙ্গ উত্তর দেবে (দ্বিখণ্ডিত/দ্বৈত কণ্ঠ নয়)। স্ক্রিন আনলক থাকলে কখনোই আনলকের কথা বারবার বলবে না।
+      - Natural Complete Human Voice Discipline (ULTRA-CRITICAL): বসের কথা সম্পূর্ণ শোনার পর পরিষ্কার, আন্তরিক, বাস্তব মানুষের মতো বাংলায় একটি একক ও সম্পূর্ণ উত্তর বলো — কথার মাঝখানে অযথা থেমে যাবে না এবং কখনোই দ্বৈত বা ভাঙা কণ্ঠ তৈরি করবে না।
+      - STRICT LOCK & SILENCE DISCIPLINE: স্ক্রিন বা অ্যাপ আনলক অবস্থায় থাকলে কখনোই "অ্যাপস লক খোলা আছে", "অ্যাপ লক স্ক্রিন খোলা আছে", "স্ক্রিন আনলক আছে" বা "স্ক্রিন খোলা আছে" বলবে না। কেবল আসল লক স্ক্রিন বাধা দিলে বা বস জিজ্ঞেস করলে তবেই লকের কথা বলবে।
 
       ${RiyaPersona.TEXT}
 
@@ -1111,6 +1129,7 @@ class GeminiLive(private val ctx: Context) {
       }
       j.optJSONObject("serverContent")?.let { sc ->
         if (sc.optBoolean("interrupted")) {
+          waitingServerReply = false
           suppressStaleModelAudio = false
           activeTurnHasStartedOutput = false
           interruptSpeakerForBoss()
@@ -2468,12 +2487,13 @@ class GeminiLive(private val ctx: Context) {
           var silentFrameCounter = 0
           var consecutiveLoudMicChunks = 0
           var bossActiveSpeechThisTurn = false
+          var sentSpeechChunksThisTurn = 0
           val preRollRing = ArrayDeque<ByteArray>(2)
           val bargeVerifyStream = java.io.ByteArrayOutputStream()
 
           // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
           var gateState = 0
-          val onsetChunks = ArrayList<ByteArray>(16)
+          val onsetChunks = ArrayList<ByteArray>(24)
           val rejectedRing = ArrayDeque<ByteArray>(8)
           val verifyStream = java.io.ByteArrayOutputStream()
           var consecutiveRejects = 0
@@ -2489,7 +2509,8 @@ class GeminiLive(private val ctx: Context) {
             RiyaState.voiceMatchLiveLabel.value = ""
           }
 
-          fun sendAudioPcm(chunk: ByteArray, len: Int) {
+          fun sendAudioPcm(chunk: ByteArray, len: Int, countAsSpeech: Boolean = false) {
+            if (countAsSpeech) sentSpeechChunksThisTurn++
             val d = Base64.encodeToString(chunk, 0, len, Base64.NO_WRAP)
             ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
           }
@@ -2543,29 +2564,39 @@ class GeminiLive(private val ctx: Context) {
                     recentlyWrote &&
                     head < lastAudibleEndFrame
                 }
+              // Bridge brief 50-350ms WebSocket audio jitter gaps while LxR is actively speaking a sentence
+              val activeModelTurnAudioHold =
+                activeTurnHasStartedOutput && lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) < 950L
+              val speakerSpeakingGuardNow = isSpeakerAudiblyPlayingNow || activeModelTurnAudioHold
               val ttsSpeakingNow = RiyaVoiceManager.isActivelySpeaking()
-              if (isSpeakerAudiblyPlayingNow || ttsSpeakingNow) {
+              if (speakerSpeakingGuardNow || ttsSpeakingNow) {
                 lastAudibleStopMs = now
               } else if (rawRms < 6000.0) {
                 lastSpeakerOutputRms *= 0.85
               }
 
-              if ((isSpeakerAudiblyPlayingNow || ttsSpeakingNow) && rawRms >= maxOf(8500.0, lastSpeakerOutputRms * 2.1)) {
+              if ((speakerSpeakingGuardNow || ttsSpeakingNow) && rawRms >= maxOf(9500.0, lastSpeakerOutputRms * 2.4)) {
                 consecutiveLoudMicChunks++
               } else {
                 consecutiveLoudMicChunks = 0
               }
 
-              // Multi-chunk Voice Match barge-in check (~80ms+) so Boss can interrupt A-to-Z immediately
+              // Multi-chunk Voice Match barge-in check (~160ms+ clear speech) so faint room noise never stops LxR mid-sentence
               var voiceMatchBargeInNow = false
-              if ((isSpeakerAudiblyPlayingNow || ttsSpeakingNow) && voiceMatchActive && vmProfile != null && vmProfile.isComplete && rawRms >= 550.0) {
+              if (
+                (speakerSpeakingGuardNow || ttsSpeakingNow) &&
+                  voiceMatchActive &&
+                  vmProfile != null &&
+                  vmProfile.isComplete &&
+                  rawRms >= maxOf(1800.0, lastSpeakerOutputRms * 1.35)
+              ) {
                 bargeVerifyStream.write(buf, 0, n)
-                if (bargeVerifyStream.size() >= 2560) {
+                if (bargeVerifyStream.size() >= 5120) {
                   val res = VoiceMatchEngine.verifyPcmChunk(vmProfile, bargeVerifyStream.toByteArray(), vmSensitivity)
                   if (res?.matched == true) {
                     voiceMatchBargeInNow = true
                     bargeVerifyStream.reset()
-                  } else if (bargeVerifyStream.size() >= 7680) {
+                  } else if (bargeVerifyStream.size() >= 10240) {
                     bargeVerifyStream.reset()
                   }
                 }
@@ -2573,23 +2604,34 @@ class GeminiLive(private val ctx: Context) {
                 if (bargeVerifyStream.size() > 0) bargeVerifyStream.reset()
               }
 
+              val directLoudBargeIn =
+                !voiceMatchActive &&
+                  consecutiveLoudMicChunks >= 4 &&
+                  rawRms >= maxOf(9500.0, lastSpeakerOutputRms * 2.4)
+
               val isSoftMuted =
                 AudioEchoGuard.shouldMuteMicWithBargeIn(
                   usingBtAudio = usingBtAudio,
                   nowMs = now,
                   micMuteUntilMs = micMuteUntilMs,
-                  isSpeakerAudiblyPlayingNow = isSpeakerAudiblyPlayingNow,
+                  isSpeakerAudiblyPlayingNow = speakerSpeakingGuardNow,
                   ttsIsSpeaking = ttsSpeakingNow,
                   lastAudibleStopMs = lastAudibleStopMs,
                   rawRms = rawRms,
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
-                  consecutiveLoudChunks = consecutiveLoudMicChunks,
-                  phoneTailHoldMs = 260L,
+                  consecutiveLoudChunks = if (directLoudBargeIn) consecutiveLoudMicChunks else 0,
+                  phoneTailHoldMs = 480L,
                 )
 
-              if (!isSoftMuted && isSpeakerAudiblyPlayingNow && !ttsSpeakingNow) {
-                // Boss actively interrupted LXR mid-speech! Flush playback immediately so LXR stops talking and listens.
+              if (
+                !isSoftMuted &&
+                  speakerSpeakingGuardNow &&
+                  !ttsSpeakingNow &&
+                  (voiceMatchBargeInNow || directLoudBargeIn)
+              ) {
+                // Genuine Boss interruption mid-speech: flush playback cleanly so LxR listens
+                sentSpeechChunksThisTurn = 0
                 interruptSpeakerForBoss()
               }
 
@@ -2602,6 +2644,7 @@ class GeminiLive(private val ctx: Context) {
                   buf.fill(0, 0, n)
                   lastVoiceMs = 0L
                   bossActiveSpeechThisTurn = false
+                  sentSpeechChunksThisTurn = 0
                   preRollRing.clear()
                   LxrAudioNoiseSuppressor.FrameResult(0.0, 45.0, false)
                 } else {
@@ -2628,26 +2671,31 @@ class GeminiLive(private val ctx: Context) {
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
               val withinEndOfTurnSilence =
                 !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.END_OF_TURN_FLUSH_MS
+              val withinVmPauseGrace =
+                voiceMatchActive && gateState == 1 && !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= 650L
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
 
-              // When Boss stops speaking and silence reaches END_OF_TURN_FLUSH_MS (380ms) -> flush stream immediately so Gemini replies within ~1s!
+              // Wait until Boss finishes full phrase (END_OF_TURN_FLUSH_MS) before flushing turn
               val justEndedTurn =
                 !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > LiveVadConfig.END_OF_TURN_FLUSH_MS
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
                 if (justEndedTurn) {
-                  sendAudioStreamEndFlush()
                   bossActiveSpeechThisTurn = false
-                  waitingServerReply = true
-                  lastBossTurnAtMs = now
                   silentFrameCounter = 1
+                  if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
+                    sendAudioStreamEndFlush()
+                    waitingServerReply = true
+                    lastBossTurnAtMs = now
+                  }
+                  sentSpeechChunksThisTurn = 0
                 } else if (withinHangover) {
                   if (isTurnOnset && preRollRing.isNotEmpty()) {
-                    for (pre in preRollRing) sendAudioPcm(pre, pre.size)
+                    for (pre in preRollRing) sendAudioPcm(pre, pre.size, countAsSpeech = true)
                     preRollRing.clear()
                   }
-                  sendAudioPcm(buf, n)
+                  sendAudioPcm(buf, n, countAsSpeech = true)
                 } else if (withinEndOfTurnSilence) {
                   // Stream 100% continuous silence frames during VAD window (never skip frames) so server clock advances at 1.0x
                   sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
@@ -2657,18 +2705,39 @@ class GeminiLive(private val ctx: Context) {
                 }
               } else {
                 if (justEndedTurn) {
-                  sendAudioStreamEndFlush()
-                  bossActiveSpeechThisTurn = false
-                  waitingServerReply = true
-                  lastBossTurnAtMs = now
-                  silentFrameCounter = 1
-                } else if (isSoftMuted || !withinHangover) {
-                  if (gateState == 1 && !isSoftMuted && onsetChunks.isNotEmpty() && verifyStream.size() >= 1600) {
+                  if (gateState == 1 && onsetChunks.isNotEmpty() && verifyStream.size() >= 1920) {
                     val quickRes = VoiceMatchEngine.verifyPcmChunk(activeProfile, verifyStream.toByteArray(), vmSensitivity)
                     if (quickRes != null && quickRes.matched) {
                       lastBossVerifiedAtMs = now
                       for (pendingChunk in onsetChunks) {
-                        sendAudioPcm(pendingChunk, pendingChunk.size)
+                        sendAudioPcm(pendingChunk, pendingChunk.size, countAsSpeech = true)
+                      }
+                    }
+                  }
+                  bossActiveSpeechThisTurn = false
+                  silentFrameCounter = 1
+                  if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
+                    sendAudioStreamEndFlush()
+                    waitingServerReply = true
+                    lastBossTurnAtMs = now
+                  }
+                  sentSpeechChunksThisTurn = 0
+                  if (gateState != 0) {
+                    gateState = 0
+                    onsetChunks.clear()
+                    rejectedRing.clear()
+                    verifyStream.reset()
+                    consecutiveRejects = 0
+                    rejectedSpeechChunks = 0
+                    RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
+                  }
+                } else if (isSoftMuted || (!withinHangover && !withinVmPauseGrace)) {
+                  if (gateState == 1 && !isSoftMuted && onsetChunks.isNotEmpty() && verifyStream.size() >= 1920) {
+                    val quickRes = VoiceMatchEngine.verifyPcmChunk(activeProfile, verifyStream.toByteArray(), vmSensitivity)
+                    if (quickRes != null && quickRes.matched) {
+                      lastBossVerifiedAtMs = now
+                      for (pendingChunk in onsetChunks) {
+                        sendAudioPcm(pendingChunk, pendingChunk.size, countAsSpeech = true)
                       }
                     }
                   }
@@ -2686,12 +2755,17 @@ class GeminiLive(private val ctx: Context) {
                   } else if (silentFrameCounter % 50 == 0) {
                     sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
+                } else if (!withinHangover && withinVmPauseGrace) {
+                  // Keep gateState == 1 intact across short intra-word pauses so slow speech isn't dropped
+                  if (silentFrameCounter % 4 == 0) {
+                    sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
+                  }
                 } else {
                   val sendChunk = buf.copyOf(n)
                   val minOnset = vmSensitivity.onsetMinChunks
                   val rejectAt = vmSensitivity.rejectAfterChunks
-                  // Boss session grace window (~4.5s): follow-up words pass immediately unless another speaker takes over
-                  if (gateState == 0 && lastBossVerifiedAtMs > 0L && (now - lastBossVerifiedAtMs) <= 4500L) {
+                  // Boss session grace window (~12s): follow-up words pass smoothly without re-stalling
+                  if (gateState == 0 && lastBossVerifiedAtMs > 0L && (now - lastBossVerifiedAtMs) <= 12_000L) {
                     gateState = 2
                     consecutiveRejects = 0
                     verifyStream.reset()
@@ -2718,7 +2792,7 @@ class GeminiLive(private val ctx: Context) {
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
                           for (pendingChunk in onsetChunks) {
-                            sendAudioPcm(pendingChunk, pendingChunk.size)
+                            sendAudioPcm(pendingChunk, pendingChunk.size, countAsSpeech = true)
                           }
                           onsetChunks.clear()
                         } else if (res != null && !res.matched && onsetChunks.size >= rejectAt) {
@@ -2730,12 +2804,12 @@ class GeminiLive(private val ctx: Context) {
                           verifyStream.reset()
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔇 অন্য কণ্ঠ এভোয়েড (${res.confidencePercent}%)"
-                        } else if (onsetChunks.size >= 16) {
+                        } else if (onsetChunks.size >= 24) {
                           gateState = 0
                           onsetChunks.clear()
                           verifyStream.reset()
                         }
-                      } else if (onsetChunks.size >= 16) {
+                      } else if (onsetChunks.size >= 24) {
                         gateState = 0
                         onsetChunks.clear()
                         verifyStream.reset()
@@ -2743,7 +2817,7 @@ class GeminiLive(private val ctx: Context) {
                     }
                     2 -> {
                       lastBossVerifiedAtMs = now
-                      sendAudioPcm(sendChunk, sendChunk.size)
+                      sendAudioPcm(sendChunk, sendChunk.size, countAsSpeech = true)
                       if (vmSampleChunk != null && hasSpeech) {
                         verifyStream.write(vmSampleChunk)
                       }
@@ -2801,7 +2875,7 @@ class GeminiLive(private val ctx: Context) {
                           RiyaState.voiceMatchLiveLabel.value =
                             "🔓 বস ভয়েস মিলেছে (${res.confidencePercent}%)"
                           for (buffered in rejectedRing) {
-                            sendAudioPcm(buffered, buffered.size)
+                            sendAudioPcm(buffered, buffered.size, countAsSpeech = true)
                           }
                           rejectedRing.clear()
                         } else {

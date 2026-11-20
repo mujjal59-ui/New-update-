@@ -4,7 +4,14 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.service.LxrDownloadStorage
+import com.example.service.LxrSecretRedactor
+import com.example.service.LxrStorageCategory
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +20,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 enum class IdeWorkspaceTab(val titleBn: String) {
   DASHBOARD("ড্যাশবোর্ড"),
@@ -37,7 +46,10 @@ data class AppBuilderUiState(
   val editorModified: Boolean = false,
   val pipelineProgress: Float = 0f,
   val currentStage: DevelopmentStage? = null,
+  val replicaStage: ReplicaPipelineStage = ReplicaPipelineStage.RECON,
+  val completedReplicaStages: Set<ReplicaPipelineStage> = emptySet(),
   val termuxStepLabel: String = "",
+  val termuxTelemetry: TermuxCommandTelemetry = TermuxCommandTelemetry(),
   val isGenerating: Boolean = false,
   val isBuilding: Boolean = false,
   val consoleLogs: List<String> = emptyList(),
@@ -92,10 +104,11 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
             editorText = if (!state.editorModified && proj != null) proj.files[fileKey].orEmpty() else state.editorText,
             pipelineProgress = snap.pipelineProgress,
             currentStage = snap.currentStage ?: state.currentStage,
+            replicaStage = snap.currentStage?.let { mapToReplicaStage(it) } ?: state.replicaStage,
             termuxStepLabel = snap.termuxStepLabel,
             isGenerating = snap.isGenerating,
             isBuilding = snap.isBuilding,
-            consoleLogs = snap.consoleLogs,
+            consoleLogs = snap.consoleLogs.map { LxrSecretRedactor.redactSecrets(it) },
             errorDiagnosis = snap.errorDiagnosis,
             lastErrorSignature = snap.lastErrorSignature,
             autoFixAttempts = snap.autoFixAttempts,
@@ -267,7 +280,18 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           isGenerating = true,
           pipelineProgress = 0.05f,
           currentStage = DevelopmentStage.REQUIREMENT_ANALYSIS,
+          replicaStage = ReplicaPipelineStage.RECON,
+          completedReplicaStages = emptySet(),
           termuxStepLabel = "সোর্স কোড ও ডিজাইন তৈরি হচ্ছে...",
+          termuxTelemetry =
+            TermuxCommandTelemetry(
+              commandPreview = "generate_android_project(${draft.slug})",
+              workingDir = "~/storage/downloads/LxR/Apps/${draft.slug}",
+              outputMode = "Buffered Callback",
+              state = TermuxExecutionState.RUNNING,
+              startedAtLabel = dhakaTimeLabel(),
+              apkVariantLabel = "${draft.buildMode.labelBn} (debugConfig)",
+            ),
           consoleLogs = listOf("▶ স্বয়ংক্রিয় অ্যাপ ডেভেলপমেন্ট পাইপলাইন শুরু হয়েছে..."),
           errorDiagnosis = null,
           lastErrorSignature = null,
@@ -281,11 +305,16 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
         val completed =
           withContext(Dispatchers.Default) {
             AppProjectGenerator.runAutomaticDevelopmentPipeline(draft) { stage, prog, logLine ->
+              val mapped = mapToReplicaStage(stage)
+              val safeLog = LxrSecretRedactor.redactSecrets(logLine)
               _uiState.update { cur ->
+                val nextDone = cur.completedReplicaStages + cur.replicaStage
                 cur.copy(
                   currentStage = stage,
+                  replicaStage = mapped,
+                  completedReplicaStages = if (mapped == ReplicaPipelineStage.RECON) emptySet() else nextDone,
                   pipelineProgress = prog,
-                  consoleLogs = (cur.consoleLogs + logLine).takeLast(140),
+                  consoleLogs = (cur.consoleLogs + safeLog).takeLast(140),
                 )
               }
             }
@@ -296,6 +325,11 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
         val termux = withContext(Dispatchers.IO) { TermuxBuildBridge.inspectEnvironment(ctx, repo, saved) }
         val history = withContext(Dispatchers.IO) { repo.loadProjectHistory() }
         val defaultFile = pickDefaultEditorFile(saved)
+        val stageSet =
+          ReplicaPipelineStage.entries.filter { it.stepNumber <= ReplicaPipelineStage.LAUNCH.stepNumber }.toSet()
+        withContext(Dispatchers.IO) {
+          persistStagesJson(saved, ReplicaPipelineStage.LAUNCH, stageSet)
+        }
 
         _uiState.update { cur ->
           val syncMsg =
@@ -306,25 +340,41 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           cur.copy(
             isGenerating = false,
             pipelineProgress = 1f,
+            replicaStage = ReplicaPipelineStage.LAUNCH,
+            completedReplicaStages = stageSet,
             termuxStepLabel = "প্রজেক্ট কোড তৈরি সম্পন্ন ✓",
+            termuxTelemetry =
+              cur.termuxTelemetry.copy(
+                state = TermuxExecutionState.SUCCEEDED,
+                exitCode = 0,
+                finishedAtLabel = dhakaTimeLabel(),
+                changedFilesSummary = "${saved.files.size} files (${saved.language.extension})",
+              ),
             activeProject = saved,
             history = history,
             termuxStatus = termux,
             selectedFilePath = defaultFile,
             editorText = saved.files[defaultFile].orEmpty(),
             editorModified = false,
-            consoleLogs = (cur.consoleLogs + syncMsg).takeLast(140),
+            consoleLogs = (cur.consoleLogs + LxrSecretRedactor.redactSecrets(syncMsg)).takeLast(140),
             statusBanner = "'${saved.name}' এর সম্পূর্ণ সোর্স কোড ও প্রজেক্ট তৈরি সম্পন্ন ✓",
           )
         }
       } catch (e: CancellationException) {
         throw e
       } catch (e: Exception) {
+        val safeErr = LxrSecretRedactor.redactSecrets(e.message ?: "Unknown error")
         _uiState.update { cur ->
           cur.copy(
             isGenerating = false,
-            consoleLogs = (cur.consoleLogs + "✗ জেনারেশন ত্রুটি: ${e.message}").takeLast(140),
-            statusBanner = "প্রজেক্ট জেনারেশনে সমস্যা: ${e.message}",
+            termuxTelemetry =
+              cur.termuxTelemetry.copy(
+                state = TermuxExecutionState.FAILED,
+                exitCode = 1,
+                finishedAtLabel = dhakaTimeLabel(),
+              ),
+            consoleLogs = (cur.consoleLogs + "✗ জেনারেশন ত্রুটি: $safeErr").takeLast(140),
+            statusBanner = "প্রজেক্ট জেনারেশনে সমস্যা: $safeErr",
           )
         }
       }
@@ -504,6 +554,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
         }
       }
       is BuilderConfirmationRequest.OverwriteExistingProject -> pending.onConfirmAction()
+      is BuilderConfirmationRequest.DeployProject -> pending.onConfirmDeploy()
       is BuilderConfirmationRequest.OverwriteEditedFile -> {
         val project = _uiState.value.activeProject ?: return
         val nextFiles = project.files.toMutableMap().apply { put(pending.filePath, pending.newContent) }
@@ -526,13 +577,55 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
     _uiState.update { it.copy(pendingConfirmation = null) }
   }
 
+  fun requestDeployProject() {
+    val project = _uiState.value.activeProject ?: return
+    _uiState.update {
+      it.copy(
+        pendingConfirmation =
+          BuilderConfirmationRequest.DeployProject(project.name) {
+            val doneSet = _uiState.value.completedReplicaStages + ReplicaPipelineStage.DEPLOY
+            _uiState.update { cur ->
+              cur.copy(
+                replicaStage = ReplicaPipelineStage.DEPLOY,
+                completedReplicaStages = doneSet,
+                statusBanner = "'${project.name}' Deploy অনুমোদিত হয়েছে ✓",
+              )
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+              persistStagesJson(project, ReplicaPipelineStage.DEPLOY, doneSet)
+            }
+            val apk = project.apkResult
+            if (apk.exists && apk.apkFilePath.isNotBlank()) {
+              val err = installBuiltApk()
+              if (err != null) {
+                _uiState.update { cur -> cur.copy(statusBanner = err) }
+              }
+            }
+          }
+      )
+    }
+  }
+
   fun syncAndBuildViaTermux() {
     val project = _uiState.value.activeProject ?: return
     _uiState.update {
       it.copy(
         isBuilding = true,
         errorDiagnosis = null,
+        replicaStage = ReplicaPipelineStage.LAUNCH,
         termuxStepLabel = "Termux বিল্ড শুরু হচ্ছে...",
+        termuxTelemetry =
+          TermuxCommandTelemetry(
+            commandPreview = "bash build_lxr_app.sh (${project.buildMode.gradleTask})",
+            workingDir = "~/storage/downloads/LxR/Apps/${project.slug}",
+            outputMode = "Buffered Callback",
+            state = TermuxExecutionState.RUNNING,
+            startedAtLabel = dhakaTimeLabel(),
+            changedFilesSummary = "${project.files.size} files",
+            apkVariantLabel =
+              if (project.buildMode == ApkBuildMode.RELEASE) "Release APK"
+              else "Debug APK (debugConfig)",
+          ),
         activeTab = IdeWorkspaceTab.BUILD,
       )
     }
@@ -550,7 +643,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
         } else if (extraLog.isNotBlank()) {
           addAll(extraLog.lines().filter { it.isNotBlank() }.takeLast(20))
         }
-      }.distinct().takeLast(140)
+      }.map { LxrSecretRedactor.redactSecrets(it) }.distinct().takeLast(140)
 
       if (foundApk != null && foundApk.exists) {
         val exportName = "${project.slug}-${project.buildMode.name.lowercase()}.apk"
@@ -565,15 +658,28 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
               lastDiagnosis = null,
             )
           )
+        val doneSet =
+          _uiState.value.completedReplicaStages +
+            ReplicaPipelineStage.entries.filter { it.stepNumber <= ReplicaPipelineStage.LAUNCH.stepNumber }
+        persistStagesJson(updated, ReplicaPipelineStage.LAUNCH, doneSet)
         val history = repo.loadProjectHistory()
         _uiState.update {
           it.copy(
             isBuilding = false,
             activeProject = updated,
             history = history,
+            replicaStage = ReplicaPipelineStage.LAUNCH,
+            completedReplicaStages = doneSet,
             consoleLogs = mergedLogs,
             errorDiagnosis = null,
             termuxStepLabel = "APK তৈরি ও যাচাই সম্পন্ন ✓",
+            termuxTelemetry =
+              it.termuxTelemetry.copy(
+                state = TermuxExecutionState.SUCCEEDED,
+                exitCode = 0,
+                finishedAtLabel = dhakaTimeLabel(),
+                changedFilesSummary = "${updated.files.size} files",
+              ),
             statusBanner = "APK সফলভাবে যাচাই হয়েছে (${verified.sizeBytes / 1024} KB) ✓",
           )
         }
@@ -599,15 +705,16 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
 
   fun handleBuildFailureLog(errorLog: String) {
     val project = _uiState.value.activeProject ?: return
+    val redactedError = LxrSecretRedactor.redactSecrets(errorLog)
     val nextAttempt = _uiState.value.autoFixAttempts + 1
     val prevSig = _uiState.value.lastErrorSignature
     val (diagnosis, repairedFiles) =
-      AutoErrorFixer.diagnoseAndRepair(project, errorLog, prevSig, nextAttempt)
+      AutoErrorFixer.diagnoseAndRepair(project, redactedError, prevSig, nextAttempt)
 
     val signature =
-      errorLog.lineSequence().firstOrNull {
+      redactedError.lineSequence().firstOrNull {
         it.contains("error", ignoreCase = true) || it.contains("failed", ignoreCase = true)
-      }?.trim()?.take(120) ?: errorLog.trim().take(120)
+      }?.trim()?.take(120) ?: redactedError.trim().take(120)
 
     viewModelScope.launch(Dispatchers.IO) {
       val updatedProject =
@@ -615,7 +722,7 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           project.copy(
             files = repairedFiles,
             buildStatus = if (diagnosis.autoFixApplied && !diagnosis.isRepeatedSameError) BuildStatus.AUTO_FIXING else BuildStatus.FAILED,
-            buildLogs = (_uiState.value.consoleLogs + errorLog.lines().takeLast(20)).takeLast(140),
+            buildLogs = (_uiState.value.consoleLogs + redactedError.lines().takeLast(20)).map { LxrSecretRedactor.redactSecrets(it) }.takeLast(140),
             lastDiagnosis = diagnosis,
           )
         )
@@ -629,6 +736,12 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           lastErrorSignature = signature,
           autoFixAttempts = nextAttempt,
           consoleLogs = updatedProject.buildLogs,
+          termuxTelemetry =
+            it.termuxTelemetry.copy(
+              state = TermuxExecutionState.FAILED,
+              exitCode = 1,
+              finishedAtLabel = dhakaTimeLabel(),
+            ),
           statusBanner =
             if (diagnosis.isRepeatedSameError) "একই Error বারবার হচ্ছে — Error Panel দেখুন।"
             else if (diagnosis.autoFixApplied) "অটো-ফিক্স প্রয়োগ হয়েছে — পুনরায় Build দিন।"
@@ -676,10 +789,21 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
       _uiState.update { it.copy(statusBanner = "Termux-এ চালানোর জন্য একটি কমান্ড লিখুন।") }
       return
     }
-    val safeLabel = cmd.take(100)
+    val safeLabel = LxrSecretRedactor.redactSecrets(cmd.take(100))
+    val activeSlug = _uiState.value.activeProject?.slug ?: "workspace"
     _uiState.update { cur ->
       cur.copy(
         consoleLogs = (cur.consoleLogs + "▶ Termux cmd: $safeLabel").takeLast(140),
+        termuxTelemetry =
+          cur.termuxTelemetry.copy(
+            commandPreview = safeLabel,
+            workingDir = "~/storage/downloads/LxR/Apps/$activeSlug",
+            outputMode = "Buffered Callback",
+            state = TermuxExecutionState.RUNNING,
+            exitCode = null,
+            startedAtLabel = dhakaTimeLabel(),
+            finishedAtLabel = "",
+          ),
         statusBanner = "Termux কমান্ড চালানো হচ্ছে...",
       )
     }
@@ -696,10 +820,18 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
           TermuxBuildBridge.openTermuxApp(ctx)
           "✓ কমান্ড ক্লিপবোর্ডে কপি করে Termux খোলা হয়েছে (সরাসরি পেস্ট অটোমেশনের জন্য Accessibility চালু করুন)।"
         }
+      val redactedResult = LxrSecretRedactor.redactSecrets(resultText)
+      val failed = redactedResult.startsWith("✗")
       _uiState.update { cur ->
         cur.copy(
-          consoleLogs = (cur.consoleLogs + resultText).takeLast(140),
-          statusBanner = resultText.take(120),
+          consoleLogs = (cur.consoleLogs + redactedResult).takeLast(140),
+          termuxTelemetry =
+            cur.termuxTelemetry.copy(
+              state = if (failed) TermuxExecutionState.FAILED else TermuxExecutionState.SUCCEEDED,
+              exitCode = if (failed) 1 else 0,
+              finishedAtLabel = dhakaTimeLabel(),
+            ),
+          statusBanner = redactedResult.take(120),
         )
       }
     }
@@ -750,6 +882,54 @@ class AppBuilderViewModel(application: Application) : AndroidViewModel(applicati
     return project.files.keys.firstOrNull { it.endsWith("MainActivity.kt") || it.endsWith("MainActivity.java") }
       ?: project.files.keys.firstOrNull { it.endsWith("activity_main.xml") }
       ?: project.files.keys.first()
+  }
+
+  private fun dhakaTimeLabel(): String =
+    SimpleDateFormat("hh:mm:ss a 'BST'", Locale.US)
+      .apply { timeZone = TimeZone.getTimeZone("Asia/Dhaka") }
+      .format(Date())
+
+  private fun mapToReplicaStage(stage: DevelopmentStage): ReplicaPipelineStage =
+    when (stage) {
+      DevelopmentStage.REQUIREMENT_ANALYSIS -> ReplicaPipelineStage.RECON
+      DevelopmentStage.APP_ARCHITECTURE -> ReplicaPipelineStage.ARCHITECT
+      DevelopmentStage.UI_UX_DESIGN -> ReplicaPipelineStage.DESIGN
+      DevelopmentStage.SOURCE_CODE,
+      DevelopmentStage.RESOURCE_FILES -> ReplicaPipelineStage.BUILD
+      DevelopmentStage.DEPENDENCIES -> ReplicaPipelineStage.BACKEND
+      DevelopmentStage.BUILD_CONFIG -> ReplicaPipelineStage.TEST
+      DevelopmentStage.PROJECT_STRUCTURE -> ReplicaPipelineStage.DIFF
+      DevelopmentStage.ASSETS_RESOURCES -> ReplicaPipelineStage.BRAND
+      DevelopmentStage.APPLICATION_BUILD -> ReplicaPipelineStage.LAUNCH
+    }
+
+  private fun persistStagesJson(
+    proj: AppBuilderProject,
+    current: ReplicaPipelineStage,
+    completed: Set<ReplicaPipelineStage>,
+  ) {
+    runCatching {
+      val root =
+        JSONObject().apply {
+          put("projectId", proj.id)
+          put("projectName", proj.name)
+          put("slug", proj.slug)
+          put("currentStage", current.name)
+          put("updatedAtDhaka", dhakaTimeLabel())
+          put(
+            "completedStages",
+            JSONArray().apply { completed.sortedBy { it.stepNumber }.forEach { put(it.name) } },
+          )
+        }
+      LxrDownloadStorage.saveTextDeliverable(
+        context = ctx,
+        category = LxrStorageCategory.APPS,
+        projectSlug = proj.slug,
+        fileName = "stages.json",
+        content = root.toString(2),
+        preserveUnique = false,
+      )
+    }
   }
 }
 

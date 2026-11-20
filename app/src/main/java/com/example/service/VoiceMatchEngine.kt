@@ -240,6 +240,7 @@ object VoiceMatchEngine {
     val adaptiveGate = maxOf(10f, minOf(peakRms * 0.18f, noiseFloor * 1.40f + 10f))
 
     // Compute mean active RMS so soft voice gets clean gain normalization before FFT & pitch estimation
+    val minRequiredFrames = if (samples.size < 3200) 2 else 4
     var activeRmsSum = 0.0
     var activeFrames = 0
     for (fIdx in frameStarts.indices) {
@@ -249,7 +250,7 @@ object VoiceMatchEngine {
         activeFrames++
       }
     }
-    if (activeFrames < 4) return null
+    if (activeFrames < minRequiredFrames) return null
     val meanActiveRms = (activeRmsSum / activeFrames).toFloat().coerceAtLeast(10f)
     // Scale both ultra-soft whisper (~30 RMS) AND loud shouting (~18000 RMS) cleanly to a neutral 2200 RMS
     val normGain = (2200f / meanActiveRms).coerceIn(0.35f, 24f)
@@ -326,7 +327,7 @@ object VoiceMatchEngine {
       voicedCount++
     }
 
-    if (voicedCount < 4) return null
+    if (voicedCount < minRequiredFrames) return null
 
     for (c in 0 until MFCC_COUNT) {
       accumMfcc[c] /= voicedCount.toFloat()

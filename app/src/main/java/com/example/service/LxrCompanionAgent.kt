@@ -50,7 +50,7 @@ data class LiveObservationSnapshot(
     buildString {
       append("অ্যাপ: ${foregroundPackage.ifBlank { "অজানা" }}")
       if (!openChatName.isNullOrBlank()) append(" | খোলা চ্যাট: $openChatName")
-      append(" | স্ক্রিন: ${if (isLocked) lockPhase.name else "UNLOCKED"}")
+      if (isLocked) append(" | লক অবস্থা: ${lockPhase.name}")
       append(" | ব্যাটারি: ${if (batteryPct >= 0) "$batteryPct%" else "N/A"}${if (isCharging) "(Charging)" else ""}")
       append(" | Wi-Fi: ${if (wifiOn) "ON" else "OFF"}")
       append(" | BT: ${if (bluetoothOn) "ON" else "OFF"}")
@@ -102,6 +102,10 @@ object NetworkStabilityGuard {
     if (queueBytes > 1_200_000L) return true
     return waitingServerReply && bossTurnElapsedMs > 45_000L && serverSilenceMs > 35_000L
   }
+
+  /** Prevents sending empty audioStreamEnd flushes when Voice Match discarded ambient noise or short blips. */
+  fun shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn: Int): Boolean =
+    sentSpeechChunksThisTurn < 2
 }
 
 object UnlockPolicyGuard {
