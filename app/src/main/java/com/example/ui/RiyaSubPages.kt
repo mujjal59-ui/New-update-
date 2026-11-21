@@ -129,6 +129,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.example.data.HomeTheme
+import com.example.data.ReplyDelayOption
+import com.example.data.ReplyLimitOption
+import com.example.data.RiyaPreferences
 import com.example.data.RiyaState
 import com.example.data.Store
 import com.example.data.VoiceGender
@@ -515,6 +519,10 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var youKey by remember { mutableStateOf(Store.youApiKey(ctx)) }
   var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
   var show by remember { mutableStateOf(false) }
+  val voicePrefs = remember { RiyaPreferences(ctx) }
+  val voiceScope = rememberCoroutineScope()
+  var selectedReplyDelay by remember { mutableStateOf(Store.replyDelayOption(ctx)) }
+  var selectedReplyLimit by remember { mutableStateOf(Store.replyLimitOption(ctx)) }
 
   // 3-step Voice Match state inside Gemini API Key & Voice section
   var vmEnabled by remember { mutableStateOf(Store.voiceMatchEnabled(ctx)) }
@@ -971,6 +979,22 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         )
       }
     }
+
+    // Voice Section: Reply Delay and Reply Limit (auto-saved; running waits keep old duration)
+    ReplyDelayLimitPanel(
+      selectedDelay = selectedReplyDelay,
+      selectedLimit = selectedReplyLimit,
+      onSelectDelay = { option ->
+        selectedReplyDelay = option
+        Store.setReplyDelaySeconds(ctx, option.seconds)
+        voiceScope.launch { voicePrefs.updateReplyDelaySeconds(option.seconds) }
+      },
+      onSelectLimit = { option ->
+        selectedReplyLimit = option
+        Store.setReplyLimitMax(ctx, option.maxReplies)
+        voiceScope.launch { voicePrefs.updateReplyLimitMax(option.maxReplies) }
+      },
+    )
 
     // Voice Match Tool (3-Step Speaker Identification & Non-Boss Voice Avoidance)
     Column(
@@ -1840,6 +1864,70 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         modifier = Modifier.testTag("floating_orb_toggle"),
         colors = SwitchDefaults.colors(checkedTrackColor = CYBER_AMBER, checkedThumbColor = Color.White),
       )
+    }
+
+    // Extra Themes Selector Card (Master Portrait / Aria Cyber Room / Mitali Cyber Studio)
+    var activeThemeId by remember { mutableIntStateOf(Store.design(ctx)) }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("settings_extra_themes_card")
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.dp, CYBER_CYAN.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(Icons.Filled.Layers, "Extra Themes", listOf(CYBER_PURPLE, CYBER_CYAN), sizeDp = 38)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text("হোম স্ক্রিন অ্যানিমেটেড থিম (Extra Themes)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+          Text("সব বাটন ও ফাংশন অপরিবর্তিত রেখে থিম পরিবর্তন করুন", color = Color(0xFFAAB4D0), fontSize = 11.sp)
+        }
+      }
+      HomeTheme.entries.forEach { theme ->
+        val selected = activeThemeId == theme.id
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .heightIn(min = 48.dp)
+              .testTag("settings_theme_option_${theme.id}")
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (selected) CYBER_CYAN.copy(alpha = 0.16f) else Color(0xFF0E152E))
+              .border(
+                1.dp,
+                if (selected) CYBER_CYAN else Color(0xFF2D3759),
+                RoundedCornerShape(12.dp),
+              )
+              .clickable {
+                activeThemeId = theme.id
+                Store.setHomeTheme(ctx, theme)
+                note = "থিম পরিবর্তন হয়েছে: ${theme.titleBn} ✓"
+              }
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(Modifier.weight(1f)) {
+            Text(
+              theme.titleBn,
+              color = if (selected) CYBER_CYAN else Color.White,
+              fontWeight = FontWeight.Bold,
+              fontSize = 13.sp,
+            )
+            Text(theme.subtitleBn, color = Color(0xFFAAB4D0), fontSize = 11.sp)
+          }
+          if (selected) {
+            Icon(
+              Icons.Filled.CheckCircle,
+              contentDescription = "Selected theme",
+              tint = CYBER_GREEN,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+      }
     }
 
     // Smartphone Screen Lock & App Lock Vault Card

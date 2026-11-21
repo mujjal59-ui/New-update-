@@ -87,6 +87,52 @@ data class GeminiVoiceOption(
   val toneBn: String,
 )
 
+enum class HomeTheme(
+  val id: Int,
+  val titleBn: String,
+  val subtitleBn: String,
+) {
+  LXR_STUDIO(0, "LXR AI মাস্টার স্টুডিও", "লকড পোর্ট্রেট, L X.R গ্লোব ও ফুল সাইবার অ্যানিমেশন"),
+  ARIA_CYBER_ROOM(1, "Aria সাইবার AI রুম", "হলোগ্রাফিক AI গ্লোব ও নিওন ফ্লোর থিম"),
+  MITALI_CYBER_STUDIO(2, "মীতালী AI স্টুডিও", "সাইবার রুম ও প্রাণবন্ত মীতালী চরিত্র"),
+  ;
+
+  companion object {
+    fun fromId(id: Int): HomeTheme = entries.firstOrNull { it.id == id } ?: LXR_STUDIO
+  }
+}
+
+enum class ReplyDelayOption(
+  val seconds: Int,
+  val optionLabel: String,
+  val selectedLabel: String,
+) {
+  INSTANT(0, "Instant — 0 sec (Default)", "Selected: Instant (0s)"),
+  FAST(8, "Fast — 8 sec", "Selected: Fast (8s)"),
+  NORMAL(15, "Normal — 15 sec", "Selected: Normal (15s)"),
+  ;
+
+  companion object {
+    fun fromSeconds(sec: Int): ReplyDelayOption = entries.firstOrNull { it.seconds == sec } ?: INSTANT
+  }
+}
+
+enum class ReplyLimitOption(
+  val maxReplies: Int,
+  val optionLabel: String,
+  val selectedLabel: String,
+) {
+  UNLIMITED(-1, "Unlimited — Default", "Selected: Unlimited"),
+  LIMIT_20(20, "20 Replies", "Selected: 20 Replies"),
+  LIMIT_50(50, "50 Replies", "Selected: 50 Replies"),
+  ;
+
+  companion object {
+    fun fromMaxReplies(limit: Int): ReplyLimitOption =
+      entries.firstOrNull { it.maxReplies == limit } ?: UNLIMITED
+  }
+}
+
 object RiyaState {
   val running = MutableStateFlow(false)
   val resume = MutableStateFlow(0)
@@ -98,6 +144,7 @@ object RiyaState {
   val isBluetoothMicActive = MutableStateFlow(false)
   val networkSpeedLabel = MutableStateFlow("Fast")
   val voiceMatchLiveLabel = MutableStateFlow("")
+  val homeThemeIndex = MutableStateFlow(0)
 
   @Volatile var live: GeminiLive? = null
   @Volatile var cameraOn: Boolean = false
@@ -250,9 +297,39 @@ object Store {
 
   fun setAutoReplyMessenger(c: Context, v: Boolean) = p(c).edit().putBoolean("arMsg", v).apply()
 
-  fun design(c: Context): Int = p(c).getInt("design", 0)
+  fun design(c: Context): Int = p(c).getInt("design", 0).coerceIn(0, HomeTheme.entries.lastIndex)
 
-  fun setDesign(c: Context, v: Int) = p(c).edit().putInt("design", v).apply()
+  fun setDesign(c: Context, v: Int) {
+    val clamped = v.coerceIn(0, HomeTheme.entries.lastIndex)
+    p(c).edit().putInt("design", clamped).commit()
+    RiyaState.homeThemeIndex.value = clamped
+  }
+
+  fun homeTheme(c: Context): HomeTheme = HomeTheme.fromId(design(c))
+
+  fun setHomeTheme(c: Context, theme: HomeTheme) = setDesign(c, theme.id)
+
+  fun replyDelaySeconds(c: Context): Int =
+    ReplyDelayOption.fromSeconds(p(c).getInt("replyDelaySec", 0)).seconds
+
+  fun replyDelayOption(c: Context): ReplyDelayOption =
+    ReplyDelayOption.fromSeconds(replyDelaySeconds(c))
+
+  fun setReplyDelaySeconds(c: Context, seconds: Int) {
+    val valid = ReplyDelayOption.fromSeconds(seconds).seconds
+    p(c).edit().putInt("replyDelaySec", valid).commit()
+  }
+
+  fun replyLimitMax(c: Context): Int =
+    ReplyLimitOption.fromMaxReplies(p(c).getInt("replyLimitMax", -1)).maxReplies
+
+  fun replyLimitOption(c: Context): ReplyLimitOption =
+    ReplyLimitOption.fromMaxReplies(replyLimitMax(c))
+
+  fun setReplyLimitMax(c: Context, limit: Int) {
+    val valid = ReplyLimitOption.fromMaxReplies(limit).maxReplies
+    p(c).edit().putInt("replyLimitMax", valid).commit()
+  }
 
   fun always(c: Context): Boolean = p(c).getBoolean("always", false)
 

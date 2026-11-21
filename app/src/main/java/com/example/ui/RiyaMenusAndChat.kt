@@ -78,9 +78,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.RiyaAiRepository
+import com.example.data.HomeTheme
 import com.example.data.RiyaPreferences
 import com.example.data.RiyaState
 import com.example.data.Store
+import androidx.compose.foundation.horizontalScroll
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
 import com.example.service.RiyaAccessibilityService
@@ -422,6 +424,58 @@ fun RiyaThreeLineMenuDialog(
           modifier = Modifier.padding(vertical = 4.dp),
           color = Color.White.copy(alpha = 0.14f),
         )
+
+        val currentThemeId by RiyaState.homeThemeIndex.collectAsState()
+        Column(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .background(Color(0xFF150E2A), RoundedCornerShape(12.dp))
+              .border(1.dp, CYBER_CYAN.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+              .padding(horizontal = 10.dp, vertical = 8.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            "হোম অ্যানিমেটেড থিম (Extra Themes)",
+            color = CYBER_CYAN,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            HomeTheme.entries.forEach { t ->
+              val selected = currentThemeId == t.id
+              Text(
+                text =
+                  when (t) {
+                    HomeTheme.LXR_STUDIO -> "LXR স্টুডিও"
+                    HomeTheme.ARIA_CYBER_ROOM -> "Aria রুম"
+                    HomeTheme.MITALI_CYBER_STUDIO -> "মীতালী থিম"
+                  },
+                color = if (selected) Color.Black else Color.White,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier =
+                  Modifier
+                    .testTag("menu_theme_chip_${t.id}")
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (selected) CYBER_CYAN else Color(0xFF231942))
+                    .border(
+                      1.dp,
+                      if (selected) CYBER_CYAN else Color(0xFF475073),
+                      RoundedCornerShape(20.dp),
+                    )
+                    .clickable {
+                      Store.setHomeTheme(ctx, t)
+                      Toast.makeText(ctx, "${t.titleBn} চালু হয়েছে ✓", Toast.LENGTH_SHORT).show()
+                    }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+              )
+            }
+          }
+        }
 
         MenuToggleRow(
           icon = Icons.Filled.Shield,

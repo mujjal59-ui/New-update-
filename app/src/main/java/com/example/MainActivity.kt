@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,6 +81,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ai.configureAppCheck
+import com.example.data.HomeTheme
 import com.example.data.RiyaPreferences
 import com.example.data.RiyaRepository
 import com.example.data.RiyaSettings
@@ -103,8 +105,11 @@ import com.example.ui.CYBER_RED
 import com.example.ui.KeyPage
 import com.example.ui.LiveCamera
 import com.example.ui.LockVaultPage
+import com.example.ui.LxrDockAppsRow
 import com.example.ui.LxrLiveAvatarOverlay
 import com.example.ui.LxrThreeSectionRow
+import com.example.ui.LxrTopLeftMenuButton
+import com.example.ui.LxrVoiceControlStrip
 import com.example.ui.MemPage
 import com.example.ui.PermPage
 import com.example.ui.PlaybookPage
@@ -229,6 +234,10 @@ fun RiyaApp() {
     }
   }
   var camOn by remember { mutableStateOf(false) }
+
+  LaunchedEffect(Unit) {
+    RiyaState.homeThemeIndex.value = Store.design(ctx)
+  }
 
   val running by RiyaState.running.collectAsState()
   val status by RiyaState.status.collectAsState()
@@ -389,11 +398,6 @@ fun RiyaApp() {
 }
 
 @Composable
-private fun Hot(x: Dp, y: Dp, w: Dp, h: Dp, tag: String, onClick: () -> Unit) {
-  Box(Modifier.offset(x = x, y = y).size(w, h).testTag(tag).clickable(onClick = onClick))
-}
-
-@Composable
 fun RiyaHomeScreen(
   status: String,
   running: Boolean,
@@ -421,10 +425,12 @@ fun RiyaHomeScreen(
   val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
   val netLabel by RiyaState.networkSpeedLabel.collectAsState()
   val voiceMatchLabel by RiyaState.voiceMatchLiveLabel.collectAsState()
+  val themeIdx by RiyaState.homeThemeIndex.collectAsState()
+  val activeTheme = remember(themeIdx) { HomeTheme.fromId(themeIdx) }
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
-    val iw = 941f
-    val ih = 2091f
+    val iw = 841f
+    val ih = 1870f
     val sw = maxWidth.value
     val sh = maxHeight.value
     val scale = maxOf(sw / iw, sh / ih)
@@ -437,37 +443,66 @@ fun RiyaHomeScreen(
     fun py(fy: Float): Dp = (oy + fy * dh).dp
     fun pw(f: Float): Dp = (f * dw).dp
     fun ph(f: Float): Dp = (f * dh).dp
-    fun fy(f: Float): Float = (f * 1672f + 209f) / 2091f
-    fun fh(f: Float): Float = f * 1672f / 2091f
 
-    @Composable
-    fun hot(cx: Float, cy: Float, w: Float, h: Float, tag: String, onClick: () -> Unit) {
-      val cyP = fy(cy)
-      val hP = fh(h)
-      Hot(px(cx - w / 2f), py(cyP - hP / 2f), pw(w), ph(hP), tag, onClick)
-    }
+    val density = LocalDensity.current
+    val statusTopDp = with(density) { WindowInsets.statusBars.getTop(density).toDp().value }
+    val navBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp().value }
+
+    val safeBottomDp = sh - navBottomDp - 6f
+    val cardHeightDp = (sh * 0.088f).coerceIn(66f, 84f)
+    val totalSectionHeightDp = cardHeightDp + 18f
+    val sectionTopY =
+      minOf(oy + 0.842f * dh, safeBottomDp - totalSectionHeightDp)
+        .coerceAtLeast(oy + 0.822f * dh)
+
+    val dockApproxHeight = 68f
+    val dockTopY =
+      minOf(oy + 0.738f * dh, sectionTopY - dockApproxHeight - 8f)
+        .coerceAtLeast(0f)
+
+    val voiceStripHeight = 84f
+    val voiceStripTopY =
+      minOf(oy + 0.696f * dh - voiceStripHeight / 2f, dockTopY - voiceStripHeight)
+        .coerceAtLeast(0f)
+
+    val bgRes =
+      when (activeTheme) {
+        HomeTheme.LXR_STUDIO -> R.drawable.home_bg
+        HomeTheme.ARIA_CYBER_ROOM,
+        HomeTheme.MITALI_CYBER_STUDIO -> R.drawable.bg_aria
+      }
 
     Image(
-      painter = painterResource(R.drawable.home_bg),
+      painter = painterResource(bgRes),
       contentDescription = "LXR--AI home",
       modifier = Modifier.fillMaxSize(),
       contentScale = ContentScale.Crop,
     )
 
-    // Continuous background cyber animations, eye blinking, gentle smile & LXR--AI branding
+    // Continuous background cyber animations, natural eye blinking & Extra Theme character layer
     LxrLiveAvatarOverlay(
       ox = ox,
       oy = oy,
       dw = dw,
       dh = dh,
       isRunning = running,
+      homeTheme = activeTheme,
       px = ::px,
       py = ::py,
     )
 
-    // Top Status Pill & Live Warnings cleanly below holographic LXR--AI header
+    // Top-left animated Menu button matching exact purple orb placement below ChatGPT panel
+    val menuTopY = maxOf(oy + 0.148f * dh, statusTopDp + 8f)
+    val menuLeftX = maxOf(ox + 0.045f * dw, 14f)
+    LxrTopLeftMenuButton(
+      onClick = onMenu,
+      modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
+    )
+
+    // Top Status Pill & Live Warnings cleanly in the open sky gap under L X.R globe & above character
+    val statusPillTopY = maxOf(oy + 0.156f * dh, statusTopDp + 10f)
     Column(
-      modifier = Modifier.align(Alignment.TopCenter).offset(y = py(0.246f)),
+      modifier = Modifier.align(Alignment.TopCenter).offset(y = statusPillTopY.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
@@ -616,9 +651,10 @@ fun RiyaHomeScreen(
       Column(
         modifier =
           Modifier
-            .align(Alignment.BottomCenter)
+            .align(Alignment.TopCenter)
             .padding(horizontal = 18.dp)
-            .offset(y = -ph(0.28f))
+            .offset(y = (voiceStripTopY - 134f).coerceAtLeast(180f).dp)
+            .widthIn(max = 560.dp)
             .fillMaxWidth()
             .background(Color(0xE8100A24), RoundedCornerShape(18.dp))
             .border(1.5.dp, CYBER_CYAN, RoundedCornerShape(18.dp))
@@ -718,41 +754,45 @@ fun RiyaHomeScreen(
       }
     }
 
-    // Exact UI artwork hotspots matching Screenshot_20261114-011443_d15b6446.jpg
-    hot(0.104f, 0.057f, 0.14f, 0.075f, "menu_button", onMenu)
-    hot(0.256f, 0.811f, 0.16f, 0.06f, "cam_button", onCam)
-    hot(0.5f, 0.804f, 0.22f, 0.12f, "mic_button", onMic)
-    hot(0.741f, 0.811f, 0.16f, 0.06f, "chat_button", onChat)
-
-    hot(0.123f, 0.904f, 0.14f, 0.08f, "dock_whatsapp") { launchPkg(ctx, "com.whatsapp", "com.whatsapp.w4b") }
-    hot(0.275f, 0.904f, 0.14f, 0.08f, "dock_imo") {
-      launchPkg(ctx, "com.imo.android.imoim", "com.imo.android.imoimhd", "com.imo.android.imoimbeta")
-    }
-    hot(0.427f, 0.904f, 0.14f, 0.08f, "dock_messenger") { launchPkg(ctx, "com.facebook.orca", "com.facebook.mlite") }
-    hot(0.581f, 0.904f, 0.14f, 0.08f, "dock_youtube") { launchPkg(ctx, "com.google.android.youtube") }
-    hot(0.735f, 0.904f, 0.14f, 0.08f, "dock_contacts") {
-      ctx.startActivity(
-        Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
-          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    // 1. Animated Voice Control Strip: Camera, Centered Microphone (breathing rings + waves), Chat
+    Box(
+      modifier = Modifier.fillMaxWidth().offset(y = voiceStripTopY.dp),
+      contentAlignment = Alignment.TopCenter,
+    ) {
+      LxrVoiceControlStrip(
+        isRunning = running,
+        camOn = camOn,
+        onCam = onCam,
+        onMic = onMic,
+        onChat = onChat,
+        modifier = Modifier.widthIn(max = 600.dp),
       )
     }
-    hot(0.887f, 0.904f, 0.14f, 0.08f, "dock_settings", onSettings)
 
-    // 5. New Three Premium Section Buttons + Neon Divider directly below the 6 App Icons
-    val density = LocalDensity.current
-    val navBottomDp = with(density) { WindowInsets.navigationBars.getBottom(density).toDp().value }
-    val dockVisualBottomDp = oy + 0.861f * dh
-    val safeBottomDp = sh - navBottomDp - 4f
-    val spaceBelowDock = (safeBottomDp - dockVisualBottomDp).coerceAtLeast(0f)
-    val cardHeightDp = (spaceBelowDock - 22f).coerceIn(64f, 88f)
-    val totalSectionHeightDp = cardHeightDp + 19f
-    val sectionTopY =
-      minOf(
-          dockVisualBottomDp + 3f,
-          safeBottomDp - totalSectionHeightDp,
-        )
-        .coerceAtLeast(oy + 0.848f * dh)
+    // 2. Animated 6-Icon Cyber Dock: WhatsApp, IMO, Messenger, YouTube, Contacts, Settings (rotating gear)
+    Box(
+      modifier = Modifier.fillMaxWidth().offset(y = dockTopY.dp),
+      contentAlignment = Alignment.TopCenter,
+    ) {
+      LxrDockAppsRow(
+        onWhatsApp = { launchPkg(ctx, "com.whatsapp", "com.whatsapp.w4b") },
+        onImo = {
+          launchPkg(ctx, "com.imo.android.imoim", "com.imo.android.imoimhd", "com.imo.android.imoimbeta")
+        },
+        onMessenger = { launchPkg(ctx, "com.facebook.orca", "com.facebook.mlite") },
+        onYouTube = { launchPkg(ctx, "com.google.android.youtube") },
+        onContacts = {
+          ctx.startActivity(
+            Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          )
+        },
+        onSettings = onSettings,
+        modifier = Modifier.widthIn(max = 600.dp),
+      )
+    }
 
+    // 3. Animated Three Section Cards ("অ্যাপস তৈরি", "ভিডিও তৈরি", "YouTube ভিডিও SEO") + Neon Divider
     Box(
       modifier = Modifier.fillMaxWidth().offset(y = sectionTopY.dp),
       contentAlignment = Alignment.TopCenter,

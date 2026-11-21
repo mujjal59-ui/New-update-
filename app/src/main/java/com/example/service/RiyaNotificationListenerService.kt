@@ -414,13 +414,37 @@ class RiyaNotificationListenerService : NotificationListenerService() {
               (replyPair != null || Keep.accessibilityOn(ctx)) &&
               RiyaRuntimeBridge.canAutoReplyToSender(senderCooldownKey)
           ) {
+            val capturedDelaySec = ReplyPolicyScheduler.captureDelaySeconds(ctx)
+            val currentLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
+            if (!ReplyPolicyScheduler.canSendReply(currentLimit)) {
+              repo.updateAutoReplyStatus(eventKey, "LIMIT_REACHED", immediateTemplate)
+              RiyaState.addLog("Reply Limit ($currentLimit) পূর্ণ হয়েছে — $appLabel ($sender) এর অটো রিপ্লাই থামানো হয়েছে।")
+              RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, event, notifId)
+              return@launch
+            }
+
             val smartReply =
               kotlinx.coroutines.withTimeoutOrNull(2200L) {
                 aiRepo.generateSmartAutoReply(appLabel, sender, msgText, immediateTemplate).getOrNull()
               } ?: immediateTemplate
             RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, smartReply)
 
-            val sent = sendApprovedReply(ctx, eventKey, smartReply)
+            val sent =
+              ReplyPolicyScheduler.executeAfterCapturedDelay(
+                initialDelaySeconds = capturedDelaySec,
+                onBeforeExecute = {
+                  val latestLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
+                  ReplyPolicyScheduler.tryRecordReply(latestLimit)
+                },
+              ) {
+                sendApprovedReply(ctx, eventKey, smartReply)
+              } ?: run {
+                val latestLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
+                repo.updateAutoReplyStatus(eventKey, "LIMIT_REACHED", smartReply)
+                RiyaState.addLog("Reply Limit ($latestLimit) পূর্ণ হয়েছে — $appLabel ($sender) এর অটো রিপ্লাই থামানো হয়েছে।")
+                false
+              }
+
             repo.updateAutoReplyStatus(
               eventKey,
               if (sent) "AUTO_SENT" else "FAILED",

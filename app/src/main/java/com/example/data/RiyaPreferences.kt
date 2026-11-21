@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +27,8 @@ data class RiyaSettings(
   val enforceFullScreenRead: Boolean = true,
   val fastExecutionMode: Boolean = true,
   val autoAnnounceAccessibilityLoss: Boolean = true,
+  val replyDelaySeconds: Int = 0,
+  val replyLimitMax: Int = -1,
 )
 
 class RiyaPreferences(private val context: Context) {
@@ -65,6 +68,8 @@ class RiyaPreferences(private val context: Context) {
     val ENFORCE_SCREEN_READ = booleanPreferencesKey("enforce_screen_read")
     val FAST_EXECUTION = booleanPreferencesKey("fast_execution")
     val ANNOUNCE_A11Y_LOSS = booleanPreferencesKey("announce_a11y_loss")
+    val REPLY_DELAY_SEC = intPreferencesKey("reply_delay_seconds")
+    val REPLY_LIMIT_MAX = intPreferencesKey("reply_limit_max")
   }
 
   val settingsFlow: Flow<RiyaSettings> =
@@ -81,6 +86,8 @@ class RiyaPreferences(private val context: Context) {
         enforceFullScreenRead = prefs[Keys.ENFORCE_SCREEN_READ] ?: true,
         fastExecutionMode = prefs[Keys.FAST_EXECUTION] ?: true,
         autoAnnounceAccessibilityLoss = prefs[Keys.ANNOUNCE_A11Y_LOSS] ?: true,
+        replyDelaySeconds = ReplyDelayOption.fromSeconds(prefs[Keys.REPLY_DELAY_SEC] ?: 0).seconds,
+        replyLimitMax = ReplyLimitOption.fromMaxReplies(prefs[Keys.REPLY_LIMIT_MAX] ?: -1).maxReplies,
       )
     }
 
@@ -125,5 +132,15 @@ class RiyaPreferences(private val context: Context) {
 
   suspend fun updateFastExecution(fast: Boolean) {
     context.riyaDataStore.edit { it[Keys.FAST_EXECUTION] = fast }
+  }
+
+  suspend fun updateReplyDelaySeconds(seconds: Int) {
+    val valid = ReplyDelayOption.fromSeconds(seconds).seconds
+    context.riyaDataStore.edit { it[Keys.REPLY_DELAY_SEC] = valid }
+  }
+
+  suspend fun updateReplyLimitMax(maxReplies: Int) {
+    val valid = ReplyLimitOption.fromMaxReplies(maxReplies).maxReplies
+    context.riyaDataStore.edit { it[Keys.REPLY_LIMIT_MAX] = valid }
   }
 }

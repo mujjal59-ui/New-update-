@@ -2,9 +2,15 @@ package com.example.ui
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -291,12 +297,21 @@ private fun FuturisticNeonSectionCard(
     label = "section_card_scale",
   )
 
+  val auraInf = rememberInfiniteTransition(label = "section_neon_pulse")
+  val breathingPulse by
+    auraInf.animateFloat(
+      initialValue = 0.85f,
+      targetValue = 1.20f,
+      animationSpec = infiniteRepeatable(tween(2100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+      label = "section_breathing",
+    )
+
   val glowIntensity by animateFloatAsState(
     targetValue =
       when {
-        isPressed -> 1.35f
-        isHovered -> 1.18f
-        else -> 1f
+        isPressed -> 1.40f
+        isHovered -> 1.24f
+        else -> breathingPulse
       },
     label = "section_card_glow",
   )
