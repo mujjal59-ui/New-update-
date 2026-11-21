@@ -1905,6 +1905,12 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                 activeThemeId = theme.id
                 Store.setHomeTheme(ctx, theme)
                 note = "থিম পরিবর্তন হয়েছে: ${theme.titleBn} ✓"
+                if (theme != HomeTheme.LXR_STUDIO) {
+                  try {
+                    com.example.service.RiyaVoiceManager.initialize(ctx)
+                    com.example.service.RiyaVoiceManager.speak(theme.greetingBn, interrupt = true)
+                  } catch (_: Exception) {}
+                }
               }
               .padding(horizontal = 12.dp, vertical = 10.dp),
           verticalAlignment = Alignment.CenterVertically,

@@ -239,7 +239,7 @@ fun LxrThreeSectionRow(
         }
       }
 
-      // 3. YouTube ভিডিও SEO — Purple + Magenta Glow
+      // 3. YouTube ভিডিও SEO — Pink + Red Neon Glow
       FuturisticNeonSectionCard(
         label = seoStudioLabel,
         accessibilityLabel = seoStudioCd,
@@ -247,9 +247,9 @@ fun LxrThreeSectionRow(
         cardHeight = cardHeight,
         fontSize = twoLineFont,
         lineHeight = if (isCompactWidth) 12.5.sp else 14.sp,
-        borderColors = listOf(Color(0xFFA855F7), Color(0xFFFF179E), Color(0xFFD946EF)),
+        borderColors = listOf(Color(0xFFFF1744), Color(0xFFFF179E), Color(0xFFD946EF)),
         fillColors = listOf(Color(0xED4A044E), Color(0xEE220736), Color(0xF60E041A)),
-        glowColors = listOf(Color(0xFFFF179E), Color(0xFF9C27B0)),
+        glowColors = listOf(Color(0xFFFF1744), Color(0xFFFF179E)),
         onClick = onSeoStudio,
         modifier = Modifier.weight(1f),
       ) {

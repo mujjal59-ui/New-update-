@@ -73,6 +73,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -425,6 +426,7 @@ fun RiyaHomeScreen(
   val btMicActive by RiyaState.isBluetoothMicActive.collectAsState()
   val netLabel by RiyaState.networkSpeedLabel.collectAsState()
   val voiceMatchLabel by RiyaState.voiceMatchLiveLabel.collectAsState()
+  val isSpeaking by RiyaVoiceManager.isSpeaking.collectAsState()
   val themeIdx by RiyaState.homeThemeIndex.collectAsState()
   val activeTheme = remember(themeIdx) { HomeTheme.fromId(themeIdx) }
 
@@ -469,7 +471,8 @@ fun RiyaHomeScreen(
       when (activeTheme) {
         HomeTheme.LXR_STUDIO -> R.drawable.home_bg
         HomeTheme.ARIA_CYBER_ROOM,
-        HomeTheme.MITALI_CYBER_STUDIO -> R.drawable.bg_aria
+        HomeTheme.MITALI_CYBER_STUDIO,
+        HomeTheme.LUNA_CYBER_STUDIO -> R.drawable.bg_aria
       }
 
     Image(
@@ -479,61 +482,68 @@ fun RiyaHomeScreen(
       contentScale = ContentScale.Crop,
     )
 
-    // Continuous background cyber animations, natural eye blinking & Extra Theme character layer
+    // Separated multi-layer 60fps animations: Studio background, locked portrait eyes, petals & talking Extra Theme characters
     LxrLiveAvatarOverlay(
       ox = ox,
       oy = oy,
       dw = dw,
       dh = dh,
       isRunning = running,
+      isSpeaking = isSpeaking,
       homeTheme = activeTheme,
       px = ::px,
       py = ::py,
     )
 
-    // Top-left animated Menu button matching exact purple orb placement below ChatGPT panel
+    // Top-left animated Menu button matching exact Reference Image 2 purple orb placement below ChatGPT
     val menuTopY = maxOf(oy + 0.148f * dh, statusTopDp + 8f)
-    val menuLeftX = maxOf(ox + 0.045f * dw, 14f)
+    val menuLeftX = maxOf(ox + 0.032f * dw, 14f)
     LxrTopLeftMenuButton(
       onClick = onMenu,
       modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
     )
 
-    // Top Status Pill & Live Warnings cleanly in the open sky gap under L X.R globe & above character
-    val statusPillTopY = maxOf(oy + 0.156f * dh, statusTopDp + 10f)
+    // Compact center Status Pill & Warnings strictly inside center channel (never covering Dream Big or Claude)
+    val statusPillTopY = maxOf(oy + 0.152f * dh, statusTopDp + 10f)
     Column(
-      modifier = Modifier.align(Alignment.TopCenter).offset(y = statusPillTopY.dp),
+      modifier = Modifier.align(Alignment.TopCenter).offset(y = statusPillTopY.dp).widthIn(max = 185.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(5.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       Text(
         text = status,
-        fontSize = 13.sp,
+        fontSize = 12.sp,
         fontWeight = FontWeight.SemiBold,
         color = Color.White,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier =
           Modifier
             .testTag("home_status_pill")
             .background(Color(0xCC050B1E), RoundedCornerShape(20.dp))
             .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
-            .padding(horizontal = 14.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 3.dp),
       )
 
       if (running || btMicActive) {
+        val compactDevice = if (btMicActive) "BT Mic" else "Direct"
+        val compactNet = if (netLabel.contains("Turbo", true) || netLabel.contains("Low", true)) "Fast Net" else netLabel
         Text(
-          text = "$audioDevice • Net: $netLabel",
-          fontSize = 10.5.sp,
+          text = "$compactDevice • $compactNet",
+          fontSize = 9.5.sp,
           fontWeight = FontWeight.Medium,
           color = if (btMicActive) CYBER_GREEN else CYBER_CYAN,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
           modifier =
             Modifier
-              .background(Color(0xBB050B1E), RoundedCornerShape(16.dp))
+              .background(Color(0xBB050B1E), RoundedCornerShape(14.dp))
               .border(
-                1.dp,
+                0.9.dp,
                 (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f),
-                RoundedCornerShape(16.dp),
+                RoundedCornerShape(14.dp),
               )
-              .padding(horizontal = 10.dp, vertical = 2.dp),
+              .padding(horizontal = 9.dp, vertical = 2.dp),
         )
       }
 
