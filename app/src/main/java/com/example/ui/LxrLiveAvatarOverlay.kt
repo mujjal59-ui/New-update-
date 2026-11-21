@@ -119,30 +119,21 @@ fun LxrLiveAvatarOverlay(
       label = "petal_fall",
     )
 
-  // Natural human blink + subtle left/right eye focus movement
+  // Natural silky-smooth human eyelid blink
   val blink = remember { Animatable(0f) }
-  val eyeGaze = remember { Animatable(0f) }
   LaunchedEffect(Unit) {
     var cycle = 0
     while (true) {
-      delay(2900L + ((cycle % 4) * 620L))
-      blink.animateTo(1f, tween(72, easing = FastOutSlowInEasing))
-      delay(24L)
-      blink.animateTo(0f, tween(96, easing = FastOutSlowInEasing))
+      delay(3100L + ((cycle % 4) * 580L))
+      blink.animateTo(1f, tween(92, easing = FastOutSlowInEasing))
+      delay(18L)
+      blink.animateTo(0f, tween(130, easing = FastOutSlowInEasing))
       if (cycle % 5 == 2) {
-        delay(170L)
-        blink.animateTo(1f, tween(68, easing = FastOutSlowInEasing))
-        delay(16L)
-        blink.animateTo(0f, tween(90, easing = FastOutSlowInEasing))
+        delay(180L)
+        blink.animateTo(1f, tween(84, easing = FastOutSlowInEasing))
+        delay(14L)
+        blink.animateTo(0f, tween(118, easing = FastOutSlowInEasing))
       }
-      val nextGaze = when (cycle % 5) {
-        0 -> 0.70f
-        1 -> -0.65f
-        2 -> 0.28f
-        3 -> -0.25f
-        else -> 0f
-      }
-      eyeGaze.animateTo(nextGaze, tween(420, easing = FastOutSlowInEasing))
       cycle++
     }
   }
@@ -159,7 +150,6 @@ fun LxrLiveAvatarOverlay(
   }
 
   val blinkVal = blink.value
-  val gazeVal = eyeGaze.value
   val robotBlinkVal = robotBlink.value
 
   Box(modifier = Modifier.fillMaxSize()) {
@@ -246,19 +236,13 @@ fun LxrLiveAvatarOverlay(
         center = Offset(shimmerX, globeCy),
       )
 
-      // 1B. ChatGPT, Gemini, Claude, Google Cloud & "Dream Big with AI" Panels
-      drawHoloPanelFrame(fx(0.045f), fyPx(0.025f), fx(0.305f), fyPx(0.165f), CYBER_CYAN, 0.20f + auraPulse * 0.24f)
-      drawHoloPanelFrame(fx(0.695f), fyPx(0.020f), fx(0.955f), fyPx(0.142f), Color(0xFF38BDF8), 0.20f + (1f - auraPulse) * 0.24f)
-      drawHoloPanelFrame(fx(0.655f), fyPx(0.145f), fx(0.840f), fyPx(0.240f), Color(0xFF60A5FA), 0.18f + auraPulse * 0.22f)
-      drawHoloPanelFrame(fx(0.845f), fyPx(0.140f), fx(0.990f), fyPx(0.258f), Color(0xFF38BDF8), 0.18f + (1f - auraPulse) * 0.22f)
-
-      drawRoundRect(
-        color = Color(0xFFD946EF).copy(alpha = 0.12f + auraPulse * 0.22f),
-        topLeft = Offset(fx(0.115f), fyPx(0.194f)),
-        size = Size(fx(0.305f) - fx(0.115f), fyPx(0.256f) - fyPx(0.194f)),
-        cornerRadius = CornerRadius(6.dp.toPx()),
-        style = Stroke(width = 1.5.dp.toPx()),
-      )
+      // 1B. ChatGPT, Gemini, Claude, Google Cloud & "Dream Big with AI" Panels:
+      // Soft ambient radial glow only (ZERO flat rectangular border lines so nothing clips near Menu or tilted 3D panels)
+      drawHoloAmbientGlow(fx(0.175f), fyPx(0.095f), (0.14f * dw) * d, CYBER_CYAN, 0.14f + auraPulse * 0.12f)
+      drawHoloAmbientGlow(fx(0.825f), fyPx(0.080f), (0.14f * dw) * d, Color(0xFF38BDF8), 0.14f + (1f - auraPulse) * 0.12f)
+      drawHoloAmbientGlow(fx(0.745f), fyPx(0.192f), (0.10f * dw) * d, Color(0xFF60A5FA), 0.12f + auraPulse * 0.10f)
+      drawHoloAmbientGlow(fx(0.920f), fyPx(0.198f), (0.10f * dw) * d, Color(0xFF38BDF8), 0.12f + (1f - auraPulse) * 0.10f)
+      drawHoloAmbientGlow(fx(0.215f), fyPx(0.226f), (0.095f * dw) * d, Color(0xFFD946EF), 0.10f + auraPulse * 0.12f)
 
       // 1C. Computer Monitors: Clean Flowing Telemetry Waveforms strictly inside dark screen areas
       if (homeTheme == HomeTheme.LXR_STUDIO) {
@@ -399,36 +383,37 @@ fun LxrLiveAvatarOverlay(
       )
 
       // 2. Locked Original Foreground Man Face (`LXR_STUDIO`):
-      // EYE-ONLY natural blinking & subtle iris left/right focus catchlight. ZERO mouth changes!
+      // Premium silky-smooth natural eyelid blink aligned to exact tilted eye corners + warm skin tones.
       if (homeTheme == HomeTheme.LXR_STUDIO) {
         drawNaturalEyelidBlink(
-          leftX = fx(0.468f),
-          rightX = fx(0.533f),
-          topY = fyPx(0.3612f),
-          midY = fyPx(0.3668f),
-          botY = fyPx(0.3730f),
-          lidColors = listOf(Color(0xFF8C595D), Color(0xFF724249), Color(0xFF4E2B31)),
+          leftX = fx(0.474f),
+          rightX = fx(0.542f),
+          leftCornerY = fyPx(0.3655f),
+          rightCornerY = fyPx(0.3720f),
+          topY = fyPx(0.3555f),
+          botY = fyPx(0.3738f),
+          lidColors = listOf(Color(0xFFE6BCB3), Color(0xFFC98E85), Color(0xFFAC736D)),
+          lashColor = Color(0xFF231315),
           blinkVal = blinkVal,
-          gazeShiftPx = gazeVal * 1.5.dp.toPx(),
-          catchlightPos = Offset(fx(0.503f), fyPx(0.3662f)),
         )
         drawNaturalEyelidBlink(
-          leftX = fx(0.625f),
-          rightX = fx(0.688f),
-          topY = fyPx(0.3645f),
-          midY = fyPx(0.3700f),
-          botY = fyPx(0.3762f),
-          lidColors = listOf(Color(0xFF5E3539), Color(0xFF462328), Color(0xFF2F1519)),
+          leftX = fx(0.614f),
+          rightX = fx(0.692f),
+          leftCornerY = fyPx(0.3745f),
+          rightCornerY = fyPx(0.3660f),
+          topY = fyPx(0.3612f),
+          botY = fyPx(0.3788f),
+          lidColors = listOf(Color(0xFFDDA8A0), Color(0xFFC28680), Color(0xFFA26A68)),
+          lashColor = Color(0xFF231315),
           blinkVal = blinkVal,
-          gazeShiftPx = gazeVal * 1.5.dp.toPx(),
-          catchlightPos = Offset(fx(0.661f), fyPx(0.3695f)),
         )
       }
     }
 
-    // LAYER 2: Non-Talking Animated Theme Characters (Aria or Mitali) with natural blinking & breathing motion
+    // LAYER 2: Non-Talking Animated Theme Characters (Aria or Mitali)
+    // Positioned forward & centered below status pills so face, eyes & expression are 100% clear and prominent.
     if (homeTheme == HomeTheme.ARIA_CYBER_ROOM || homeTheme == HomeTheme.MITALI_CYBER_STUDIO) {
-      val charH = dh * 0.56f
+      val charH = dh * 0.65f
       val charRatio = if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) 660f / 1536f else 663f / 1672f
       val charW = charH * charRatio
       val charRes = if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) R.drawable.char_aria else R.drawable.char_mitali
@@ -437,7 +422,7 @@ fun LxrLiveAvatarOverlay(
         modifier =
           Modifier
             .align(Alignment.BottomCenter)
-            .offset(y = -(dh * 0.295f).dp + (breezePhase * 2.0f).dp)
+            .offset(y = -(dh * 0.132f).dp + (breezePhase * 2.0f).dp)
             .size(width = charW.dp, height = charH.dp)
       ) {
         Image(
@@ -447,55 +432,55 @@ fun LxrLiveAvatarOverlay(
           contentScale = ContentScale.Fit,
         )
 
-        // Natural eyelid blinking only (NO mouth modification / NO talking animation)
+        // Smooth natural eyelid blinking aligned to exact character eyes (NO talking / NO mouth changes)
         Canvas(modifier = Modifier.fillMaxSize()) {
           val w = size.width
           val h = size.height
           if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) {
             drawNaturalEyelidBlink(
-              leftX = w * 0.380f,
-              rightX = w * 0.448f,
-              topY = h * 0.095f,
-              midY = h * 0.102f,
-              botY = h * 0.109f,
-              lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
+              leftX = w * 0.364f,
+              rightX = w * 0.462f,
+              leftCornerY = h * 0.108f,
+              rightCornerY = h * 0.111f,
+              topY = h * 0.098f,
+              botY = h * 0.123f,
+              lidColors = listOf(Color(0xFFFFE1D4), Color(0xFFF6C2B7), Color(0xFFE5A49B)),
+              lashColor = Color(0xFF2E1418),
               blinkVal = blinkVal,
-              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-              catchlightPos = Offset(w * 0.413f, h * 0.102f),
             )
             drawNaturalEyelidBlink(
-              leftX = w * 0.522f,
-              rightX = w * 0.592f,
+              leftX = w * 0.518f,
+              rightX = w * 0.614f,
+              leftCornerY = h * 0.094f,
+              rightCornerY = h * 0.094f,
               topY = h * 0.085f,
-              midY = h * 0.092f,
-              botY = h * 0.099f,
-              lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
+              botY = h * 0.110f,
+              lidColors = listOf(Color(0xFFFFE1D4), Color(0xFFF6C2B7), Color(0xFFE5A49B)),
+              lashColor = Color(0xFF2E1418),
               blinkVal = blinkVal,
-              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-              catchlightPos = Offset(w * 0.557f, h * 0.092f),
             )
           } else {
             drawNaturalEyelidBlink(
-              leftX = w * 0.342f,
-              rightX = w * 0.410f,
+              leftX = w * 0.335f,
+              rightX = w * 0.427f,
+              leftCornerY = h * 0.111f,
+              rightCornerY = h * 0.109f,
               topY = h * 0.100f,
-              midY = h * 0.107f,
-              botY = h * 0.114f,
-              lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
+              botY = h * 0.122f,
+              lidColors = listOf(Color(0xFFFCE0D3), Color(0xFFF2C2B5), Color(0xFFE2A198)),
+              lashColor = Color(0xFF2B1415),
               blinkVal = blinkVal,
-              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-              catchlightPos = Offset(w * 0.372f, h * 0.107f),
             )
             drawNaturalEyelidBlink(
-              leftX = w * 0.492f,
-              rightX = w * 0.558f,
-              topY = h * 0.086f,
-              midY = h * 0.092f,
-              botY = h * 0.099f,
-              lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
+              leftX = w * 0.477f,
+              rightX = w * 0.576f,
+              leftCornerY = h * 0.093f,
+              rightCornerY = h * 0.095f,
+              topY = h * 0.085f,
+              botY = h * 0.108f,
+              lidColors = listOf(Color(0xFFFCE0D3), Color(0xFFF2C2B5), Color(0xFFE2A198)),
+              lashColor = Color(0xFF2B1415),
               blinkVal = blinkVal,
-              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-              catchlightPos = Offset(w * 0.525f, h * 0.092f),
             )
           }
         }
@@ -538,13 +523,11 @@ private fun DrawScope.drawFallingPetalLayer(
   for (i in 0 until count) {
     val speedMult = if (isForeground) 1.0f else 0.78f
     val yFrac = ((petalFall * speedMult + i * 0.083f + (i % 3) * 0.04f) % 1.08f) - 0.04f
-    // Distribute across sky & outer corridors, gently weaving
     val baseLane =
       if (isForeground) {
         val raw = ((i * 29 + 11) % 92) / 100f + 0.04f
-        // Keep central portrait face band clear while gliding beautifully around shoulders/backdrop/sides
-        if (avoidFaceRect && yFrac in 0.24f..0.46f && raw in 0.36f..0.68f) {
-          if (i % 2 == 0) 0.16f + (i % 4) * 0.045f else 0.76f + (i % 3) * 0.055f
+        if (avoidFaceRect && yFrac in 0.22f..0.46f && raw in 0.34f..0.70f) {
+          if (i % 2 == 0) 0.14f + (i % 4) * 0.045f else 0.76f + (i % 3) * 0.055f
         } else raw
       } else {
         ((i * 37 + 7) % 94) / 100f + 0.03f
@@ -552,13 +535,12 @@ private fun DrawScope.drawFallingPetalLayer(
     val swayX = sin(wavePhase * 0.85f + i * 1.3f) * (if (isForeground) 0.026f else 0.018f)
     val xFrac = (baseLane + swayX).coerceIn(0.02f, 0.98f)
 
-    // Dim petal softly if near face/buttons so it never obscures important icons or face
-    val nearFace = avoidFaceRect && xFrac in 0.38f..0.67f && yFrac in 0.28f..0.44f
+    val nearFace = avoidFaceRect && xFrac in 0.34f..0.68f && yFrac in 0.23f..0.44f
     val nearMicOrButtons = yFrac in 0.65f..0.95f && xFrac in 0.20f..0.80f
     val baseAlpha = if (isForeground) 0.62f else 0.34f
     val alpha =
       when {
-        nearFace -> 0.08f
+        nearFace -> 0.06f
         nearMicOrButtons -> baseAlpha * 0.35f
         else -> baseAlpha
       }
@@ -605,20 +587,22 @@ private fun DrawScope.drawFallingPetalLayer(
   }
 }
 
-private fun DrawScope.drawHoloPanelFrame(
-  left: Float,
-  top: Float,
-  right: Float,
-  bottom: Float,
+private fun DrawScope.drawHoloAmbientGlow(
+  cx: Float,
+  cy: Float,
+  radius: Float,
   color: Color,
   alpha: Float,
 ) {
-  drawRoundRect(
-    color = color.copy(alpha = alpha),
-    topLeft = Offset(left, top),
-    size = Size((right - left).coerceAtLeast(1f), (bottom - top).coerceAtLeast(1f)),
-    cornerRadius = CornerRadius(6.dp.toPx()),
-    style = Stroke(width = 1.4.dp.toPx()),
+  drawCircle(
+    brush =
+      Brush.radialGradient(
+        listOf(color.copy(alpha = alpha), Color.Transparent),
+        center = Offset(cx, cy),
+        radius = radius.coerceAtLeast(1f),
+      ),
+    radius = radius.coerceAtLeast(1f),
+    center = Offset(cx, cy),
   )
 }
 
@@ -643,54 +627,73 @@ private fun DrawScope.drawMonitorWave(
 private fun DrawScope.drawNaturalEyelidBlink(
   leftX: Float,
   rightX: Float,
+  leftCornerY: Float,
+  rightCornerY: Float,
   topY: Float,
-  midY: Float,
   botY: Float,
   lidColors: List<Color>,
+  lashColor: Color,
   blinkVal: Float,
-  gazeShiftPx: Float,
-  catchlightPos: Offset,
 ) {
-  if (blinkVal > 0.04f) {
-    val cx = (leftX + rightX) * 0.5f
-    val apertureH = botY - topY
-    val aperturePath =
+  val p = blinkVal.coerceIn(0f, 1f)
+  if (p <= 0.025f) return
+
+  // Smooth anatomical ease for realistic lid velocity
+  val eased = sin(p * PI.toFloat() * 0.5f).coerceIn(0f, 1f)
+  val cx = (leftX + rightX) * 0.5f
+  val eyeH = (botY - topY).coerceAtLeast(1f)
+
+  // Exact tilted almond eye aperture (never a blocky rectangle)
+  val upperCtrlY = topY - eyeH * 0.34f
+  val lowerCtrlY = botY + eyeH * 0.30f
+  val aperturePath =
+    Path().apply {
+      moveTo(leftX, leftCornerY)
+      quadraticTo(cx, upperCtrlY, rightX, rightCornerY)
+      quadraticTo(cx, lowerCtrlY, leftX, leftCornerY)
+      close()
+    }
+
+  // Sweeping upper lid arch descending smoothly down to the lower rim curve
+  val upperApex = topY - eyeH * 0.14f
+  val closedApex = botY - eyeH * 0.10f
+  val movingApexY = upperApex + (closedApex - upperApex) * eased
+
+  clipPath(aperturePath) {
+    val sweepPath =
       Path().apply {
-        moveTo(leftX, midY)
-        quadraticTo(cx, topY - apertureH * 0.42f, rightX, midY)
-        quadraticTo(cx, botY + apertureH * 0.35f, leftX, midY)
+        moveTo(leftX, leftCornerY)
+        quadraticTo(cx, upperCtrlY - eyeH * 0.10f, rightX, rightCornerY)
+        quadraticTo(cx, movingApexY + eyeH * 0.18f, leftX, leftCornerY)
         close()
       }
-    val lidBottomY = topY - apertureH * 0.22f + (apertureH * 1.36f) * blinkVal
 
-    clipPath(aperturePath) {
-      drawRect(
-        brush =
-          Brush.verticalGradient(
-            colors = lidColors,
-            startY = topY - apertureH * 0.35f,
-            endY = lidBottomY.coerceAtLeast(topY + 1f),
-          ),
-        topLeft = Offset(leftX - 2f, topY - apertureH * 0.45f),
-        size = Size((rightX - leftX) + 4f, (lidBottomY - (topY - apertureH * 0.45f)).coerceAtLeast(1f)),
-      )
-      val lashY = lidBottomY - 0.7.dp.toPx()
-      val lashPath =
-        Path().apply {
-          moveTo(leftX, midY)
-          quadraticTo(cx, lashY + 1.1.dp.toPx() * blinkVal, rightX, midY)
-        }
-      drawPath(
-        path = lashPath,
-        color = Color(0xFF190F13).copy(alpha = 0.85f * blinkVal),
-        style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round),
-      )
-    }
-  } else {
-    drawCircle(
-      color = Color.White.copy(alpha = 0.24f),
-      radius = 1.35.dp.toPx(),
-      center = Offset(catchlightPos.x + gazeShiftPx, catchlightPos.y),
+    // Soft natural skin-toned eyelid fill with gentle crease shading (zero sharp edges)
+    drawPath(
+      path = sweepPath,
+      brush =
+        Brush.verticalGradient(
+          colors =
+            listOf(
+              lidColors[0].copy(alpha = 0.72f * eased),
+              lidColors[1].copy(alpha = 0.97f * eased),
+              lidColors[2].copy(alpha = 0.99f * eased),
+            ),
+          startY = upperCtrlY,
+          endY = (movingApexY + eyeH * 0.22f).coerceAtLeast(upperCtrlY + 2f),
+        ),
+    )
+
+    // Delicate tapered upper eyelash fold gliding gracefully across the lid edge
+    val lashPath =
+      Path().apply {
+        moveTo(leftX + (rightX - leftX) * 0.03f, leftCornerY)
+        quadraticTo(cx, movingApexY + eyeH * 0.14f, rightX - (rightX - leftX) * 0.03f, rightCornerY)
+      }
+    drawPath(
+      path = lashPath,
+      color = lashColor.copy(alpha = (0.78f * eased).coerceIn(0f, 0.88f)),
+      style = Stroke(width = (1.15f + 0.35f * eased).dp.toPx(), cap = StrokeCap.Round),
     )
   }
 }

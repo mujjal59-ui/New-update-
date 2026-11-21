@@ -494,7 +494,7 @@ fun RiyaHomeScreen(
       py = ::py,
     )
 
-    // Top-left Menu button: hotspot on LXR_STUDIO (matching home_bg artwork), styled orb on Aria/Mitali themes
+    // Top-left Menu button: hotspot on LXR_STUDIO (matching home_bg artwork), styled orb at identical spot on Aria/Mitali themes
     if (activeTheme == HomeTheme.LXR_STUDIO) {
       Box(
         modifier =
@@ -505,63 +505,114 @@ fun RiyaHomeScreen(
             .clickable(onClick = onMenu)
       )
     } else {
-      val menuTopY = maxOf(oy + 0.148f * dh, statusTopDp + 8f)
-      val menuLeftX = maxOf(ox + 0.032f * dw, 14f)
+      val menuLeftX = (ox + 0.098f * dw - 24f).coerceAtLeast(14f)
+      val menuTopY = maxOf(oy + 0.172f * dh - 24f, statusTopDp + 6f)
       LxrTopLeftMenuButton(
         onClick = onMenu,
         modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
       )
     }
 
-    // Compact center Status Pill & Warnings strictly inside center channel (never covering Dream Big or Claude)
-    val statusPillTopY = maxOf(oy + 0.168f * dh, statusTopDp + 10f)
-    Column(
-      modifier = Modifier.align(Alignment.TopCenter).offset(y = statusPillTopY.dp).widthIn(max = 185.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-      Text(
-        text = status,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = Color.White,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier =
-          Modifier
-            .testTag("home_status_pill")
-            .background(Color(0xCC050B1E), RoundedCornerShape(20.dp))
-            .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
-            .padding(horizontal = 12.dp, vertical = 3.dp),
-      )
+    val isCharacterTheme =
+      activeTheme == HomeTheme.ARIA_CYBER_ROOM || activeTheme == HomeTheme.MITALI_CYBER_STUDIO
 
-      if (running || btMicActive) {
-        val compactDevice = if (btMicActive) "BT Mic" else "Direct"
-        val compactNet = if (netLabel.contains("Turbo", true) || netLabel.contains("Low", true)) "Fast Net" else netLabel
+    // Compact center Status Pill strictly above hair/head (never covering Aria/Mitali face!)
+    val statusPillTopY =
+      if (isCharacterTheme) maxOf(oy + 0.128f * dh, statusTopDp + 4f)
+      else maxOf(oy + 0.168f * dh, statusTopDp + 10f)
+
+    Column(
+      modifier =
+        Modifier
+          .align(Alignment.TopCenter)
+          .offset(y = statusPillTopY.dp)
+          .widthIn(max = if (isCharacterTheme) 230.dp else 185.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(if (isCharacterTheme) 3.dp else 4.dp),
+    ) {
+      if (isCharacterTheme && (running || btMicActive)) {
+        val compactDevice = if (btMicActive) "BT" else "Mic"
+        val compactNet = if (netLabel.contains("Turbo", true) || netLabel.contains("Low", true)) "Fast" else netLabel
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = status,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier =
+              Modifier
+                .testTag("home_status_pill")
+                .background(Color(0xD0050B1E), RoundedCornerShape(16.dp))
+                .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 9.dp, vertical = 2.dp),
+          )
+          Text(
+            text = "$compactDevice • $compactNet",
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (btMicActive) CYBER_GREEN else CYBER_CYAN,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier =
+              Modifier
+                .background(Color(0xCC050B1E), RoundedCornerShape(14.dp))
+                .border(
+                  0.9.dp,
+                  (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.50f),
+                  RoundedCornerShape(14.dp),
+                )
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+          )
+        }
+      } else {
         Text(
-          text = "$compactDevice • $compactNet",
-          fontSize = 9.5.sp,
-          fontWeight = FontWeight.Medium,
-          color = if (btMicActive) CYBER_GREEN else CYBER_CYAN,
+          text = status,
+          fontSize = if (isCharacterTheme) 11.sp else 12.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = Color.White,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           modifier =
             Modifier
-              .background(Color(0xBB050B1E), RoundedCornerShape(14.dp))
-              .border(
-                0.9.dp,
-                (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f),
-                RoundedCornerShape(14.dp),
-              )
-              .padding(horizontal = 9.dp, vertical = 2.dp),
+              .testTag("home_status_pill")
+              .background(Color(0xCC050B1E), RoundedCornerShape(20.dp))
+              .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+              .padding(horizontal = 12.dp, vertical = if (isCharacterTheme) 2.dp else 3.dp),
         )
+
+        if (running || btMicActive) {
+          val compactDevice = if (btMicActive) "BT Mic" else "Direct"
+          val compactNet = if (netLabel.contains("Turbo", true) || netLabel.contains("Low", true)) "Fast Net" else netLabel
+          Text(
+            text = "$compactDevice • $compactNet",
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (btMicActive) CYBER_GREEN else CYBER_CYAN,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier =
+              Modifier
+                .background(Color(0xBB050B1E), RoundedCornerShape(14.dp))
+                .border(
+                  0.9.dp,
+                  (if (btMicActive) CYBER_GREEN else CYBER_CYAN).copy(alpha = 0.45f),
+                  RoundedCornerShape(14.dp),
+                )
+                .padding(horizontal = 9.dp, vertical = 2.dp),
+          )
+        }
       }
 
       if (running && voiceMatchLabel.isNotBlank()) {
         val avoided = voiceMatchLabel.contains("এভোয়েড")
         Text(
           text = voiceMatchLabel,
-          fontSize = 10.5.sp,
+          fontSize = if (isCharacterTheme) 9.5.sp else 10.5.sp,
           fontWeight = FontWeight.SemiBold,
           color = if (avoided) Color(0xFFFFB300) else CYBER_GREEN,
           modifier =
@@ -573,95 +624,170 @@ fun RiyaHomeScreen(
                 (if (avoided) Color(0xFFFFB300) else CYBER_GREEN).copy(alpha = 0.6f),
                 RoundedCornerShape(16.dp),
               )
-              .padding(horizontal = 10.dp, vertical = 2.dp),
+              .padding(horizontal = 9.dp, vertical = 2.dp),
         )
       }
 
-      if (!accessibilityOn) {
-        val label =
-          if (accessibilityWaitingRebind) "Accessibility চালু আছে — রিকানেক্ট করতে ট্যাপ করুন"
-          else "Accessibility বন্ধ! চালু করতে ট্যাপ করুন"
-        Row(
-          modifier =
-            Modifier
-              .testTag("accessibility_off_warning_pill")
-              .clip(RoundedCornerShape(18.dp))
-              .background(Color(0xE6380619))
-              .border(1.dp, CYBER_RED, RoundedCornerShape(18.dp))
-              .clickable(onClick = onFixAccessibility)
-              .padding(horizontal = 12.dp, vertical = 5.dp),
-          verticalAlignment = Alignment.CenterVertically,
+      if (!isCharacterTheme) {
+        if (!accessibilityOn) {
+          val label =
+            if (accessibilityWaitingRebind) "Accessibility চালু আছে — রিকানেক্ট করতে ট্যাপ করুন"
+            else "Accessibility বন্ধ! চালু করতে ট্যাপ করুন"
+          Row(
+            modifier =
+              Modifier
+                .testTag("accessibility_off_warning_pill")
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xE6380619))
+                .border(1.dp, CYBER_RED, RoundedCornerShape(18.dp))
+                .clickable(onClick = onFixAccessibility)
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Warning,
+              contentDescription = "Accessibility Off",
+              tint = CYBER_RED,
+              modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+              text = label,
+              color = Color.White,
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        }
+
+        if (!notifListenerOn &&
+          (Store.autoReplyWhatsApp(ctx) || Store.autoReplyImo(ctx) || Store.autoReplyMessenger(ctx))
         ) {
-          Icon(
-            imageVector = Icons.Filled.Warning,
-            contentDescription = "Accessibility Off",
-            tint = CYBER_RED,
-            modifier = Modifier.size(15.dp),
-          )
-          Spacer(Modifier.width(6.dp))
-          Text(
-            text = label,
-            color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-          )
+          Row(
+            modifier =
+              Modifier
+                .testTag("notification_access_warning_pill")
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xE62E1904))
+                .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(18.dp))
+                .clickable(onClick = onFixNotifAccess)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Warning,
+              contentDescription = "Notification Access Off",
+              tint = Color(0xFFFFB300),
+              modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+              text = "মেসেজ শুনতে Notification Access চালু করুন",
+              color = Color.White,
+              fontSize = 10.5.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+        }
+
+        if (!motivationBanner.isNullOrBlank()) {
+          Row(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xDD06261E))
+                .border(1.dp, CYBER_GREEN, RoundedCornerShape(18.dp))
+                .clickable { RiyaState.motivationalBanner.value = null }
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Filled.CheckCircle,
+              contentDescription = "Task Done",
+              tint = CYBER_GREEN,
+              modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+              text = motivationBanner.orEmpty(),
+              color = Color.White,
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Medium,
+            )
+          }
         }
       }
+    }
 
-      if (!notifListenerOn &&
-        (Store.autoReplyWhatsApp(ctx) || Store.autoReplyImo(ctx) || Store.autoReplyMessenger(ctx))
+    // On Aria / Mitali themes, keep any alert/motivation pills neatly above Voice Strip so faces stay 100% clear
+    if (isCharacterTheme &&
+      (!accessibilityOn ||
+        (!notifListenerOn && (Store.autoReplyWhatsApp(ctx) || Store.autoReplyImo(ctx) || Store.autoReplyMessenger(ctx))) ||
+        !motivationBanner.isNullOrBlank())
+    ) {
+      Column(
+        modifier =
+          Modifier
+            .align(Alignment.TopCenter)
+            .offset(y = (voiceStripTopY - 46f).coerceAtLeast(180f).dp)
+            .padding(horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        Row(
-          modifier =
-            Modifier
-              .testTag("notification_access_warning_pill")
-              .clip(RoundedCornerShape(18.dp))
-              .background(Color(0xE62E1904))
-              .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(18.dp))
-              .clickable(onClick = onFixNotifAccess)
-              .padding(horizontal = 12.dp, vertical = 4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Icon(
-            imageVector = Icons.Filled.Warning,
-            contentDescription = "Notification Access Off",
-            tint = Color(0xFFFFB300),
-            modifier = Modifier.size(14.dp),
-          )
-          Spacer(Modifier.width(6.dp))
-          Text(
-            text = "মেসেজ শুনতে Notification Access চালু করুন",
-            color = Color.White,
-            fontSize = 10.5.sp,
-            fontWeight = FontWeight.SemiBold,
-          )
+        if (!accessibilityOn) {
+          val label =
+            if (accessibilityWaitingRebind) "Accessibility চালু আছে — রিকানেক্ট করতে ট্যাপ করুন"
+            else "Accessibility বন্ধ! চালু করতে ট্যাপ করুন"
+          Row(
+            modifier =
+              Modifier
+                .testTag("accessibility_off_warning_pill")
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xE6380619))
+                .border(1.dp, CYBER_RED, RoundedCornerShape(18.dp))
+                .clickable(onClick = onFixAccessibility)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(Icons.Filled.Warning, contentDescription = "Accessibility Off", tint = CYBER_RED, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(text = label, color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+          }
         }
-      }
-
-      if (!motivationBanner.isNullOrBlank()) {
-        Row(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(18.dp))
-              .background(Color(0xDD06261E))
-              .border(1.dp, CYBER_GREEN, RoundedCornerShape(18.dp))
-              .clickable { RiyaState.motivationalBanner.value = null }
-              .padding(horizontal = 12.dp, vertical = 4.dp),
-          verticalAlignment = Alignment.CenterVertically,
+        if (!notifListenerOn &&
+          (Store.autoReplyWhatsApp(ctx) || Store.autoReplyImo(ctx) || Store.autoReplyMessenger(ctx))
         ) {
-          Icon(
-            imageVector = Icons.Filled.CheckCircle,
-            contentDescription = "Task Done",
-            tint = CYBER_GREEN,
-            modifier = Modifier.size(14.dp),
-          )
-          Spacer(Modifier.width(6.dp))
-          Text(
-            text = motivationBanner.orEmpty(),
-            color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-          )
+          Row(
+            modifier =
+              Modifier
+                .testTag("notification_access_warning_pill")
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xE62E1904))
+                .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(18.dp))
+                .clickable(onClick = onFixNotifAccess)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(Icons.Filled.Warning, contentDescription = "Notification Access Off", tint = Color(0xFFFFB300), modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(text = "মেসেজ শুনতে Notification Access চালু করুন", color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+          }
+        }
+        if (!motivationBanner.isNullOrBlank()) {
+          Row(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xDD06261E))
+                .border(1.dp, CYBER_GREEN, RoundedCornerShape(18.dp))
+                .clickable { RiyaState.motivationalBanner.value = null }
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(Icons.Filled.CheckCircle, contentDescription = "Task Done", tint = CYBER_GREEN, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(text = motivationBanner.orEmpty(), color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
+          }
         }
       }
     }

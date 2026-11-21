@@ -80,7 +80,7 @@ fun LxrTopLeftMenuButton(
   val inf = rememberInfiniteTransition(label = "menu_btn_pulse")
   val glow by
     inf.animateFloat(
-      initialValue = 0.55f,
+      initialValue = 0.65f,
       targetValue = 1.0f,
       animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
       label = "menu_glow",
@@ -92,14 +92,13 @@ fun LxrTopLeftMenuButton(
         .size(48.dp)
         .testTag("menu_button")
         .semantics { contentDescription = "Open LXR AI Menu" }
-        .shadow((10 * glow).dp, CircleShape, spotColor = Color(0xFFFF0D9A))
+        .shadow((11 * glow).dp, CircleShape, spotColor = Color(0xFFEC4899))
         .clip(CircleShape)
         .background(
           Brush.linearGradient(
-            listOf(Color(0xFFFF0D8A), Color(0xFF8B2CF5), Color(0xFF2563EB))
+            listOf(Color(0xFFEC4899), Color(0xFF8B5CF6), Color(0xFF3B82F6))
           )
         )
-        .border(1.4.dp, Color.White.copy(alpha = 0.45f + glow * 0.25f), CircleShape)
         .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
@@ -107,7 +106,7 @@ fun LxrTopLeftMenuButton(
       imageVector = Icons.Filled.Menu,
       contentDescription = "Menu",
       tint = Color.White,
-      modifier = Modifier.size(25.dp),
+      modifier = Modifier.size(24.dp),
     )
   }
 }
@@ -141,73 +140,100 @@ fun LxrVoiceControlStrip(
     modifier = modifier.fillMaxWidth().height(84.dp),
     contentAlignment = Alignment.Center,
   ) {
-    // Horizontal energy beam + circular breathing waves + symmetric soundwave arcs
+    // Signature luminous horizontal cyan energy beam + twin side star flares + radiant Mic halo + 3 crisp soundwave arcs
     Canvas(modifier = Modifier.fillMaxSize()) {
       val cx = size.width * 0.5f
       val cy = size.height * 0.5f
-      val baseR = 35.dp.toPx()
+      val baseR = 36.dp.toPx()
 
-      // Signature cyan glowing horizontal light beam connecting side star nodes
+      // Soft wide cyan-blue bloom behind center Mic orb matching Theme 1
+      drawCircle(
+        brush =
+          Brush.radialGradient(
+            listOf(
+              Color(0xFF00F0FF).copy(alpha = 0.48f + pulse * 0.18f),
+              Color(0xFF2563EB).copy(alpha = 0.30f + pulse * 0.10f),
+              Color.Transparent,
+            ),
+            center = Offset(cx, cy),
+            radius = 56.dp.toPx(),
+          ),
+        radius = 56.dp.toPx(),
+        center = Offset(cx, cy),
+      )
+
+      // Bright horizontal cyan energy beam behind Camera - Mic - Chat
       drawLine(
         brush =
           Brush.horizontalGradient(
-            listOf(Color.Transparent, CYBER_CYAN.copy(alpha = 0.55f), Color.Transparent)
+            listOf(
+              Color.Transparent,
+              Color(0xFF00F0FF).copy(alpha = 0.65f),
+              Color.White.copy(alpha = 0.85f),
+              Color(0xFF00F0FF).copy(alpha = 0.65f),
+              Color.Transparent,
+            )
           ),
-        start = Offset(size.width * 0.05f, cy),
-        end = Offset(size.width * 0.95f, cy),
-        strokeWidth = 1.6.dp.toPx(),
+        start = Offset(size.width * 0.04f, cy),
+        end = Offset(size.width * 0.96f, cy),
+        strokeWidth = 2.0.dp.toPx(),
       )
 
-      // Concentric circular breathing sound wave around Microphone
-      val ringR = baseR + waveExpand * 20.dp.toPx()
-      val ringAlpha = (1f - waveExpand) * (if (isRunning) 0.78f else 0.45f)
+      // Left & Right 4-point cyan star flares beside Camera & Chat pills
+      drawStarFlare(Offset(size.width * 0.135f, cy), 8.dp.toPx(), Color(0xFF00F0FF))
+      drawStarFlare(Offset(size.width * 0.865f, cy), 8.dp.toPx(), Color(0xFF00F0FF))
+
+      // Concentric circular breathing wave around Mic
+      val ringR = baseR + waveExpand * 18.dp.toPx()
+      val ringAlpha = (1f - waveExpand) * (if (isRunning) 0.82f else 0.50f)
       drawCircle(
-        brush = Brush.sweepGradient(listOf(CYBER_CYAN, CYBER_BLUE, CYBER_PURPLE, CYBER_CYAN)),
+        brush = Brush.sweepGradient(listOf(Color(0xFF00F0FF), Color(0xFF3B82F6), Color(0xFFA855F7), Color(0xFF00F0FF))),
         radius = ringR,
         center = Offset(cx, cy),
         alpha = ringAlpha,
-        style = Stroke(width = if (isRunning) 2.4.dp.toPx() else 1.8.dp.toPx()),
+        style = Stroke(width = if (isRunning) 2.6.dp.toPx() else 1.8.dp.toPx()),
       )
 
-      // 4 symmetric curved cyan soundwave arcs on left and right of Microphone (matching Image 2)
-      for (idx in 1..4) {
-        val rx = (34f + idx * 7.5f).dp.toPx()
-        val ry = (21f + idx * 3.5f).dp.toPx()
-        val arcAlpha = (0.42f + pulse * 0.42f) * (1f - (idx - 1) * 0.17f)
+      // 3 crisp glowing curved cyan-white soundwave arcs on left and right of Microphone orb
+      for (idx in 1..3) {
+        val rx = (38f + idx * 6.5f).dp.toPx()
+        val ry = (23f + idx * 3.8f).dp.toPx()
+        val arcAlpha = (0.58f + pulse * 0.36f) * (1f - (idx - 1) * 0.18f)
+        val arcColor = if (idx == 1) Color.White.copy(alpha = arcAlpha) else Color(0xFF00F0FF).copy(alpha = arcAlpha)
         drawArc(
-          color = if (idx % 2 == 0) CYBER_BLUE.copy(alpha = arcAlpha) else CYBER_CYAN.copy(alpha = arcAlpha),
-          startAngle = 144f,
-          sweepAngle = 72f,
+          color = arcColor,
+          startAngle = 146f,
+          sweepAngle = 68f,
           useCenter = false,
           topLeft = Offset(cx - rx, cy - ry),
           size = Size(rx * 2f, ry * 2f),
-          style = Stroke(width = 2.0.dp.toPx(), cap = StrokeCap.Round),
+          style = Stroke(width = 2.1.dp.toPx(), cap = StrokeCap.Round),
         )
         drawArc(
-          color = if (idx % 2 == 0) CYBER_BLUE.copy(alpha = arcAlpha) else CYBER_CYAN.copy(alpha = arcAlpha),
-          startAngle = -36f,
-          sweepAngle = 72f,
+          color = arcColor,
+          startAngle = -34f,
+          sweepAngle = 68f,
           useCenter = false,
           topLeft = Offset(cx - rx, cy - ry),
           size = Size(rx * 2f, ry * 2f),
-          style = Stroke(width = 2.0.dp.toPx(), cap = StrokeCap.Round),
+          style = Stroke(width = 2.1.dp.toPx(), cap = StrokeCap.Round),
         )
       }
     }
 
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-      horizontalArrangement = Arrangement.SpaceEvenly,
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 36.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // 1. Original Camera Chamfered Pill (soft light pulse)
+      // 1. Glowing Cyan Camera Chamfered Pill
       OriginalCameraPillButton(
         camOn = camOn,
         pulse = pulse,
         onClick = onCam,
       )
 
-      // 2. Centered Microphone Orb
+      // 2. Centered Glowing Purple-Blue-Cyan Microphone Orb
       val micInteraction = remember { MutableInteractionSource() }
       val micPressed by micInteraction.collectIsPressedAsState()
       val micScale by animateFloatAsState(
@@ -222,21 +248,21 @@ fun LxrVoiceControlStrip(
             .scale(micScale)
             .testTag("mic_button")
             .semantics { contentDescription = "Microphone Toggle" }
-            .shadow(16.dp, CircleShape, spotColor = if (isRunning) CYBER_RED else CYBER_CYAN)
+            .shadow(18.dp, CircleShape, spotColor = if (isRunning) CYBER_RED else Color(0xFF00F0FF))
             .clip(CircleShape)
             .background(
               Brush.radialGradient(
                 colors =
-                  if (isRunning) listOf(Color(0xFFFF176B), Color(0xFF7E22CE), Color(0xFF0A1D4E))
-                  else listOf(Color(0xFFC026D3), Color(0xFF6366F1), Color(0xFF1E3A8A))
+                  if (isRunning) listOf(Color(0xFFFF176B), Color(0xFF7E22CE), Color(0xFF0B2A6B))
+                  else listOf(Color(0xFFD946EF), Color(0xFF7C3AED), Color(0xFF1D4ED8), Color(0xFF06B6D4))
               )
             )
             .border(
-              width = 2.5.dp,
+              width = 3.0.dp,
               brush =
                 Brush.linearGradient(
-                  if (isRunning) listOf(CYBER_RED, CYBER_CYAN)
-                  else listOf(CYBER_CYAN, Color(0xFF60A5FA), CYBER_CYAN)
+                  if (isRunning) listOf(CYBER_RED, Color(0xFF00F0FF))
+                  else listOf(Color(0xFF00F0FF), Color(0xFF38BDF8), Color(0xFF2563EB), Color(0xFF00F0FF))
                 ),
               shape = CircleShape,
             )
@@ -251,7 +277,7 @@ fun LxrVoiceControlStrip(
         )
       }
 
-      // 3. Original Chat Chamfered Pill (cyan notification-style light pulse)
+      // 3. Glowing Cyan Chat Chamfered Pill
       OriginalChatPillButton(
         pulse = 1f - pulse,
         onClick = onChat,
@@ -267,38 +293,38 @@ private fun OriginalCameraPillButton(
   onClick: () -> Unit,
 ) {
   val shape = remember { ChamferedFuturisticShape(chamferDp = 12.dp, cornerRadiusDp = 4.dp) }
-  val glow = if (camOn) CYBER_GREEN else Color(0xFF38BDF8)
+  val glow = if (camOn) CYBER_GREEN else Color(0xFF00F0FF)
   Box(
     modifier =
       Modifier
-        .size(width = 64.dp, height = 46.dp)
+        .size(width = 66.dp, height = 42.dp)
         .testTag("cam_button")
         .semantics { contentDescription = "Camera" }
-        .shadow((7f + pulse * 6f).dp, shape, spotColor = glow)
+        .shadow((10f + pulse * 6f).dp, shape, spotColor = glow)
         .clip(shape)
-        .background(Color(0xEA06122B), shape)
-        .border(1.7.dp, glow.copy(alpha = 0.65f + pulse * 0.32f), shape)
+        .background(
+          Brush.verticalGradient(listOf(Color(0xDD08224A), Color(0xEA04112B))),
+          shape,
+        )
+        .border(2.0.dp, glow.copy(alpha = 0.78f + pulse * 0.20f), shape)
         .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
     Canvas(modifier = Modifier.size(24.dp)) {
       val w = size.width
       val h = size.height
-      // Top viewfinder bump
       drawRoundRect(
         color = Color.White,
         topLeft = Offset(w * 0.30f, h * 0.14f),
         size = Size(w * 0.40f, h * 0.18f),
         cornerRadius = CornerRadius(2.dp.toPx()),
       )
-      // Camera body
       drawRoundRect(
         color = Color.White,
         topLeft = Offset(w * 0.08f, h * 0.25f),
         size = Size(w * 0.84f, h * 0.60f),
         cornerRadius = CornerRadius(4.dp.toPx()),
       )
-      // Lens ring cutout
       drawCircle(
         color = Color(0xFF0A1D3E),
         radius = w * 0.18f,
@@ -309,7 +335,6 @@ private fun OriginalCameraPillButton(
         radius = w * 0.11f,
         center = Offset(w * 0.50f, h * 0.56f),
       )
-      // Flash indicator dot
       drawCircle(
         color = Color(0xFF0A1D3E),
         radius = w * 0.045f,
@@ -328,20 +353,22 @@ private fun OriginalChatPillButton(
   Box(
     modifier =
       Modifier
-        .size(width = 64.dp, height = 46.dp)
+        .size(width = 66.dp, height = 42.dp)
         .testTag("chat_button")
         .semantics { contentDescription = "Chat" }
-        .shadow((7f + pulse * 6f).dp, shape, spotColor = CYBER_CYAN)
+        .shadow((10f + pulse * 6f).dp, shape, spotColor = Color(0xFF00F0FF))
         .clip(shape)
-        .background(Color(0xEA06122B), shape)
-        .border(1.7.dp, CYBER_CYAN.copy(alpha = 0.65f + pulse * 0.32f), shape)
+        .background(
+          Brush.verticalGradient(listOf(Color(0xDD08224A), Color(0xEA04112B))),
+          shape,
+        )
+        .border(2.0.dp, Color(0xFF00F0FF).copy(alpha = 0.78f + pulse * 0.20f), shape)
         .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
     Canvas(modifier = Modifier.size(22.dp)) {
       val w = size.width
       val h = size.height
-      // Clean outlined speech bubble + message lines matching Reference Image 2 Chat icon
       drawRoundRect(
         color = Color.White,
         topLeft = Offset(w * 0.10f, h * 0.14f),
@@ -349,7 +376,6 @@ private fun OriginalChatPillButton(
         cornerRadius = CornerRadius(3.5.dp.toPx()),
         style = Stroke(width = 2.0.dp.toPx()),
       )
-      // Two crisp horizontal message lines inside
       drawLine(
         color = Color.White,
         start = Offset(w * 0.28f, h * 0.36f),
@@ -369,7 +395,7 @@ private fun OriginalChatPillButton(
 }
 
 /**
- * Single Original Horizontal Dock Panel matching Reference Image 2:
+ * Single Original Horizontal Dock Panel matching Theme 1 (`home_bg.png`) neon cyan glow & clean glass tiles:
  * WhatsApp (Green), IMO (Cyan), Messenger (Purple), YouTube (Red Music Note), Contacts (Yellow), Settings (White/Blue Rotating Gear).
  */
 @Composable
@@ -398,7 +424,7 @@ fun LxrDockAppsRow(
       label = "dock_pulse",
     )
 
-  val dockShape = remember { ChamferedFuturisticShape(chamferDp = 15.dp, cornerRadiusDp = 5.dp) }
+  val dockShape = remember { ChamferedFuturisticShape(chamferDp = 16.dp, cornerRadiusDp = 5.dp) }
   Box(
     modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp),
     contentAlignment = Alignment.Center,
@@ -407,25 +433,27 @@ fun LxrDockAppsRow(
       modifier =
         Modifier
           .fillMaxWidth()
-          .shadow(14.dp, dockShape, spotColor = CYBER_CYAN)
+          .shadow(16.dp, dockShape, spotColor = Color(0xFF00F0FF))
           .clip(dockShape)
           .background(
-            Brush.verticalGradient(listOf(Color(0xF0081632), Color(0xF8040B1C))),
+            Brush.verticalGradient(listOf(Color(0xDC061636), Color(0xEA030A1C))),
             dockShape,
           )
           .border(
-            width = 1.7.dp,
+            width = 2.0.dp,
             brush =
               Brush.horizontalGradient(
                 listOf(
-                  CYBER_CYAN.copy(alpha = 0.72f + pulse * 0.25f),
+                  Color(0xFF00F0FF).copy(alpha = 0.85f + pulse * 0.15f),
                   Color(0xFF38BDF8),
-                  CYBER_CYAN.copy(alpha = 0.72f + pulse * 0.25f),
+                  Color.White.copy(alpha = 0.85f),
+                  Color(0xFF38BDF8),
+                  Color(0xFF00F0FF).copy(alpha = 0.85f + pulse * 0.15f),
                 )
               ),
             shape = dockShape,
           )
-          .padding(horizontal = 7.dp, vertical = 7.dp),
+          .padding(horizontal = 8.dp, vertical = 7.dp),
       horizontalArrangement = Arrangement.spacedBy(5.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -492,10 +520,10 @@ fun LxrDockAppsRow(
       }
     }
 
-    // Top-center and Bottom-center diamond energy nodes on dock perimeter (exact Image 2 detail)
+    // Top-center and Bottom-center diamond energy nodes on dock perimeter (exact Theme 1 detail)
     Canvas(modifier = Modifier.matchParentSize()) {
-      drawDiamondStarNode(Offset(size.width * 0.5f, 1.dp.toPx()), 4.5.dp.toPx(), CYBER_CYAN)
-      drawDiamondStarNode(Offset(size.width * 0.5f, size.height - 1.dp.toPx()), 4.5.dp.toPx(), CYBER_CYAN)
+      drawDiamondStarNode(Offset(size.width * 0.5f, 1.dp.toPx()), 5.0.dp.toPx(), Color(0xFF00F0FF))
+      drawDiamondStarNode(Offset(size.width * 0.5f, size.height - 1.dp.toPx()), 5.0.dp.toPx(), Color(0xFF00F0FF))
     }
   }
 }
@@ -517,9 +545,9 @@ private fun DockOriginalItem(
         .heightIn(min = 52.dp)
         .testTag(tag)
         .semantics { contentDescription = label }
-        .clip(RoundedCornerShape(12.dp))
-        .background(Color(0x8806142C))
-        .border(0.85.dp, Color(0xFF60A5FA).copy(alpha = 0.22f + pulse * 0.14f), RoundedCornerShape(12.dp))
+        .clip(RoundedCornerShape(11.dp))
+        .background(Color(0x6606122A))
+        .border(0.75.dp, Color(0x4593C5FD), RoundedCornerShape(11.dp))
         .clickable(onClick = onClick)
         .padding(vertical = 5.dp, horizontal = 2.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -528,7 +556,7 @@ private fun DockOriginalItem(
     Box(
       modifier =
         Modifier
-          .size(24.dp)
+          .size(23.dp)
           .let { if (iconRotationDeg != 0f) it.rotate(iconRotationDeg) else it },
       contentAlignment = Alignment.Center,
     ) {
@@ -548,7 +576,33 @@ private fun DockOriginalItem(
   }
 }
 
+private fun DrawScope.drawStarFlare(center: Offset, r: Float, color: Color) {
+  drawCircle(
+    brush = Brush.radialGradient(listOf(Color.White, color.copy(alpha = 0.6f), Color.Transparent), center = center, radius = r * 1.6f),
+    radius = r * 1.6f,
+    center = center,
+  )
+  val path =
+    Path().apply {
+      moveTo(center.x, center.y - r)
+      lineTo(center.x + r * 0.25f, center.y - r * 0.25f)
+      lineTo(center.x + r, center.y)
+      lineTo(center.x + r * 0.25f, center.y + r * 0.25f)
+      lineTo(center.x, center.y + r)
+      lineTo(center.x - r * 0.25f, center.y + r * 0.25f)
+      lineTo(center.x - r, center.y)
+      lineTo(center.x - r * 0.25f, center.y - r * 0.25f)
+      close()
+    }
+  drawPath(path, color = Color.White.copy(alpha = 0.92f))
+}
+
 private fun DrawScope.drawDiamondStarNode(center: Offset, r: Float, color: Color) {
+  drawCircle(
+    brush = Brush.radialGradient(listOf(color.copy(alpha = 0.70f), Color.Transparent), center = center, radius = r * 2.2f),
+    radius = r * 2.2f,
+    center = center,
+  )
   val path =
     Path().apply {
       moveTo(center.x, center.y - r)
@@ -557,8 +611,8 @@ private fun DrawScope.drawDiamondStarNode(center: Offset, r: Float, color: Color
       lineTo(center.x - r * 0.85f, center.y)
       close()
     }
-  drawPath(path, color = color.copy(alpha = 0.90f))
-  drawCircle(color = Color.White, radius = r * 0.35f, center = center)
+  drawPath(path, color = color.copy(alpha = 0.95f))
+  drawCircle(color = Color.White, radius = r * 0.38f, center = center)
 }
 
 private fun DrawScope.drawOriginalWhatsAppIcon(pulse: Float) {
