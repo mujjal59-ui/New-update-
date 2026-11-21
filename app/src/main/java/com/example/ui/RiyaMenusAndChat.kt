@@ -453,7 +453,6 @@ fun RiyaThreeLineMenuDialog(
                     HomeTheme.LXR_STUDIO -> "LXR স্টুডিও"
                     HomeTheme.ARIA_CYBER_ROOM -> "Aria রুম"
                     HomeTheme.MITALI_CYBER_STUDIO -> "মীতালী থিম"
-                    HomeTheme.LUNA_CYBER_STUDIO -> "লুনা থিম"
                   },
                 color = if (selected) Color.Black else Color.White,
                 fontSize = 11.5.sp,
@@ -471,12 +470,6 @@ fun RiyaThreeLineMenuDialog(
                     .clickable {
                       Store.setHomeTheme(ctx, t)
                       Toast.makeText(ctx, "${t.titleBn} চালু হয়েছে ✓", Toast.LENGTH_SHORT).show()
-                      if (t != HomeTheme.LXR_STUDIO) {
-                        try {
-                          RiyaVoiceManager.initialize(ctx)
-                          RiyaVoiceManager.speak(t.greetingBn, interrupt = true)
-                        } catch (_: Exception) {}
-                      }
                     }
                     .padding(horizontal = 12.dp, vertical = 7.dp),
               )

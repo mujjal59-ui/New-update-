@@ -118,13 +118,6 @@ fun LxrLiveAvatarOverlay(
       animationSpec = infiniteRepeatable(tween(11500, easing = LinearEasing), RepeatMode.Restart),
       label = "petal_fall",
     )
-  val talkCadence by
-    inf.animateFloat(
-      initialValue = 0f,
-      targetValue = 1f,
-      animationSpec = infiniteRepeatable(tween(260, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-      label = "talk_mouth",
-    )
 
   // Natural human blink + subtle left/right eye focus movement
   val blink = remember { Animatable(0f) }
@@ -168,7 +161,6 @@ fun LxrLiveAvatarOverlay(
   val blinkVal = blink.value
   val gazeVal = eyeGaze.value
   val robotBlinkVal = robotBlink.value
-  val isTalkingActive = isSpeaking || isRunning
 
   Box(modifier = Modifier.fillMaxSize()) {
     // LAYER 1: Studio Background Animations + Background-Depth Falling Petals
@@ -179,7 +171,7 @@ fun LxrLiveAvatarOverlay(
 
       // 1A. Holographic 3D Earth (L X.R / AI) + Dual Counter-Rotating Orbital Rings
       val globeCx = fx(0.494f)
-      val globeCy = fyPx(if (homeTheme == HomeTheme.LXR_STUDIO) 0.080f else 0.092f)
+      val globeCy = fyPx(if (homeTheme == HomeTheme.LXR_STUDIO) 0.088f else 0.092f)
       val globeRx = (0.142f * dw) * d
       val globeRy = (0.049f * dh) * d
 
@@ -384,6 +376,18 @@ fun LxrLiveAvatarOverlay(
         size = Size(size.width, fyPx(1f) - fyPx(0.935f)),
       )
 
+      // Active running cyan glow halo around Mic orb on LXR_STUDIO without obscuring artwork
+      if (homeTheme == HomeTheme.LXR_STUDIO && isRunning) {
+        val micCenter = Offset(fx(0.498f), fyPx(0.695f))
+        val pulseR = (0.095f * dw) * d + (auraPulse * 5.dp.toPx())
+        drawCircle(
+          color = CYBER_CYAN.copy(alpha = 0.45f + auraPulse * 0.35f),
+          radius = pulseR,
+          center = micCenter,
+          style = Stroke(width = 2.4.dp.toPx()),
+        )
+      }
+
       // 1I. Background-Depth Falling Flower Petals (smaller, behind characters / side background lanes)
       drawFallingPetalLayer(
         petalFall = petalFall,
@@ -420,64 +424,14 @@ fun LxrLiveAvatarOverlay(
           catchlightPos = Offset(fx(0.661f), fyPx(0.3695f)),
         )
       }
-
-      // Aria Cyber Room active voice center pedestal aura
-      if (homeTheme == HomeTheme.ARIA_CYBER_ROOM && isTalkingActive) {
-        val pedestalCx = fx(0.50f)
-        val pedestalCy = fyPx(0.42f)
-        drawCircle(
-          brush =
-            Brush.radialGradient(
-              listOf(
-                CYBER_CYAN.copy(alpha = 0.25f + talkCadence * 0.20f),
-                Color(0xFF8B5CF6).copy(alpha = 0.14f),
-                Color.Transparent,
-              ),
-              center = Offset(pedestalCx, pedestalCy),
-              radius = (0.18f * dw) * d,
-            ),
-          radius = (0.18f * dw) * d,
-          center = Offset(pedestalCx, pedestalCy),
-        )
-      }
     }
 
-    // LAYER 2: Talking Premium Extra Theme Character (Aria, Mitali, or Luna) above bottom HUD controls
-    if (
-      homeTheme == HomeTheme.ARIA_CYBER_ROOM ||
-        homeTheme == HomeTheme.MITALI_CYBER_STUDIO ||
-        homeTheme == HomeTheme.LUNA_CYBER_STUDIO
-    ) {
-      val charH =
-        dh *
-          when (homeTheme) {
-            HomeTheme.ARIA_CYBER_ROOM -> 0.56f
-            HomeTheme.MITALI_CYBER_STUDIO -> 0.56f
-            HomeTheme.LUNA_CYBER_STUDIO -> 0.54f
-            HomeTheme.LXR_STUDIO -> 0.56f
-          }
-      val charRatio =
-        when (homeTheme) {
-          HomeTheme.ARIA_CYBER_ROOM -> 660f / 1536f
-          HomeTheme.MITALI_CYBER_STUDIO -> 663f / 1672f
-          HomeTheme.LUNA_CYBER_STUDIO -> 706f / 1199f
-          HomeTheme.LXR_STUDIO -> 660f / 1536f
-        }
+    // LAYER 2: Non-Talking Animated Theme Characters (Aria or Mitali) with natural blinking & breathing motion
+    if (homeTheme == HomeTheme.ARIA_CYBER_ROOM || homeTheme == HomeTheme.MITALI_CYBER_STUDIO) {
+      val charH = dh * 0.56f
+      val charRatio = if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) 660f / 1536f else 663f / 1672f
       val charW = charH * charRatio
-      val charRes =
-        when (homeTheme) {
-          HomeTheme.ARIA_CYBER_ROOM -> R.drawable.char_aria
-          HomeTheme.MITALI_CYBER_STUDIO -> R.drawable.char_mitali
-          HomeTheme.LUNA_CYBER_STUDIO -> R.drawable.char_luna
-          HomeTheme.LXR_STUDIO -> R.drawable.char_aria
-        }
-      val auraColor =
-        when (homeTheme) {
-          HomeTheme.ARIA_CYBER_ROOM -> CYBER_CYAN
-          HomeTheme.MITALI_CYBER_STUDIO -> Color(0xFFFF4D8D)
-          HomeTheme.LUNA_CYBER_STUDIO -> CYBER_PURPLE
-          HomeTheme.LXR_STUDIO -> CYBER_CYAN
-        }
+      val charRes = if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) R.drawable.char_aria else R.drawable.char_mitali
 
       BoxWithConstraints(
         modifier =
@@ -486,132 +440,63 @@ fun LxrLiveAvatarOverlay(
             .offset(y = -(dh * 0.295f).dp + (breezePhase * 2.0f).dp)
             .size(width = charW.dp, height = charH.dp)
       ) {
-        if (isTalkingActive) {
-          Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(
-              brush =
-                Brush.radialGradient(
-                  listOf(auraColor.copy(alpha = 0.24f + talkCadence * 0.18f), Color.Transparent),
-                  center = Offset(size.width * 0.5f, size.height * 0.35f),
-                  radius = size.width * 0.55f,
-                ),
-              radius = size.width * 0.55f,
-              center = Offset(size.width * 0.5f, size.height * 0.35f),
-            )
-          }
-        }
-
         Image(
           painter = painterResource(charRes),
-          contentDescription = "${homeTheme.name} Talking Character",
+          contentDescription = "${homeTheme.name} Animated Character",
           modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.99f },
           contentScale = ContentScale.Fit,
         )
 
+        // Natural eyelid blinking only (NO mouth modification / NO talking animation)
         Canvas(modifier = Modifier.fillMaxSize()) {
           val w = size.width
           val h = size.height
-          when (homeTheme) {
-            HomeTheme.ARIA_CYBER_ROOM -> {
-              drawNaturalEyelidBlink(
-                leftX = w * 0.380f,
-                rightX = w * 0.448f,
-                topY = h * 0.095f,
-                midY = h * 0.102f,
-                botY = h * 0.109f,
-                lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.413f, h * 0.102f),
-              )
-              drawNaturalEyelidBlink(
-                leftX = w * 0.522f,
-                rightX = w * 0.592f,
-                topY = h * 0.085f,
-                midY = h * 0.092f,
-                botY = h * 0.099f,
-                lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.557f, h * 0.092f),
-              )
-              if (isSpeaking) {
-                drawCharacterSpeakingMouth(
-                  centerX = w * 0.501f,
-                  centerY = h * 0.146f,
-                  widthPx = w * 0.042f,
-                  openFrac = 0.25f + talkCadence * 0.75f,
-                  lipColor = Color(0xFFD97278),
-                )
-              }
-            }
-            HomeTheme.MITALI_CYBER_STUDIO -> {
-              drawNaturalEyelidBlink(
-                leftX = w * 0.342f,
-                rightX = w * 0.410f,
-                topY = h * 0.100f,
-                midY = h * 0.107f,
-                botY = h * 0.114f,
-                lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.372f, h * 0.107f),
-              )
-              drawNaturalEyelidBlink(
-                leftX = w * 0.492f,
-                rightX = w * 0.558f,
-                topY = h * 0.086f,
-                midY = h * 0.092f,
-                botY = h * 0.099f,
-                lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.525f, h * 0.092f),
-              )
-              if (isSpeaking) {
-                drawCharacterSpeakingMouth(
-                  centerX = w * 0.484f,
-                  centerY = h * 0.142f,
-                  widthPx = w * 0.044f,
-                  openFrac = 0.25f + talkCadence * 0.75f,
-                  lipColor = Color(0xFFD94A56),
-                )
-              }
-            }
-            HomeTheme.LUNA_CYBER_STUDIO -> {
-              drawNaturalEyelidBlink(
-                leftX = w * 0.352f,
-                rightX = w * 0.415f,
-                topY = h * 0.144f,
-                midY = h * 0.151f,
-                botY = h * 0.158f,
-                lidColors = listOf(Color(0xFFF3CFC6), Color(0xFFD9A69C), Color(0xFF4F2B56)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.382f, h * 0.151f),
-              )
-              drawNaturalEyelidBlink(
-                leftX = w * 0.512f,
-                rightX = w * 0.576f,
-                topY = h * 0.142f,
-                midY = h * 0.149f,
-                botY = h * 0.156f,
-                lidColors = listOf(Color(0xFFF3CFC6), Color(0xFFD9A69C), Color(0xFF4F2B56)),
-                blinkVal = blinkVal,
-                gazeShiftPx = gazeVal * 0.9.dp.toPx(),
-                catchlightPos = Offset(w * 0.545f, h * 0.149f),
-              )
-              if (isSpeaking) {
-                drawCharacterSpeakingMouth(
-                  centerX = w * 0.467f,
-                  centerY = h * 0.192f,
-                  widthPx = w * 0.042f,
-                  openFrac = 0.25f + talkCadence * 0.75f,
-                  lipColor = Color(0xFFE05D78),
-                )
-              }
-            }
-            HomeTheme.LXR_STUDIO -> Unit
+          if (homeTheme == HomeTheme.ARIA_CYBER_ROOM) {
+            drawNaturalEyelidBlink(
+              leftX = w * 0.380f,
+              rightX = w * 0.448f,
+              topY = h * 0.095f,
+              midY = h * 0.102f,
+              botY = h * 0.109f,
+              lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
+              blinkVal = blinkVal,
+              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
+              catchlightPos = Offset(w * 0.413f, h * 0.102f),
+            )
+            drawNaturalEyelidBlink(
+              leftX = w * 0.522f,
+              rightX = w * 0.592f,
+              topY = h * 0.085f,
+              midY = h * 0.092f,
+              botY = h * 0.099f,
+              lidColors = listOf(Color(0xFFF3D5CE), Color(0xFFD8A9A0), Color(0xFF4F272E)),
+              blinkVal = blinkVal,
+              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
+              catchlightPos = Offset(w * 0.557f, h * 0.092f),
+            )
+          } else {
+            drawNaturalEyelidBlink(
+              leftX = w * 0.342f,
+              rightX = w * 0.410f,
+              topY = h * 0.100f,
+              midY = h * 0.107f,
+              botY = h * 0.114f,
+              lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
+              blinkVal = blinkVal,
+              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
+              catchlightPos = Offset(w * 0.372f, h * 0.107f),
+            )
+            drawNaturalEyelidBlink(
+              leftX = w * 0.492f,
+              rightX = w * 0.558f,
+              topY = h * 0.086f,
+              midY = h * 0.092f,
+              botY = h * 0.099f,
+              lidColors = listOf(Color(0xFFEFC5B8), Color(0xFFD6A096), Color(0xFF6B3936)),
+              blinkVal = blinkVal,
+              gazeShiftPx = gazeVal * 0.9.dp.toPx(),
+              catchlightPos = Offset(w * 0.525f, h * 0.092f),
+            )
           }
         }
       }
@@ -718,28 +603,6 @@ private fun DrawScope.drawFallingPetalLayer(
       )
     }
   }
-}
-
-private fun DrawScope.drawCharacterSpeakingMouth(
-  centerX: Float,
-  centerY: Float,
-  widthPx: Float,
-  openFrac: Float,
-  lipColor: Color,
-) {
-  val rx = widthPx * 0.5f
-  val ry = (widthPx * 0.34f) * openFrac.coerceIn(0.15f, 1.0f)
-  drawOval(
-    color = Color(0xFF42101A).copy(alpha = 0.88f),
-    topLeft = Offset(centerX - rx * 0.78f, centerY - ry * 0.65f),
-    size = Size(rx * 1.56f, ry * 1.35f),
-  )
-  drawOval(
-    color = lipColor.copy(alpha = 0.78f),
-    topLeft = Offset(centerX - rx, centerY - ry),
-    size = Size(rx * 2f, ry * 2f),
-    style = Stroke(width = 1.4.dp.toPx()),
-  )
 }
 
 private fun DrawScope.drawHoloPanelFrame(

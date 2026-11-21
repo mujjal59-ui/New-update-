@@ -91,31 +91,21 @@ enum class HomeTheme(
   val id: Int,
   val titleBn: String,
   val subtitleBn: String,
-  val greetingBn: String,
 ) {
   LXR_STUDIO(
     id = 0,
     titleBn = "LXR AI মাস্টার স্টুডিও",
-    subtitleBn = "লকড আসল পোর্ট্রেট, L X.R গ্লোব, ফুলের পাপড়ি ও ফুল অ্যানিমেশন",
-    greetingBn = "মাস্টার LXR স্টুডিও থিম চালু হয়েছে বস।",
+    subtitleBn = "আসল LXR--AI UI স্টাইল, চোখের পলক, L X.R গ্লোব ও ফুলের পাপড়ি",
   ),
   ARIA_CYBER_ROOM(
     id = 1,
     titleBn = "Aria সাইবার AI রুম",
-    subtitleBn = "কথা বলা প্রিমিয়াম হলোগ্রাফিক AI গ্লোব ও নিওন ফ্লোর থিম",
-    greetingBn = "আসসালামু আলাইকুম বস, আরিয়া সাইবার এআই রুম প্রস্তুত!",
+    subtitleBn = "Aria অ্যানিমেটেড চরিত্র, চোখের পলক, L X.R গ্লোব ও ফুলের পাপড়ি",
   ),
   MITALI_CYBER_STUDIO(
     id = 2,
     titleBn = "মীতালী AI স্টুডিও",
-    subtitleBn = "কথা বলা প্রিমিয়াম মীতালী চরিত্র, চোখের পলক ও লিপ-সিঙ্ক থিম",
-    greetingBn = "হ্যালো বস, আমি মীতালী। বলুন কীভাবে সাহায্য করতে পারি?",
-  ),
-  LUNA_CYBER_STUDIO(
-    id = 3,
-    titleBn = "লুনা AI স্টুডিও",
-    subtitleBn = "কথা বলা প্রিমিয়াম বেগুনি লুনা চরিত্র, ঝরন্ত পাপড়ি ও ভয়েস অরা",
-    greetingBn = "হ্যালো বস, আমি লুনা। আপনার প্রতিটি কমান্ডের জন্য প্রস্তুত!",
+    subtitleBn = "মীতালী অ্যানিমেটেড চরিত্র, চোখের পলক, সাইবার রুম ও ফুলের পাপড়ি",
   ),
   ;
 

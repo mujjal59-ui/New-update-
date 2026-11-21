@@ -431,8 +431,8 @@ fun RiyaHomeScreen(
   val activeTheme = remember(themeIdx) { HomeTheme.fromId(themeIdx) }
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
-    val iw = 841f
-    val ih = 1870f
+    val iw = 691f
+    val ih = 1536f
     val sw = maxWidth.value
     val sh = maxHeight.value
     val scale = maxOf(sw / iw, sh / ih)
@@ -454,25 +454,24 @@ fun RiyaHomeScreen(
     val cardHeightDp = (sh * 0.088f).coerceIn(66f, 84f)
     val totalSectionHeightDp = cardHeightDp + 18f
     val sectionTopY =
-      minOf(oy + 0.842f * dh, safeBottomDp - totalSectionHeightDp)
-        .coerceAtLeast(oy + 0.822f * dh)
+      minOf(oy + 0.850f * dh, safeBottomDp - totalSectionHeightDp)
+        .coerceAtLeast(oy + 0.844f * dh)
 
     val dockApproxHeight = 68f
     val dockTopY =
-      minOf(oy + 0.738f * dh, sectionTopY - dockApproxHeight - 8f)
+      minOf(oy + 0.742f * dh, sectionTopY - dockApproxHeight - 8f)
         .coerceAtLeast(0f)
 
-    val voiceStripHeight = 84f
+    val voiceStripHeight = 82f
     val voiceStripTopY =
-      minOf(oy + 0.696f * dh - voiceStripHeight / 2f, dockTopY - voiceStripHeight)
+      minOf(oy + 0.695f * dh - voiceStripHeight / 2f, dockTopY - voiceStripHeight)
         .coerceAtLeast(0f)
 
     val bgRes =
       when (activeTheme) {
         HomeTheme.LXR_STUDIO -> R.drawable.home_bg
         HomeTheme.ARIA_CYBER_ROOM,
-        HomeTheme.MITALI_CYBER_STUDIO,
-        HomeTheme.LUNA_CYBER_STUDIO -> R.drawable.bg_aria
+        HomeTheme.MITALI_CYBER_STUDIO -> R.drawable.bg_aria
       }
 
     Image(
@@ -482,7 +481,7 @@ fun RiyaHomeScreen(
       contentScale = ContentScale.Crop,
     )
 
-    // Separated multi-layer 60fps animations: Studio background, locked portrait eyes, petals & talking Extra Theme characters
+    // Separated multi-layer 60fps animations: Studio background, locked portrait eyes, petals & animated characters
     LxrLiveAvatarOverlay(
       ox = ox,
       oy = oy,
@@ -495,16 +494,27 @@ fun RiyaHomeScreen(
       py = ::py,
     )
 
-    // Top-left animated Menu button matching exact Reference Image 2 purple orb placement below ChatGPT
-    val menuTopY = maxOf(oy + 0.148f * dh, statusTopDp + 8f)
-    val menuLeftX = maxOf(ox + 0.032f * dw, 14f)
-    LxrTopLeftMenuButton(
-      onClick = onMenu,
-      modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
-    )
+    // Top-left Menu button: hotspot on LXR_STUDIO (matching home_bg artwork), styled orb on Aria/Mitali themes
+    if (activeTheme == HomeTheme.LXR_STUDIO) {
+      Box(
+        modifier =
+          Modifier
+            .offset(x = px(0.098f - 0.072f), y = py(0.172f - 0.036f))
+            .size(width = maxOf(pw(0.144f), 48.dp), height = maxOf(ph(0.072f), 48.dp))
+            .testTag("menu_button")
+            .clickable(onClick = onMenu)
+      )
+    } else {
+      val menuTopY = maxOf(oy + 0.148f * dh, statusTopDp + 8f)
+      val menuLeftX = maxOf(ox + 0.032f * dw, 14f)
+      LxrTopLeftMenuButton(
+        onClick = onMenu,
+        modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
+      )
+    }
 
     // Compact center Status Pill & Warnings strictly inside center channel (never covering Dream Big or Claude)
-    val statusPillTopY = maxOf(oy + 0.152f * dh, statusTopDp + 10f)
+    val statusPillTopY = maxOf(oy + 0.168f * dh, statusTopDp + 10f)
     Column(
       modifier = Modifier.align(Alignment.TopCenter).offset(y = statusPillTopY.dp).widthIn(max = 185.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
@@ -764,42 +774,97 @@ fun RiyaHomeScreen(
       }
     }
 
-    // 1. Animated Voice Control Strip: Camera, Centered Microphone (breathing rings + waves), Chat
-    Box(
-      modifier = Modifier.fillMaxWidth().offset(y = voiceStripTopY.dp),
-      contentAlignment = Alignment.TopCenter,
-    ) {
-      LxrVoiceControlStrip(
-        isRunning = running,
-        camOn = camOn,
-        onCam = onCam,
-        onMic = onMic,
-        onChat = onChat,
-        modifier = Modifier.widthIn(max = 600.dp),
+    if (activeTheme == HomeTheme.LXR_STUDIO) {
+      // Exact LXR_AI_with_menu_button hotspots aligned pixel-for-pixel over home_bg.png artwork (v2.22.0 style)
+      Box(
+        modifier =
+          Modifier
+            .offset(x = px(0.253f - 0.085f), y = py(0.695f - 0.028f))
+            .size(width = maxOf(pw(0.170f), 48.dp), height = maxOf(ph(0.056f), 48.dp))
+            .testTag("cam_button")
+            .clickable(onClick = onCam)
       )
-    }
+      Box(
+        modifier =
+          Modifier
+            .offset(x = px(0.498f - 0.105f), y = py(0.695f - 0.044f))
+            .size(width = maxOf(pw(0.210f), 48.dp), height = maxOf(ph(0.088f), 48.dp))
+            .testTag("mic_button")
+            .clickable(onClick = onMic)
+      )
+      Box(
+        modifier =
+          Modifier
+            .offset(x = px(0.742f - 0.085f), y = py(0.695f - 0.028f))
+            .size(width = maxOf(pw(0.170f), 48.dp), height = maxOf(ph(0.056f), 48.dp))
+            .testTag("chat_button")
+            .clickable(onClick = onChat)
+      )
 
-    // 2. Animated 6-Icon Cyber Dock: WhatsApp, IMO, Messenger, YouTube, Contacts, Settings (rotating gear)
-    Box(
-      modifier = Modifier.fillMaxWidth().offset(y = dockTopY.dp),
-      contentAlignment = Alignment.TopCenter,
-    ) {
-      LxrDockAppsRow(
-        onWhatsApp = { launchPkg(ctx, "com.whatsapp", "com.whatsapp.w4b") },
-        onImo = {
-          launchPkg(ctx, "com.imo.android.imoim", "com.imo.android.imoimhd", "com.imo.android.imoimbeta")
-        },
-        onMessenger = { launchPkg(ctx, "com.facebook.orca", "com.facebook.mlite") },
-        onYouTube = { launchPkg(ctx, "com.google.android.youtube") },
-        onContacts = {
-          ctx.startActivity(
-            Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
-              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          )
-        },
-        onSettings = onSettings,
-        modifier = Modifier.widthIn(max = 600.dp),
-      )
+      val dockHotspots =
+        listOf(
+          Triple("dock_whatsapp", 0.120f) { launchPkg(ctx, "com.whatsapp", "com.whatsapp.w4b") },
+          Triple("dock_imo", 0.272f) {
+            launchPkg(ctx, "com.imo.android.imoim", "com.imo.android.imoimhd", "com.imo.android.imoimbeta")
+          },
+          Triple("dock_messenger", 0.424f) { launchPkg(ctx, "com.facebook.orca", "com.facebook.mlite") },
+          Triple("dock_youtube", 0.576f) { launchPkg(ctx, "com.google.android.youtube") },
+          Triple("dock_contacts", 0.728f) {
+            ctx.startActivity(
+              Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+          },
+          Triple("dock_settings", 0.880f, onSettings),
+        )
+      dockHotspots.forEach { (tag, cx, action) ->
+        Box(
+          modifier =
+            Modifier
+              .offset(x = px(cx - 0.072f), y = py(0.782f - 0.040f))
+              .size(width = maxOf(pw(0.144f), 48.dp), height = maxOf(ph(0.080f), 48.dp))
+              .testTag(tag)
+              .clickable(onClick = action)
+        )
+      }
+    } else {
+      // 1. Animated Voice Control Strip for Aria / Mitali themes
+      Box(
+        modifier = Modifier.fillMaxWidth().offset(y = voiceStripTopY.dp),
+        contentAlignment = Alignment.TopCenter,
+      ) {
+        LxrVoiceControlStrip(
+          isRunning = running,
+          camOn = camOn,
+          onCam = onCam,
+          onMic = onMic,
+          onChat = onChat,
+          modifier = Modifier.widthIn(max = 600.dp),
+        )
+      }
+
+      // 2. Animated 6-Icon Cyber Dock matching v2.22.0 glass style for Aria / Mitali themes
+      Box(
+        modifier = Modifier.fillMaxWidth().offset(y = dockTopY.dp),
+        contentAlignment = Alignment.TopCenter,
+      ) {
+        LxrDockAppsRow(
+          onWhatsApp = { launchPkg(ctx, "com.whatsapp", "com.whatsapp.w4b") },
+          onImo = {
+            launchPkg(ctx, "com.imo.android.imoim", "com.imo.android.imoimhd", "com.imo.android.imoimbeta")
+          },
+          onMessenger = { launchPkg(ctx, "com.facebook.orca", "com.facebook.mlite") },
+          onYouTube = { launchPkg(ctx, "com.google.android.youtube") },
+          onContacts = {
+            ctx.startActivity(
+              Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+          },
+          onSettings = onSettings,
+          modifier = Modifier.widthIn(max = 600.dp),
+        )
+      }
     }
 
     // 3. Animated Three Section Cards ("অ্যাপস তৈরি", "ভিডিও তৈরি", "YouTube ভিডিও SEO") + Neon Divider

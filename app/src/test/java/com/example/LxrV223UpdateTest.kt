@@ -142,6 +142,7 @@ class LxrV223UpdateTest {
 
   @Test
   fun homeTheme_persistsAcrossSessionsAndSyncsLiveStateFlow() {
+    assertEquals(3, HomeTheme.entries.size)
     assertEquals(HomeTheme.LXR_STUDIO, Store.homeTheme(ctx))
 
     Store.setHomeTheme(ctx, HomeTheme.ARIA_CYBER_ROOM)
@@ -153,15 +154,6 @@ class LxrV223UpdateTest {
     assertEquals(2, Store.design(ctx))
     assertEquals(HomeTheme.MITALI_CYBER_STUDIO, Store.homeTheme(ctx))
     assertEquals(2, RiyaState.homeThemeIndex.value)
-
-    Store.setHomeTheme(ctx, HomeTheme.LUNA_CYBER_STUDIO)
-    assertEquals(3, Store.design(ctx))
-    assertEquals(HomeTheme.LUNA_CYBER_STUDIO, Store.homeTheme(ctx))
-    assertEquals(3, RiyaState.homeThemeIndex.value)
-
-    HomeTheme.entries.forEach { t ->
-      assertTrue("Each theme should have non-blank talking greeting: ${t.name}", t.greetingBn.isNotBlank())
-    }
   }
 
   @Test
@@ -259,16 +251,12 @@ class LxrV223UpdateTest {
     assertEquals(1, menuClicks)
     assertEquals(1, settingsClicks)
 
-    // Switch through all 4 themes including Luna & verify active running/talking UI stays overlap-free
+    // Switch through all 3 themes & verify all UI buttons remain displayed without overlap
     Store.setHomeTheme(ctx, HomeTheme.ARIA_CYBER_ROOM)
     composeTestRule.waitForIdle()
     allTags.forEach { tag -> composeTestRule.onNodeWithTag(tag).assertIsDisplayed() }
 
     Store.setHomeTheme(ctx, HomeTheme.MITALI_CYBER_STUDIO)
-    composeTestRule.waitForIdle()
-    allTags.forEach { tag -> composeTestRule.onNodeWithTag(tag).assertIsDisplayed() }
-
-    Store.setHomeTheme(ctx, HomeTheme.LUNA_CYBER_STUDIO)
     composeTestRule.waitForIdle()
     allTags.forEach { tag -> composeTestRule.onNodeWithTag(tag).assertIsDisplayed() }
   }

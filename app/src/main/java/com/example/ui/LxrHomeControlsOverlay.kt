@@ -514,12 +514,12 @@ private fun DockOriginalItem(
   Column(
     modifier =
       modifier
-        .heightIn(min = 54.dp)
+        .heightIn(min = 52.dp)
         .testTag(tag)
         .semantics { contentDescription = label }
-        .clip(RoundedCornerShape(10.dp))
-        .background(Color(0x99061026))
-        .border(0.95.dp, accent.copy(alpha = 0.24f + pulse * 0.26f), RoundedCornerShape(10.dp))
+        .clip(RoundedCornerShape(12.dp))
+        .background(Color(0x8806142C))
+        .border(0.85.dp, Color(0xFF60A5FA).copy(alpha = 0.22f + pulse * 0.14f), RoundedCornerShape(12.dp))
         .clickable(onClick = onClick)
         .padding(vertical = 5.dp, horizontal = 2.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -528,7 +528,7 @@ private fun DockOriginalItem(
     Box(
       modifier =
         Modifier
-          .size(26.dp)
+          .size(24.dp)
           .let { if (iconRotationDeg != 0f) it.rotate(iconRotationDeg) else it },
       contentAlignment = Alignment.Center,
     ) {
@@ -540,7 +540,7 @@ private fun DockOriginalItem(
     Text(
       text = label,
       color = Color.White,
-      fontSize = 9.5.sp,
+      fontSize = 9.sp,
       fontWeight = FontWeight.Medium,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
