@@ -119,13 +119,19 @@ enum class ReplyDelayOption(
   val optionLabel: String,
   val selectedLabel: String,
 ) {
-  INSTANT(0, "Instant — 0 sec (Default)", "Selected: Instant (0s)"),
-  FAST(8, "Fast — 8 sec", "Selected: Fast (8s)"),
-  NORMAL(15, "Normal — 15 sec", "Selected: Normal (15s)"),
+  INSTANT(0, "Instant — 00.0 sec (Default)", "Selected: Instant (00.0 sec)"),
+  FAST(5, "Fast — 00.5 sec", "Selected: Fast (00.5 sec)"),
+  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)"),
   ;
 
   companion object {
-    fun fromSeconds(sec: Int): ReplyDelayOption = entries.firstOrNull { it.seconds == sec } ?: INSTANT
+    fun fromSeconds(sec: Int): ReplyDelayOption =
+      when (sec) {
+        0 -> INSTANT
+        5, 8 -> FAST
+        10, 15 -> NORMAL
+        else -> entries.firstOrNull { it.seconds == sec } ?: INSTANT
+      }
   }
 }
 
@@ -145,6 +151,13 @@ enum class ReplyLimitOption(
   }
 }
 
+data class LiveVoiceModelOption(
+  val id: String,
+  val title: String,
+  val modelId: String,
+  val badge: String,
+)
+
 object RiyaState {
   val running = MutableStateFlow(false)
   val resume = MutableStateFlow(0)
@@ -157,6 +170,9 @@ object RiyaState {
   val networkSpeedLabel = MutableStateFlow("Fast")
   val voiceMatchLiveLabel = MutableStateFlow("")
   val homeThemeIndex = MutableStateFlow(0)
+  val liveModelId = MutableStateFlow(Store.DEFAULT_LIVE_MODEL)
+  val replyDelaySeconds = MutableStateFlow(0)
+  val replyLimitMax = MutableStateFlow(-1)
 
   @Volatile var live: GeminiLive? = null
   @Volatile var cameraOn: Boolean = false
@@ -206,6 +222,39 @@ object Store {
       GeminiVoiceOption("Charon", "Charon", VoiceGender.MALE, "গভীর ও শান্ত পুরুষ কণ্ঠ"),
     )
 
+  val LIVE_VOICE_MODEL_OPTIONS =
+    listOf(
+      LiveVoiceModelOption(
+        id = "gemini_3_8_live",
+        title = "Gemini 3.8 Live",
+        modelId = "gemini-3.8-live",
+        badge = "New",
+      ),
+      LiveVoiceModelOption(
+        id = "gemini_3_1_flash_live",
+        title = "Gemini 3.1 Flash Live (preview)",
+        modelId = "gemini-3.1-flash-live-preview",
+        badge = "Recommended",
+      ),
+      LiveVoiceModelOption(
+        id = "gemini_2_5_flash_native",
+        title = "Gemini 2.5 Flash Native Audio (Dec 2025)",
+        modelId = "gemini-2.5-flash-native-audio-preview-12-2025",
+        badge = "Stable",
+      ),
+    )
+
+  fun liveVoiceModelById(modelId: String): LiveVoiceModelOption {
+    val clean = modelId.trim()
+    return LIVE_VOICE_MODEL_OPTIONS.firstOrNull {
+      it.modelId.equals(clean, ignoreCase = true) || it.title.equals(clean, ignoreCase = true)
+    } ?: when {
+      clean.contains("3.8") -> LIVE_VOICE_MODEL_OPTIONS[0]
+      clean.contains("2.5") -> LIVE_VOICE_MODEL_OPTIONS[2]
+      else -> LIVE_VOICE_MODEL_OPTIONS[1]
+    }
+  }
+
   private fun p(c: Context) = c.getSharedPreferences("lxr_ai_prefs", Context.MODE_PRIVATE)
 
   private fun legacyPrefs(c: Context) = c.getSharedPreferences("riya_ai", Context.MODE_PRIVATE)
@@ -231,8 +280,13 @@ object Store {
     return if (m.contains("2.0-flash")) DEFAULT_LIVE_MODEL else m
   }
 
-  fun setModel(c: Context, v: String) =
-    p(c).edit().putString("model", v.trim().ifBlank { DEFAULT_LIVE_MODEL }).apply()
+  fun setModel(c: Context, v: String) {
+    val clean = v.trim().ifBlank { DEFAULT_LIVE_MODEL }
+    p(c).edit().putString("model", clean).commit()
+    RiyaState.liveModelId.value = clean
+  }
+
+  fun liveVoiceModelOption(c: Context): LiveVoiceModelOption = liveVoiceModelById(model(c))
 
   fun voice(c: Context): String {
     val raw = p(c).getString("voice", null) ?: legacyPrefs(c).getString("voice", "Aoede") ?: "Aoede"
@@ -330,6 +384,7 @@ object Store {
   fun setReplyDelaySeconds(c: Context, seconds: Int) {
     val valid = ReplyDelayOption.fromSeconds(seconds).seconds
     p(c).edit().putInt("replyDelaySec", valid).commit()
+    RiyaState.replyDelaySeconds.value = valid
   }
 
   fun replyLimitMax(c: Context): Int =
@@ -341,6 +396,14 @@ object Store {
   fun setReplyLimitMax(c: Context, limit: Int) {
     val valid = ReplyLimitOption.fromMaxReplies(limit).maxReplies
     p(c).edit().putInt("replyLimitMax", valid).commit()
+    RiyaState.replyLimitMax.value = valid
+  }
+
+  fun replyDispatchedCount(c: Context): Int =
+    p(c).getInt("replyDispatchedCount", 0).coerceAtLeast(0)
+
+  fun setReplyDispatchedCount(c: Context, count: Int) {
+    p(c).edit().putInt("replyDispatchedCount", count.coerceAtLeast(0)).commit()
   }
 
   fun always(c: Context): Boolean = p(c).getBoolean("always", false)

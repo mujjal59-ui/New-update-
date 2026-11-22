@@ -54,27 +54,36 @@ class LxrV223UpdateTest {
     Store.setReplyDelaySeconds(ctx, 0)
     Store.setReplyLimitMax(ctx, -1)
     Store.setHomeTheme(ctx, HomeTheme.LXR_STUDIO)
-    ReplyPolicyScheduler.resetCounter()
+    Store.setModel(ctx, Store.DEFAULT_LIVE_MODEL)
+    ReplyPolicyScheduler.resetCounter(ctx)
   }
 
   @Test
-  fun replyDelayAndLimit_enumsAndStorePersistenceSurviveRestart() {
+  fun replyDelayAndLimit_enumsLegacyMigrationAndStorePersistenceSurviveRestart() {
     assertEquals(ReplyDelayOption.INSTANT, Store.replyDelayOption(ctx))
     assertEquals(ReplyLimitOption.UNLIMITED, Store.replyLimitOption(ctx))
 
-    Store.setReplyDelaySeconds(ctx, 8)
+    Store.setReplyDelaySeconds(ctx, 5)
     Store.setReplyLimitMax(ctx, 20)
-    assertEquals(8, Store.replyDelaySeconds(ctx))
+    assertEquals(5, Store.replyDelaySeconds(ctx))
     assertEquals(ReplyDelayOption.FAST, Store.replyDelayOption(ctx))
     assertEquals(20, Store.replyLimitMax(ctx))
     assertEquals(ReplyLimitOption.LIMIT_20, Store.replyLimitOption(ctx))
 
-    Store.setReplyDelaySeconds(ctx, 15)
+    Store.setReplyDelaySeconds(ctx, 10)
     Store.setReplyLimitMax(ctx, 50)
-    assertEquals(15, Store.replyDelaySeconds(ctx))
+    assertEquals(10, Store.replyDelaySeconds(ctx))
     assertEquals(ReplyDelayOption.NORMAL, Store.replyDelayOption(ctx))
     assertEquals(50, Store.replyLimitMax(ctx))
     assertEquals(ReplyLimitOption.LIMIT_50, Store.replyLimitOption(ctx))
+
+    // Legacy 8s / 15s values cleanly migrate to 5s / 10s
+    assertEquals(ReplyDelayOption.FAST, ReplyDelayOption.fromSeconds(8))
+    assertEquals(ReplyDelayOption.NORMAL, ReplyDelayOption.fromSeconds(15))
+    Store.setReplyDelaySeconds(ctx, 8)
+    assertEquals(5, Store.replyDelaySeconds(ctx))
+    Store.setReplyDelaySeconds(ctx, 15)
+    assertEquals(10, Store.replyDelaySeconds(ctx))
 
     // Invalid values safely fallback to defaults
     Store.setReplyDelaySeconds(ctx, 999)
@@ -85,9 +94,9 @@ class LxrV223UpdateTest {
 
   @Test
   fun replyPolicyScheduler_inFlightWaitKeepsInitialCapturedDelayWhenSettingChangesMidWait() = runTest {
-    Store.setReplyDelaySeconds(ctx, 15)
+    Store.setReplyDelaySeconds(ctx, 10)
     val initialCapturedDelay = ReplyPolicyScheduler.captureDelaySeconds(ctx)
-    assertEquals(15, initialCapturedDelay)
+    assertEquals(10, initialCapturedDelay)
 
     var executed = false
     val job = async {
@@ -99,44 +108,62 @@ class LxrV223UpdateTest {
       }
     }
 
-    advanceTimeBy(5_000L)
+    advanceTimeBy(4_000L)
     runCurrent()
-    assertFalse("15s captured wait must still be waiting at 5s", executed)
+    assertFalse("10s captured wait must still be waiting at 4s", executed)
 
-    // User changes setting to Instant (0s) while old wait is already running
+    // User changes setting to Instant (00.0s) while old wait is already running
     Store.setReplyDelaySeconds(ctx, 0)
     assertEquals(0, ReplyPolicyScheduler.captureDelaySeconds(ctx))
 
-    advanceTimeBy(5_000L)
+    advanceTimeBy(4_000L)
     runCurrent()
-    assertFalse("Old wait MUST keep its captured 15s time (still not done at 10s)", executed)
+    assertFalse("Old wait MUST keep its captured 10s time (still not done at 8s)", executed)
 
-    advanceTimeBy(5_000L)
+    advanceTimeBy(2_000L)
     runCurrent()
-    assertTrue("Old wait completes at 15s", executed)
+    assertTrue("Old wait completes at 10s", executed)
     assertEquals(true, job.await())
   }
 
   @Test
-  fun replyPolicyScheduler_enforces20And50LimitsAndAllowsUnlimited() {
-    ReplyPolicyScheduler.resetCounter()
+  fun replyPolicyScheduler_enforces20And50LimitsPersistsAndRollsBackOnFailure() {
+    ReplyPolicyScheduler.resetCounter(ctx)
     repeat(20) {
-      assertTrue("Reply #${it + 1} should be allowed under limit 20", ReplyPolicyScheduler.tryRecordReply(20))
+      assertTrue(
+        "Reply #${it + 1} should be allowed under limit 20",
+        ReplyPolicyScheduler.tryConsumeAndPersist(ctx, 20),
+      )
     }
     assertFalse("21st reply must be blocked under limit 20", ReplyPolicyScheduler.canSendReply(20))
-    assertFalse("21st tryRecordReply must fail under limit 20", ReplyPolicyScheduler.tryRecordReply(20))
+    assertFalse(
+      "21st tryConsumeAndPersist must fail under limit 20",
+      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, 20),
+    )
     assertEquals(20, ReplyPolicyScheduler.currentDispatchedCount())
+    assertEquals(20, Store.replyDispatchedCount(ctx))
+
+    // Forced resync simulates app restart and retains count
+    ReplyPolicyScheduler.syncFromStore(ctx, force = true)
+    assertEquals(20, ReplyPolicyScheduler.currentDispatchedCount())
+    assertFalse(ReplyPolicyScheduler.canSendReply(20))
+
+    // Failed dispatch rolls back 1 slot
+    ReplyPolicyScheduler.rollbackOneAndPersist(ctx)
+    assertEquals(19, ReplyPolicyScheduler.currentDispatchedCount())
+    assertEquals(19, Store.replyDispatchedCount(ctx))
+    assertTrue(ReplyPolicyScheduler.tryConsumeAndPersist(ctx, 20))
 
     // Increasing limit to 50 unlocks remaining 30 slots without losing count
     repeat(30) {
-      assertTrue(ReplyPolicyScheduler.tryRecordReply(50))
+      assertTrue(ReplyPolicyScheduler.tryConsumeAndPersist(ctx, 50))
     }
     assertEquals(50, ReplyPolicyScheduler.currentDispatchedCount())
     assertFalse("51st reply must be blocked under limit 50", ReplyPolicyScheduler.canSendReply(50))
 
     // Unlimited (-1) always permits further replies
     assertTrue(ReplyPolicyScheduler.canSendReply(-1))
-    assertTrue(ReplyPolicyScheduler.tryRecordReply(-1))
+    assertTrue(ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1))
     assertEquals(51, ReplyPolicyScheduler.currentDispatchedCount())
   }
 
@@ -166,9 +193,9 @@ class LxrV223UpdateTest {
 
     composeTestRule.onNodeWithTag("reply_delay_limit_card").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Reply Delay and Reply Limit").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Instant — 0 sec (Default)").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Fast — 8 sec").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Normal — 15 sec").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Instant — 00.0 sec (Default)").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Fast — 00.5 sec").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Normal — 00.10 sec").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Unlimited — Default").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("20 Replies").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("50 Replies").performScrollTo().assertIsDisplayed()
@@ -177,22 +204,23 @@ class LxrV223UpdateTest {
       .performScrollTo()
       .assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("reply_delay_option_8").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (8s)")
-    assertEquals(8, Store.replyDelaySeconds(ctx))
+    composeTestRule.onNodeWithTag("reply_delay_option_5").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (00.5 sec)")
+    assertEquals(5, Store.replyDelaySeconds(ctx))
 
     composeTestRule.onNodeWithTag("reply_limit_option_20").performScrollTo().performClick()
     composeTestRule.onNodeWithTag("reply_limit_selected_text").assertTextEquals("Selected: 20 Replies")
     assertEquals(20, Store.replyLimitMax(ctx))
 
-    composeTestRule.onNodeWithTag("reply_delay_option_15").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("reply_delay_option_10").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Normal (00.10 sec)")
     composeTestRule.onNodeWithTag("reply_limit_option_50").performScrollTo().performClick()
-    assertEquals(15, Store.replyDelaySeconds(ctx))
+    assertEquals(10, Store.replyDelaySeconds(ctx))
     assertEquals(50, Store.replyLimitMax(ctx))
   }
 
   @Test
-  fun homeScreen_rendersAllAnimatedButtonsMenuAndExtraThemesWithoutOverlap() {
+  fun homeScreen_rendersAllAnimatedButtonsVoiceModelTreeButtonPopupAndExtraThemesWithoutOverlap() {
     var menuClicks = 0
     var settingsClicks = 0
     composeTestRule.setContent {
@@ -220,6 +248,7 @@ class LxrV223UpdateTest {
     val allTags =
       listOf(
         "menu_button",
+        "voice_model_button",
         "cam_button",
         "mic_button",
         "chat_button",
@@ -251,7 +280,29 @@ class LxrV223UpdateTest {
     assertEquals(1, menuClicks)
     assertEquals(1, settingsClicks)
 
-    // Switch through all 3 themes & verify all UI buttons remain displayed without overlap
+    // Test Voice Model tree button opens 3-option popup and persists selection
+    composeTestRule.onNodeWithTag("voice_model_button").performClick()
+    composeTestRule.onNodeWithTag("voice_model_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Voice model").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Gemini 3.8 Live").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Gemini 3.1 Flash Live (preview)").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Gemini 2.5 Flash Native Audio (Dec 2025)").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("voice_model_option_0").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("gemini-3.8-live", Store.model(ctx))
+    assertEquals("gemini-3.8-live", RiyaState.liveModelId.value)
+
+    composeTestRule.onNodeWithTag("voice_model_button").performClick()
+    composeTestRule.onNodeWithTag("voice_model_option_2").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("gemini-2.5-flash-native-audio-preview-12-2025", Store.model(ctx))
+
+    composeTestRule.onNodeWithTag("voice_model_button").performClick()
+    composeTestRule.onNodeWithTag("voice_model_close_btn").performClick()
+    composeTestRule.waitForIdle()
+
+    // Switch through all 3 themes & verify all UI buttons + Voice Model button remain displayed without overlap
     Store.setHomeTheme(ctx, HomeTheme.ARIA_CYBER_ROOM)
     composeTestRule.waitForIdle()
     allTags.forEach { tag -> composeTestRule.onNodeWithTag(tag).assertIsDisplayed() }

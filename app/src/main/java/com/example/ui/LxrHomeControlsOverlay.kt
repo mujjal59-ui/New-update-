@@ -86,20 +86,30 @@ fun LxrTopLeftMenuButton(
       label = "menu_glow",
     )
 
+  val interaction = remember { MutableInteractionSource() }
+  val pressed by interaction.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (pressed) 0.91f else 0.98f + glow * 0.04f,
+    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+    label = "menu_scale",
+  )
+
   Box(
     modifier =
       modifier
         .size(48.dp)
+        .scale(scale)
         .testTag("menu_button")
         .semantics { contentDescription = "Open LXR AI Menu" }
-        .shadow((11 * glow).dp, CircleShape, spotColor = Color(0xFFEC4899))
+        .shadow((12 * glow).dp, CircleShape, spotColor = Color(0xFFEC4899))
         .clip(CircleShape)
         .background(
           Brush.linearGradient(
             listOf(Color(0xFFEC4899), Color(0xFF8B5CF6), Color(0xFF3B82F6))
           )
         )
-        .clickable(onClick = onClick),
+        .border(1.4.dp, Color(0xFF00F0FF).copy(alpha = 0.35f + glow * 0.45f), CircleShape)
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
     Icon(
@@ -140,25 +150,49 @@ fun LxrVoiceControlStrip(
     modifier = modifier.fillMaxWidth().height(84.dp),
     contentAlignment = Alignment.Center,
   ) {
-    // Signature luminous horizontal cyan energy beam + twin side star flares + radiant Mic halo + 3 crisp soundwave arcs
+    // Signature Theme 1 luminous horizontal cyan energy beam + twin side star flares + multi-pass radiant Mic halo + 3 crisp soundwave arcs
     Canvas(modifier = Modifier.fillMaxSize()) {
       val cx = size.width * 0.5f
       val cy = size.height * 0.5f
       val baseR = 36.dp.toPx()
 
-      // Soft wide cyan-blue bloom behind center Mic orb matching Theme 1
+      // Soft wide cyan-blue bloom behind Camera & Chat chamfered pills (Theme 1 neon parallax bloom)
+      val camCx = size.width * 0.253f
+      val chatCx = size.width * 0.747f
+      drawCircle(
+        brush =
+          Brush.radialGradient(
+            listOf(Color(0xFF00F0FF).copy(alpha = 0.26f + pulse * 0.14f), Color.Transparent),
+            center = Offset(camCx, cy),
+            radius = 44.dp.toPx(),
+          ),
+        radius = 44.dp.toPx(),
+        center = Offset(camCx, cy),
+      )
+      drawCircle(
+        brush =
+          Brush.radialGradient(
+            listOf(Color(0xFF00F0FF).copy(alpha = 0.26f + (1f - pulse) * 0.14f), Color.Transparent),
+            center = Offset(chatCx, cy),
+            radius = 44.dp.toPx(),
+          ),
+        radius = 44.dp.toPx(),
+        center = Offset(chatCx, cy),
+      )
+
+      // Multi-pass wide cyan-blue bloom behind center Mic orb matching Theme 1
       drawCircle(
         brush =
           Brush.radialGradient(
             listOf(
-              Color(0xFF00F0FF).copy(alpha = 0.48f + pulse * 0.18f),
-              Color(0xFF2563EB).copy(alpha = 0.30f + pulse * 0.10f),
+              Color(0xFF00F0FF).copy(alpha = 0.56f + pulse * 0.20f),
+              Color(0xFF2563EB).copy(alpha = 0.36f + pulse * 0.12f),
               Color.Transparent,
             ),
             center = Offset(cx, cy),
-            radius = 56.dp.toPx(),
+            radius = 60.dp.toPx(),
           ),
-        radius = 56.dp.toPx(),
+        radius = 60.dp.toPx(),
         center = Offset(cx, cy),
       )
 
@@ -168,37 +202,37 @@ fun LxrVoiceControlStrip(
           Brush.horizontalGradient(
             listOf(
               Color.Transparent,
-              Color(0xFF00F0FF).copy(alpha = 0.65f),
-              Color.White.copy(alpha = 0.85f),
-              Color(0xFF00F0FF).copy(alpha = 0.65f),
+              Color(0xFF00F0FF).copy(alpha = 0.72f),
+              Color.White.copy(alpha = 0.90f),
+              Color(0xFF00F0FF).copy(alpha = 0.72f),
               Color.Transparent,
             )
           ),
         start = Offset(size.width * 0.04f, cy),
         end = Offset(size.width * 0.96f, cy),
-        strokeWidth = 2.0.dp.toPx(),
+        strokeWidth = 2.2.dp.toPx(),
       )
 
       // Left & Right 4-point cyan star flares beside Camera & Chat pills
-      drawStarFlare(Offset(size.width * 0.135f, cy), 8.dp.toPx(), Color(0xFF00F0FF))
-      drawStarFlare(Offset(size.width * 0.865f, cy), 8.dp.toPx(), Color(0xFF00F0FF))
+      drawStarFlare(Offset(size.width * 0.125f, cy), (7.5f + pulse * 1.5f).dp.toPx(), Color(0xFF00F0FF))
+      drawStarFlare(Offset(size.width * 0.875f, cy), (7.5f + (1f - pulse) * 1.5f).dp.toPx(), Color(0xFF00F0FF))
 
       // Concentric circular breathing wave around Mic
       val ringR = baseR + waveExpand * 18.dp.toPx()
-      val ringAlpha = (1f - waveExpand) * (if (isRunning) 0.82f else 0.50f)
+      val ringAlpha = (1f - waveExpand) * (if (isRunning) 0.84f else 0.56f)
       drawCircle(
         brush = Brush.sweepGradient(listOf(Color(0xFF00F0FF), Color(0xFF3B82F6), Color(0xFFA855F7), Color(0xFF00F0FF))),
         radius = ringR,
         center = Offset(cx, cy),
         alpha = ringAlpha,
-        style = Stroke(width = if (isRunning) 2.6.dp.toPx() else 1.8.dp.toPx()),
+        style = Stroke(width = if (isRunning) 2.6.dp.toPx() else 1.9.dp.toPx()),
       )
 
-      // 3 crisp glowing curved cyan-white soundwave arcs on left and right of Microphone orb
+      // 3 crisp glowing curved cyan-white soundwave arcs closely hugging left and right of Microphone orb
       for (idx in 1..3) {
-        val rx = (38f + idx * 6.5f).dp.toPx()
-        val ry = (23f + idx * 3.8f).dp.toPx()
-        val arcAlpha = (0.58f + pulse * 0.36f) * (1f - (idx - 1) * 0.18f)
+        val rx = (38.5f + idx * 5.8f).dp.toPx()
+        val ry = (23f + idx * 3.5f).dp.toPx()
+        val arcAlpha = (0.60f + pulse * 0.36f) * (1f - (idx - 1) * 0.18f)
         val arcColor = if (idx == 1) Color.White.copy(alpha = arcAlpha) else Color(0xFF00F0FF).copy(alpha = arcAlpha)
         drawArc(
           color = arcColor,
@@ -237,7 +271,7 @@ fun LxrVoiceControlStrip(
       val micInteraction = remember { MutableInteractionSource() }
       val micPressed by micInteraction.collectIsPressedAsState()
       val micScale by animateFloatAsState(
-        targetValue = if (micPressed) 0.92f else 1f + pulse * (if (isRunning) 0.06f else 0.025f),
+        targetValue = if (micPressed) 0.92f else 1f + pulse * (if (isRunning) 0.06f else 0.03f),
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "mic_scale",
       )
@@ -248,7 +282,7 @@ fun LxrVoiceControlStrip(
             .scale(micScale)
             .testTag("mic_button")
             .semantics { contentDescription = "Microphone Toggle" }
-            .shadow(18.dp, CircleShape, spotColor = if (isRunning) CYBER_RED else Color(0xFF00F0FF))
+            .shadow(20.dp, CircleShape, spotColor = if (isRunning) CYBER_RED else Color(0xFF00F0FF))
             .clip(CircleShape)
             .background(
               Brush.radialGradient(
@@ -258,7 +292,7 @@ fun LxrVoiceControlStrip(
               )
             )
             .border(
-              width = 3.0.dp,
+              width = 3.2.dp,
               brush =
                 Brush.linearGradient(
                   if (isRunning) listOf(CYBER_RED, Color(0xFF00F0FF))
@@ -294,20 +328,29 @@ private fun OriginalCameraPillButton(
 ) {
   val shape = remember { ChamferedFuturisticShape(chamferDp = 12.dp, cornerRadiusDp = 4.dp) }
   val glow = if (camOn) CYBER_GREEN else Color(0xFF00F0FF)
+  val interaction = remember { MutableInteractionSource() }
+  val pressed by interaction.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (pressed) 0.92f else 0.985f + pulse * 0.03f,
+    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+    label = "cam_pill_scale",
+  )
+
   Box(
     modifier =
       Modifier
+        .scale(scale)
         .size(width = 66.dp, height = 42.dp)
         .testTag("cam_button")
         .semantics { contentDescription = "Camera" }
-        .shadow((10f + pulse * 6f).dp, shape, spotColor = glow)
+        .shadow((11f + pulse * 7f).dp, shape, spotColor = glow)
         .clip(shape)
         .background(
           Brush.verticalGradient(listOf(Color(0xDD08224A), Color(0xEA04112B))),
           shape,
         )
-        .border(2.0.dp, glow.copy(alpha = 0.78f + pulse * 0.20f), shape)
-        .clickable(onClick = onClick),
+        .border(2.1.dp, glow.copy(alpha = 0.78f + pulse * 0.22f), shape)
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
     Canvas(modifier = Modifier.size(24.dp)) {
@@ -350,20 +393,29 @@ private fun OriginalChatPillButton(
   onClick: () -> Unit,
 ) {
   val shape = remember { ChamferedFuturisticShape(chamferDp = 12.dp, cornerRadiusDp = 4.dp) }
+  val interaction = remember { MutableInteractionSource() }
+  val pressed by interaction.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (pressed) 0.92f else 0.985f + pulse * 0.03f,
+    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+    label = "chat_pill_scale",
+  )
+
   Box(
     modifier =
       Modifier
+        .scale(scale)
         .size(width = 66.dp, height = 42.dp)
         .testTag("chat_button")
         .semantics { contentDescription = "Chat" }
-        .shadow((10f + pulse * 6f).dp, shape, spotColor = Color(0xFF00F0FF))
+        .shadow((11f + pulse * 7f).dp, shape, spotColor = Color(0xFF00F0FF))
         .clip(shape)
         .background(
           Brush.verticalGradient(listOf(Color(0xDD08224A), Color(0xEA04112B))),
           shape,
         )
-        .border(2.0.dp, Color(0xFF00F0FF).copy(alpha = 0.78f + pulse * 0.20f), shape)
-        .clickable(onClick = onClick),
+        .border(2.1.dp, Color(0xFF00F0FF).copy(alpha = 0.78f + pulse * 0.22f), shape)
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
     Canvas(modifier = Modifier.size(22.dp)) {
@@ -433,20 +485,20 @@ fun LxrDockAppsRow(
       modifier =
         Modifier
           .fillMaxWidth()
-          .shadow(16.dp, dockShape, spotColor = Color(0xFF00F0FF))
+          .shadow((14f + pulse * 6f).dp, dockShape, spotColor = Color(0xFF00F0FF))
           .clip(dockShape)
           .background(
-            Brush.verticalGradient(listOf(Color(0xDC061636), Color(0xEA030A1C))),
+            Brush.verticalGradient(listOf(Color(0xDE061636), Color(0xEC030A1C))),
             dockShape,
           )
           .border(
-            width = 2.0.dp,
+            width = 2.1.dp,
             brush =
               Brush.horizontalGradient(
                 listOf(
                   Color(0xFF00F0FF).copy(alpha = 0.85f + pulse * 0.15f),
                   Color(0xFF38BDF8),
-                  Color.White.copy(alpha = 0.85f),
+                  Color.White.copy(alpha = 0.88f),
                   Color(0xFF38BDF8),
                   Color(0xFF00F0FF).copy(alpha = 0.85f + pulse * 0.15f),
                 )
@@ -522,8 +574,8 @@ fun LxrDockAppsRow(
 
     // Top-center and Bottom-center diamond energy nodes on dock perimeter (exact Theme 1 detail)
     Canvas(modifier = Modifier.matchParentSize()) {
-      drawDiamondStarNode(Offset(size.width * 0.5f, 1.dp.toPx()), 5.0.dp.toPx(), Color(0xFF00F0FF))
-      drawDiamondStarNode(Offset(size.width * 0.5f, size.height - 1.dp.toPx()), 5.0.dp.toPx(), Color(0xFF00F0FF))
+      drawDiamondStarNode(Offset(size.width * 0.5f, 1.dp.toPx()), (4.5f + pulse * 1.2f).dp.toPx(), Color(0xFF00F0FF))
+      drawDiamondStarNode(Offset(size.width * 0.5f, size.height - 1.dp.toPx()), (4.5f + (1f - pulse) * 1.2f).dp.toPx(), Color(0xFF00F0FF))
     }
   }
 }
@@ -539,16 +591,25 @@ private fun DockOriginalItem(
   iconRotationDeg: Float = 0f,
   drawIcon: DrawScope.() -> Unit,
 ) {
+  val interaction = remember { MutableInteractionSource() }
+  val pressed by interaction.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (pressed) 0.90f else 1f + pulse * 0.025f,
+    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+    label = "dock_item_scale_$tag",
+  )
+
   Column(
     modifier =
       modifier
+        .scale(scale)
         .heightIn(min = 52.dp)
         .testTag(tag)
         .semantics { contentDescription = label }
         .clip(RoundedCornerShape(11.dp))
         .background(Color(0x6606122A))
-        .border(0.75.dp, Color(0x4593C5FD), RoundedCornerShape(11.dp))
-        .clickable(onClick = onClick)
+        .border(0.85.dp, accent.copy(alpha = 0.25f + pulse * 0.30f), RoundedCornerShape(11.dp))
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick)
         .padding(vertical = 5.dp, horizontal = 2.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,

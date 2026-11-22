@@ -40,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -56,6 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.RiyaAiRepository
+import com.example.data.ReplyDelayOption
+import com.example.data.ReplyLimitOption
 import com.example.data.RiyaPreferences
 import com.example.data.RiyaRepository
 import com.example.data.RiyaSettings
@@ -64,6 +67,7 @@ import com.example.data.Store
 import com.example.service.ImoSendPrecisionEngine
 import com.example.service.InfinixDevicePlaybook
 import com.example.service.Keep
+import com.example.service.ReplyPolicyScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.service.RiyaAccessibilityService
@@ -253,7 +257,26 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val prefs = remember { RiyaPreferences(ctx) }
   val settings by prefs.settingsFlow.collectAsState(initial = RiyaSettings())
   val pending by RiyaRuntimeBridge.pendingMessages.collectAsState()
+  val delaySecState by RiyaState.replyDelaySeconds.collectAsState()
+  val limitMaxState by RiyaState.replyLimitMax.collectAsState()
+  val dispatchedCount by ReplyPolicyScheduler.dispatchedCount.collectAsState()
+  var selectedReplyDelay by remember { mutableStateOf(Store.replyDelayOption(ctx)) }
+  var selectedReplyLimit by remember { mutableStateOf(Store.replyLimitOption(ctx)) }
   val scope = rememberCoroutineScope()
+
+  LaunchedEffect(Unit) {
+    RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(ctx)
+    RiyaState.replyLimitMax.value = Store.replyLimitMax(ctx)
+    selectedReplyDelay = Store.replyDelayOption(ctx)
+    selectedReplyLimit = Store.replyLimitOption(ctx)
+    ReplyPolicyScheduler.syncFromStore(ctx)
+  }
+  LaunchedEffect(delaySecState) {
+    selectedReplyDelay = ReplyDelayOption.fromSeconds(delaySecState)
+  }
+  LaunchedEffect(limitMaxState) {
+    selectedReplyLimit = ReplyLimitOption.fromMaxReplies(limitMaxState)
+  }
 
   Column(
     Modifier
@@ -387,6 +410,26 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       }
     }
 
+    ReplyDelayLimitPanel(
+      selectedDelay = selectedReplyDelay,
+      selectedLimit = selectedReplyLimit,
+      dispatchedCount = dispatchedCount,
+      onResetCount = {
+        ReplyPolicyScheduler.resetCounter(ctx)
+        Toast.makeText(ctx, "Reply counter reset ✓", Toast.LENGTH_SHORT).show()
+      },
+      onSelectDelay = { option ->
+        selectedReplyDelay = option
+        Store.setReplyDelaySeconds(ctx, option.seconds)
+        scope.launch { prefs.updateReplyDelaySeconds(option.seconds) }
+      },
+      onSelectLimit = { option ->
+        selectedReplyLimit = option
+        Store.setReplyLimitMax(ctx, option.maxReplies)
+        scope.launch { prefs.updateReplyLimitMax(option.maxReplies) }
+      },
+    )
+
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
       Button(
         onClick = {
@@ -461,6 +504,9 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                   val ok =
                     withContext(Dispatchers.IO) {
                       val sent = RiyaNotificationListenerService.sendApprovedReply(ctx, ev.eventKey, ev.suggestedReply)
+                      if (sent) {
+                        ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+                      }
                       RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
                         ev.eventKey,
                         if (sent) "SENT_APPROVED" else "FAILED",

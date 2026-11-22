@@ -191,6 +191,26 @@ class GeminiLive(private val ctx: Context) {
 
   fun isReady(): Boolean = ready && !stopped
 
+  fun switchModelAndReconnect(newModelId: String) {
+    Store.setModel(ctx, newModelId)
+    modelOverride = null
+    failCount = 0
+    ready = false
+    pending = false
+    waitingServerReply = false
+    activeTurnHasStartedOutput = false
+    thinkingConfigCompatFallback = false
+    vadConfigCompatFallback = false
+    transcriptionCompatFallback = false
+    try {
+      ws?.cancel()
+    } catch (_: Exception) {}
+    ws = null
+    if (!stopped) {
+      main.post { if (!stopped) connect() }
+    }
+  }
+
   private fun toolsJson() =
     (if (searchOn) """[{"googleSearch":{}},""" else "[") +
       """{"functionDeclarations":[
@@ -1006,7 +1026,12 @@ class GeminiLive(private val ctx: Context) {
               !ready &&
                 code != 1000 &&
                 modelOverride == null &&
-                (code == 1011 || reason.contains("quota", true) || failCount >= 1)
+                (code == 1011 ||
+                  code == 1008 ||
+                  reason.contains("not found", true) ||
+                  reason.contains("not supported", true) ||
+                  reason.contains("quota", true) ||
+                  failCount >= 1)
             ) {
               modelOverride = "gemini-2.5-flash-native-audio-preview-12-2025"
             }
@@ -1120,7 +1145,6 @@ class GeminiLive(private val ctx: Context) {
         ready = true
         failCount = 0
         lastErr = ""
-        modelOverride?.let { Store.setModel(ctx, it) }
         RiyaState.status.value = "শুনছি বস..."
         if (!greetedThisSession) {
           greetedThisSession = true
@@ -2252,6 +2276,9 @@ class GeminiLive(private val ctx: Context) {
         pending.eventKey,
         sentText,
       )
+    if (ok) {
+      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+    }
     return if (ok) {
       "${pending.appLabel}-এ ${pending.senderName}-কে আমি ঠিক এই মেসেজটি লিখে পাঠিয়েছি: \"$sentText\"। বসকে হুবহু বলে দাও যে কী লিখে পাঠিয়েছো।"
     } else {

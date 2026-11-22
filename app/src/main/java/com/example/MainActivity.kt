@@ -15,12 +15,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -66,7 +72,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -92,6 +102,7 @@ import com.example.service.AccessibilityStatusMonitor
 import com.example.service.IncomingReplyStatus
 import com.example.service.Keep
 import com.example.service.LxrFloatingOverlayManager
+import com.example.service.ReplyPolicyScheduler
 import com.example.service.RiyaNotificationHelper
 import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
@@ -102,6 +113,7 @@ import com.example.ui.AutoReplyPage
 import com.example.ui.CYBER_BLUE
 import com.example.ui.CYBER_CYAN
 import com.example.ui.CYBER_GREEN
+import com.example.ui.CYBER_PURPLE
 import com.example.ui.CYBER_RED
 import com.example.ui.KeyPage
 import com.example.ui.LiveCamera
@@ -111,6 +123,8 @@ import com.example.ui.LxrLiveAvatarOverlay
 import com.example.ui.LxrThreeSectionRow
 import com.example.ui.LxrTopLeftMenuButton
 import com.example.ui.LxrVoiceControlStrip
+import com.example.ui.LxrVoiceModelPopupDialog
+import com.example.ui.LxrVoiceModelTreeButton
 import com.example.ui.MemPage
 import com.example.ui.PermPage
 import com.example.ui.PlaybookPage
@@ -238,6 +252,10 @@ fun RiyaApp() {
 
   LaunchedEffect(Unit) {
     RiyaState.homeThemeIndex.value = Store.design(ctx)
+    RiyaState.liveModelId.value = Store.model(ctx)
+    RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(ctx)
+    RiyaState.replyLimitMax.value = Store.replyLimitMax(ctx)
+    ReplyPolicyScheduler.syncFromStore(ctx)
   }
 
   val running by RiyaState.running.collectAsState()
@@ -429,6 +447,8 @@ fun RiyaHomeScreen(
   val isSpeaking by RiyaVoiceManager.isSpeaking.collectAsState()
   val themeIdx by RiyaState.homeThemeIndex.collectAsState()
   val activeTheme = remember(themeIdx) { HomeTheme.fromId(themeIdx) }
+  val liveModelId by RiyaState.liveModelId.collectAsState()
+  var showVoiceModelDialog by remember { mutableStateOf(false) }
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
     val iw = 691f
@@ -494,7 +514,7 @@ fun RiyaHomeScreen(
       py = ::py,
     )
 
-    // Top-left Menu button: hotspot on LXR_STUDIO (matching home_bg artwork), styled orb at identical spot on Aria/Mitali themes
+    // Top-left Menu button: hotspot on LXR_STUDIO (matching home_bg artwork) with soft neon pulse, styled orb at identical spot on Aria/Mitali themes
     if (activeTheme == HomeTheme.LXR_STUDIO) {
       Box(
         modifier =
@@ -512,6 +532,15 @@ fun RiyaHomeScreen(
         modifier = Modifier.align(Alignment.TopStart).offset(x = menuLeftX.dp, y = menuTopY.dp),
       )
     }
+
+    // Animated Voice Model selector button right in front of the upper-right potted plant on all 3 themes
+    val vmLeftX = minOf(ox + 0.885f * dw - 24f, sw - 58f).coerceAtLeast(16f)
+    val vmTopY = maxOf(oy + 0.272f * dh - 24f, statusTopDp + 48f)
+    LxrVoiceModelTreeButton(
+      activeModelId = liveModelId,
+      onClick = { showVoiceModelDialog = true },
+      modifier = Modifier.align(Alignment.TopStart).offset(x = vmLeftX.dp, y = vmTopY.dp),
+    )
 
     val isCharacterTheme =
       activeTheme == HomeTheme.ARIA_CYBER_ROOM || activeTheme == HomeTheme.MITALI_CYBER_STUDIO
@@ -729,7 +758,7 @@ fun RiyaHomeScreen(
         modifier =
           Modifier
             .align(Alignment.TopCenter)
-            .offset(y = (voiceStripTopY - 46f).coerceAtLeast(180f).dp)
+            .offset(y = (voiceStripTopY - 54f).coerceAtLeast(180f).dp)
             .padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -836,6 +865,9 @@ fun RiyaHomeScreen(
                         pendingIncoming.eventKey,
                         pendingIncoming.suggestedReply,
                       )
+                    if (sent) {
+                      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+                    }
                     RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
                       pendingIncoming.eventKey,
                       if (sent) "SENT_APPROVED" else "FAILED",
@@ -901,6 +933,68 @@ fun RiyaHomeScreen(
     }
 
     if (activeTheme == HomeTheme.LXR_STUDIO) {
+      // Subtle animated cyber glow overlay around LXR_STUDIO hotspots so all buttons pulse across all 3 themes
+      val homeBtnInf = rememberInfiniteTransition(label = "lxr_theme1_btn_pulse")
+      val glowAlpha by homeBtnInf.animateFloat(
+        initialValue = 0.16f,
+        targetValue = 0.56f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "theme1_glow",
+      )
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val densityPx = this.density
+        val oxPx = ox * densityPx
+        val oyPx = oy * densityPx
+        val dwPx = dw * densityPx
+        val dhPx = dh * densityPx
+
+        // Menu orb subtle cyan-purple ring
+        drawCircle(
+          color = CYBER_CYAN.copy(alpha = glowAlpha * 0.48f),
+          radius = 25f * densityPx,
+          center = Offset(oxPx + 0.098f * dwPx, oyPx + 0.172f * dhPx),
+          style = Stroke(width = 1.6f * densityPx),
+        )
+        // Center Mic pulsing neon halo
+        drawCircle(
+          color = (if (running) CYBER_GREEN else CYBER_CYAN).copy(alpha = glowAlpha * 0.58f),
+          radius = (34f + glowAlpha * 5f) * densityPx,
+          center = Offset(oxPx + 0.498f * dwPx, oyPx + 0.695f * dhPx),
+          style = Stroke(width = 2.0f * densityPx),
+        )
+        // Camera & Chat octagonal capsule pulse
+        val pillW = 56f * densityPx
+        val pillH = 32f * densityPx
+        drawRoundRect(
+          color = CYBER_CYAN.copy(alpha = glowAlpha * 0.45f),
+          topLeft = Offset(oxPx + 0.253f * dwPx - pillW / 2f, oyPx + 0.695f * dhPx - pillH / 2f),
+          size = Size(pillW, pillH),
+          cornerRadius = CornerRadius(12f * densityPx, 12f * densityPx),
+          style = Stroke(width = 1.5f * densityPx),
+        )
+        drawRoundRect(
+          color = CYBER_CYAN.copy(alpha = glowAlpha * 0.45f),
+          topLeft = Offset(oxPx + 0.742f * dwPx - pillW / 2f, oyPx + 0.695f * dhPx - pillH / 2f),
+          size = Size(pillW, pillH),
+          cornerRadius = CornerRadius(12f * densityPx, 12f * densityPx),
+          style = Stroke(width = 1.5f * densityPx),
+        )
+        // 6 Dock items subtle neon breathing outline
+        val dockCenters = listOf(0.120f, 0.272f, 0.424f, 0.576f, 0.728f, 0.880f)
+        val tileW = 46f * densityPx
+        val tileH = 44f * densityPx
+        dockCenters.forEachIndexed { idx, cxFrac ->
+          val itemAlpha = if (idx % 2 == 0) glowAlpha * 0.34f else (0.72f - glowAlpha) * 0.34f
+          drawRoundRect(
+            color = (if (idx % 2 == 0) CYBER_CYAN else CYBER_PURPLE).copy(alpha = itemAlpha.coerceIn(0.08f, 0.42f)),
+            topLeft = Offset(oxPx + cxFrac * dwPx - tileW / 2f, oyPx + 0.782f * dhPx - tileH / 2f),
+            size = Size(tileW, tileH),
+            cornerRadius = CornerRadius(11f * densityPx, 11f * densityPx),
+            style = Stroke(width = 1.2f * densityPx),
+          )
+        }
+      }
+
       // Exact LXR_AI_with_menu_button hotspots aligned pixel-for-pixel over home_bg.png artwork (v2.22.0 style)
       Box(
         modifier =
@@ -1005,6 +1099,19 @@ fun RiyaHomeScreen(
         onVideoCreator = onVideoCreator,
         onSeoStudio = onSeoStudio,
         modifier = Modifier.widthIn(max = 600.dp),
+      )
+    }
+
+    if (showVoiceModelDialog) {
+      LxrVoiceModelPopupDialog(
+        activeModelId = liveModelId,
+        onSelectModel = { option ->
+          Store.setModel(ctx, option.modelId)
+          RiyaState.live?.switchModelAndReconnect(option.modelId)
+          Toast.makeText(ctx, "Voice model: ${option.title} ✓", Toast.LENGTH_SHORT).show()
+          showVoiceModelDialog = false
+        },
+        onDismiss = { showVoiceModelDialog = false },
       )
     }
   }

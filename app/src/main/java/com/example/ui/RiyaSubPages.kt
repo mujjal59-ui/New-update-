@@ -140,6 +140,7 @@ import com.example.data.VoiceMatchSensitivity
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
 import com.example.service.LxrCompanionAgent
+import com.example.service.ReplyPolicyScheduler
 import com.example.service.RiyaVoiceManager
 import com.example.service.VoiceMatchManager
 import kotlinx.coroutines.Dispatchers
@@ -521,8 +522,34 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var show by remember { mutableStateOf(false) }
   val voicePrefs = remember { RiyaPreferences(ctx) }
   val voiceScope = rememberCoroutineScope()
+  val liveModelFlow by RiyaState.liveModelId.collectAsState()
+  val delaySecState by RiyaState.replyDelaySeconds.collectAsState()
+  val limitMaxState by RiyaState.replyLimitMax.collectAsState()
+  val dispatchedCount by ReplyPolicyScheduler.dispatchedCount.collectAsState()
   var selectedReplyDelay by remember { mutableStateOf(Store.replyDelayOption(ctx)) }
   var selectedReplyLimit by remember { mutableStateOf(Store.replyLimitOption(ctx)) }
+
+  LaunchedEffect(Unit) {
+    val persistedModel = Store.model(ctx)
+    model = persistedModel
+    RiyaState.liveModelId.value = persistedModel
+    RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(ctx)
+    RiyaState.replyLimitMax.value = Store.replyLimitMax(ctx)
+    selectedReplyDelay = Store.replyDelayOption(ctx)
+    selectedReplyLimit = Store.replyLimitOption(ctx)
+    ReplyPolicyScheduler.syncFromStore(ctx)
+  }
+  LaunchedEffect(liveModelFlow) {
+    if (liveModelFlow.isNotBlank() && liveModelFlow != model) {
+      model = liveModelFlow
+    }
+  }
+  LaunchedEffect(delaySecState) {
+    selectedReplyDelay = ReplyDelayOption.fromSeconds(delaySecState)
+  }
+  LaunchedEffect(limitMaxState) {
+    selectedReplyLimit = ReplyLimitOption.fromMaxReplies(limitMaxState)
+  }
 
   // 3-step Voice Match state inside Gemini API Key & Voice section
   var vmEnabled by remember { mutableStateOf(Store.voiceMatchEnabled(ctx)) }
@@ -984,6 +1011,11 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     ReplyDelayLimitPanel(
       selectedDelay = selectedReplyDelay,
       selectedLimit = selectedReplyLimit,
+      dispatchedCount = dispatchedCount,
+      onResetCount = {
+        ReplyPolicyScheduler.resetCounter(ctx)
+        Toast.makeText(ctx, "Reply counter reset ✓", Toast.LENGTH_SHORT).show()
+      },
       onSelectDelay = { option ->
         selectedReplyDelay = option
         Store.setReplyDelaySeconds(ctx, option.seconds)

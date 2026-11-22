@@ -38,6 +38,9 @@ class AutoReplyActionReceiver : BroadcastReceiver() {
           ACTION_APPROVE_REPLY -> {
             val event = RiyaRuntimeBridge.getPendingMessage(eventKey)
             val sent = RiyaNotificationListenerService.sendApprovedReply(context, eventKey)
+            if (sent) {
+              ReplyPolicyScheduler.tryConsumeAndPersist(context, -1)
+            }
             repo.updateAutoReplyStatus(
               eventKey,
               if (sent) "SENT_APPROVED" else "FAILED",

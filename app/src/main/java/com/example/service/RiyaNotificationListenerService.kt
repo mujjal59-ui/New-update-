@@ -408,12 +408,13 @@ class RiyaNotificationListenerService : NotificationListenerService() {
           )
 
           val senderCooldownKey = "$pkg:$sender"
-          val askBoss = Store.requireBossPermission(ctx) || settings.requireBossPermissionBeforeSend
+          val askBoss = Store.requireBossPermission(ctx)
           if (
             !askBoss &&
               (replyPair != null || Keep.accessibilityOn(ctx)) &&
               RiyaRuntimeBridge.canAutoReplyToSender(senderCooldownKey)
           ) {
+            ReplyPolicyScheduler.syncFromStore(ctx)
             val capturedDelaySec = ReplyPolicyScheduler.captureDelaySeconds(ctx)
             val currentLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
             if (!ReplyPolicyScheduler.canSendReply(currentLimit)) {
@@ -429,12 +430,15 @@ class RiyaNotificationListenerService : NotificationListenerService() {
               } ?: immediateTemplate
             RiyaRuntimeBridge.updateIncomingMessageReplyText(eventKey, smartReply)
 
+            var slotConsumed = false
             val sent =
               ReplyPolicyScheduler.executeAfterCapturedDelay(
                 initialDelaySeconds = capturedDelaySec,
                 onBeforeExecute = {
                   val latestLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
-                  ReplyPolicyScheduler.tryRecordReply(latestLimit)
+                  val allowed = ReplyPolicyScheduler.tryConsumeAndPersist(ctx, latestLimit)
+                  slotConsumed = allowed
+                  allowed
                 },
               ) {
                 sendApprovedReply(ctx, eventKey, smartReply)
@@ -442,8 +446,13 @@ class RiyaNotificationListenerService : NotificationListenerService() {
                 val latestLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
                 repo.updateAutoReplyStatus(eventKey, "LIMIT_REACHED", smartReply)
                 RiyaState.addLog("Reply Limit ($latestLimit) পূর্ণ হয়েছে — $appLabel ($sender) এর অটো রিপ্লাই থামানো হয়েছে।")
+                RiyaNotificationHelper.notifyIncomingMessageForPermission(ctx, event, notifId)
                 false
               }
+
+            if (!sent && slotConsumed) {
+              ReplyPolicyScheduler.rollbackOneAndPersist(ctx)
+            }
 
             repo.updateAutoReplyStatus(
               eventKey,
@@ -594,6 +603,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
   override fun onCreate() {
     super.onCreate()
     repository = RiyaRepository(applicationContext)
+    ReplyPolicyScheduler.syncFromStore(applicationContext)
     RiyaVoiceManager.initialize(applicationContext)
   }
 
