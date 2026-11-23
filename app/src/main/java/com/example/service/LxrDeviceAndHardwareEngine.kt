@@ -316,50 +316,91 @@ object LxrDeviceAndHardwareEngine {
         val want = enabled ?: !isLocationEnabledNow(ctx)
         val curOn = isLocationEnabledNow(ctx)
         if (curOn == want) return "ফোনের Location/GPS আগেই ${if (want) "চালু" else "বন্ধ"} আছে বস।"
-        if (acc != null) {
-          val qs =
-            acc.toggleQuickSettingTile(
-              enable = want,
-              labels = listOf("location", "gps", "লোকেশন", "অবস্থান"),
-              excludeLabels = listOf("scanning", "emergency"),
-              hardwareStateKnown = curOn,
-            )
-          if (qs == "OK" || qs == "ALREADY" || isLocationEnabledNow(ctx) == want) {
-            return "হয়েছে, বস! ফোনের Location/GPS ${if (want) "চালু" else "বন্ধ"} করেছি।"
+
+        // 0. Fast-path via WRITE_SECURE_SETTINGS (if granted via ADB/device privilege)
+        runCatching {
+          val targetMode =
+            if (want) Settings.Secure.LOCATION_MODE_HIGH_ACCURACY
+            else Settings.Secure.LOCATION_MODE_OFF
+          if (Settings.Secure.putInt(ctx.contentResolver, Settings.Secure.LOCATION_MODE, targetMode)) {
+            Thread.sleep(220)
+            if (isLocationEnabledNow(ctx) == want) {
+              LxrCompanionAgent.sampleNow(ctx)
+              return "হয়েছে, বস! ফোনের Location/GPS ${if (want) "চালু" else "বন্ধ"} করেছি।"
+            }
           }
-          // Fallback: open Location Settings page directly and flip the Location master switch
+        }
+
+        if (acc != null) {
+          // 1. Try Quick Settings / Control Center tile AND verify real LocationManager state (never fake-succeed on OK!)
+          acc.toggleQuickSettingTile(
+            enable = want,
+            labels = listOf("location", "gps", "লোকেশন", "অবস্থান"),
+            excludeLabels = listOf("scanning", "emergency"),
+            hardwareStateKnown = curOn,
+          )
+          val qsConfirmDeadline = System.currentTimeMillis() + 1150L
+          while (System.currentTimeMillis() < qsConfirmDeadline) {
+            if (isLocationEnabledNow(ctx) == want) {
+              LxrCompanionAgent.sampleNow(ctx)
+              return "হয়েছে, বস! ফোনের Location/GPS ${if (want) "চালু" else "বন্ধ"} করেছি।"
+            }
+            Thread.sleep(160)
+          }
+
+          // 2. Reliable Settings UI fallback: launch Location Settings and toggle master switch
           ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-          val waitDeadline = System.currentTimeMillis() + 2800L
+          val waitDeadline = System.currentTimeMillis() + 3000L
           while (System.currentTimeMillis() < waitDeadline) {
             val curPkg = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
-            if (curPkg == "com.android.settings") {
-              Thread.sleep(260)
+            val hasSettingsWin = acc.windows.orEmpty().any { it.root?.packageName?.toString() == "com.android.settings" }
+            if (curPkg == "com.android.settings" || hasSettingsWin) {
+              Thread.sleep(280)
               break
             }
             Thread.sleep(160)
           }
-          val res =
-            acc.setSwitch(
-              enable = want,
-              labels = listOf("use location", "location access", "access to my location", "location", "লোকেশন", "অবস্থান"),
-              excludeLabels = listOf("wi-fi scanning", "bluetooth scanning", "emergency location", "location history", "timeline", "accuracy"),
-            )
-          if (res == "NOTFOUND") {
-            acc.clickText("Use location")
-            Thread.sleep(320)
+          acc.setSwitch(
+            enable = want,
+            labels = listOf("use location", "location access", "access to my location", "location", "লোকেশন", "অবস্থান"),
+            excludeLabels = listOf("wi-fi scanning", "bluetooth scanning", "emergency location", "location history", "timeline", "accuracy"),
+          )
+          // Check confirmation dialog if Android / GMS asks "Improve location accuracy?" / "Agree"
+          if (isLocationEnabledNow(ctx) != want) {
+            val consentLabels = listOf("Turn on", "Agree", "Allow", "Enable", "চালু করুন", "হ্যাঁ")
+            for (lbl in consentLabels) {
+              if (acc.clickText(lbl).contains("ক্লিক করা হয়েছে")) {
+                Thread.sleep(280)
+                break
+              }
+            }
           }
-          val confirmDeadline = System.currentTimeMillis() + 750L
+          val confirmDeadline = System.currentTimeMillis() + 1300L
           while (isLocationEnabledNow(ctx) != want && System.currentTimeMillis() < confirmDeadline) {
-            Thread.sleep(150)
+            Thread.sleep(160)
           }
-          if (isLocationEnabledNow(ctx) == want || res == "OK" || res == "ALREADY") {
-            acc.global("back")
+          if (isLocationEnabledNow(ctx) != want) {
+            // Second attempt on Settings row label / toggle text directly
+            for (lbl in listOf("Use location", "লোকেশন ব্যবহার করুন")) {
+              if (acc.clickText(lbl).contains("ক্লিক করা হয়েছে")) {
+                Thread.sleep(450)
+                break
+              }
+            }
+          }
+          LxrCompanionAgent.sampleNow(ctx)
+          if (isLocationEnabledNow(ctx) == want) {
+            val fgNow = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
+            if (fgNow == "com.android.settings") {
+              acc.global("back")
+              Thread.sleep(180)
+            }
             return "হয়েছে, বস! লোকেশন সেটিংস থেকে ফোনের GPS/Location ${if (want) "চালু" else "বন্ধ"} করে দিয়েছি।"
           }
-          return "বস, Location সেটিংস খুলেছি এবং সুইচে ট্যাপ করেছি — অনুগ্রহ করে এক নজর দেখে নিন।"
+          return "বস, Location সেটিংস খুলেছি — অনুগ্রহ করে এক নজর 'Use location' সুইচটি দেখে নিন।"
         }
         ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        "Location সেটিংস স্ক্রিন খুলেছি বস, সুইচটি চালু/বন্ধ করে নিন।"
+        "Location সেটিংস স্ক্রিন খুলেছি বস, সুইচটি ${if (want) "চালু" else "বন্ধ"} করে নিন (সরাসরি অটো-টগলের জন্য Accessibility চালু রাখুন)।"
       }
 
       else -> "বস, '$settingName' সেটিংসটি সিস্টেম সেটিংস থেকে দেখে নিচ্ছি।"

@@ -2052,19 +2052,44 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       ) {
         val acc = RiyaAccessibilityService.instance
         val nextEnable = !gpsOn
+        val workMsg =
+          if (nextEnable) "⚙️ LXR--AI এখন কাজ করছে: GPS / Location চালু করা হচ্ছে"
+          else "⚙️ LXR--AI এখন কাজ করছে: GPS / Location বন্ধ করা হচ্ছে"
         note = if (nextEnable) "ফোনের GPS / Location চালু করা হচ্ছে..." else "ফোনের GPS / Location বন্ধ করা হচ্ছে..."
+        RiyaState.activeWorkLabel.value = workMsg
+        com.example.service.LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, workMsg)
         scope.launch(Dispatchers.IO) {
-          val msg = LxrDeviceAndHardwareEngine.controlDeviceSetting(ctx, acc, "location", enabled = nextEnable)
-          repeat(4) {
+          try {
+            val msg = LxrDeviceAndHardwareEngine.controlDeviceSetting(ctx, acc, "location", enabled = nextEnable)
+            var flipped = LxrDeviceAndHardwareEngine.isLocationEnabledNow(ctx) == nextEnable
+            repeat(5) {
+              LxrCompanionAgent.sampleNow(ctx)
+              if (LxrDeviceAndHardwareEngine.isLocationEnabledNow(ctx) == nextEnable) {
+                flipped = true
+                return@repeat
+              }
+              kotlinx.coroutines.delay(240L)
+            }
+            if (flipped && acc != null) {
+              runCatching {
+                ctx.startActivity(
+                  Intent(ctx, com.example.MainActivity::class.java)
+                    .addFlags(
+                      Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    )
+                )
+              }
+            }
             LxrCompanionAgent.sampleNow(ctx)
-            withContext(Dispatchers.Main) { tick++ }
-            if (LxrDeviceAndHardwareEngine.isLocationEnabledNow(ctx) == nextEnable) return@repeat
-            kotlinx.coroutines.delay(250L)
-          }
-          LxrCompanionAgent.sampleNow(ctx)
-          withContext(Dispatchers.Main) {
-            note = msg
-            tick++
+            withContext(Dispatchers.Main) {
+              note = msg
+              tick++
+            }
+          } finally {
+            RiyaState.activeWorkLabel.value = null
+            com.example.service.LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
           }
         }
       }

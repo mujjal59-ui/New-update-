@@ -176,6 +176,7 @@ object RiyaState {
   val useFrontCamera = MutableStateFlow(false)
   val replyDelaySeconds = MutableStateFlow(0)
   val replyLimitMax = MutableStateFlow(-1)
+  val activeWorkLabel = MutableStateFlow<String?>(null)
 
   @Volatile var live: GeminiLive? = null
   @Volatile var cameraOn: Boolean = false

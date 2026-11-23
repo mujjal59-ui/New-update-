@@ -50,6 +50,7 @@ object LxrFloatingOverlayManager {
   @Volatile private var windowManager: WindowManager? = null
   @Volatile private var overlayView: LxrPlanetOrbitView? = null
   @Volatile private var layoutParams: WindowManager.LayoutParams? = null
+  @Volatile private var workBannerView: android.widget.TextView? = null
   @Volatile var isShowing: Boolean = false
     private set
   @Volatile var isSpeakingNow: Boolean = false
@@ -253,11 +254,82 @@ object LxrFloatingOverlayManager {
     }
   }
 
+  fun updateActiveWorkBanner(context: Context, label: String?) {
+    val appCtx = context.applicationContext
+    val clean = label?.trim().orEmpty()
+    mainHandler.post {
+      try {
+        val wm =
+          windowManager
+            ?: (appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+        if (clean.isEmpty() || !Settings.canDrawOverlays(appCtx)) {
+          workBannerView?.let { v ->
+            if (v.isAttachedToWindow) wm?.removeViewImmediate(v)
+          }
+          workBannerView = null
+          return@post
+        }
+        val existing = workBannerView
+        if (existing != null && existing.isAttachedToWindow) {
+          existing.text = clean
+          return@post
+        }
+        val dm = appCtx.resources.displayMetrics
+        val type =
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+          } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+          }
+        val params =
+          WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+              WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+          ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = (38f * dm.density).toInt()
+          }
+        val tv =
+          android.widget.TextView(appCtx).apply {
+            text = clean
+            setTextColor(Color.WHITE)
+            textSize = 11.5f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            maxWidth = (dm.widthPixels * 0.86f).toInt()
+            val padH = (14f * dm.density).toInt()
+            val padV = (7f * dm.density).toInt()
+            setPadding(padH, padV, padH, padV)
+            background =
+              android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = 22f * dm.density
+                setColor(Color.argb(228, 8, 16, 40))
+                setStroke((1.5f * dm.density).toInt().coerceAtLeast(2), Color.parseColor("#00E5FF"))
+              }
+            elevation = 8f * dm.density
+          }
+        wm?.addView(tv, params)
+        windowManager = wm
+        workBannerView = tv
+      } catch (t: Throwable) {
+        Log.w(TAG, "Unable to show active work banner", t)
+      }
+    }
+  }
+
   fun hide(context: Context? = null) {
     cancelPendingHide()
     mainHandler.post {
       try {
         val view = overlayView
+        val banner = workBannerView
         val wm =
           windowManager
             ?: (context?.applicationContext?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
@@ -267,10 +339,14 @@ object LxrFloatingOverlayManager {
             wm?.removeViewImmediate(view)
           }
         }
+        if (banner != null && banner.isAttachedToWindow) {
+          wm?.removeViewImmediate(banner)
+        }
       } catch (_: Throwable) {
       } finally {
         overlayView = null
         layoutParams = null
+        workBannerView = null
         isShowing = false
       }
     }

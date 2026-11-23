@@ -35,7 +35,7 @@ fun LiveCamera(modifier: Modifier = Modifier) {
     var provider: ProcessCameraProvider? = null
     var analysisRef: ImageAnalysis? = null
     var notifiedOn = false
-    var sentFirstFrame = false
+    var sentFrameCount = 0
     val future = ProcessCameraProvider.getInstance(ctx)
     future.addListener(
       {
@@ -57,7 +57,12 @@ fun LiveCamera(modifier: Modifier = Modifier) {
             var scaledBmp: Bitmap? = null
             try {
               val now = System.currentTimeMillis()
-              val interval = if (Store.lowNetFastMode(ctx)) 1300L else 950L
+              val interval =
+                when {
+                  !notifiedOn -> 380L
+                  Store.lowNetFastMode(ctx) -> 1300L
+                  else -> 950L
+                }
               if (now - lastSentMs >= interval) {
                 val live = RiyaState.live
                 if (live != null && live.isReady()) {
@@ -97,17 +102,14 @@ fun LiveCamera(modifier: Modifier = Modifier) {
                   finalBmp.compress(Bitmap.CompressFormat.JPEG, 55, out)
                   val jpegBytes = out.toByteArray()
                   live.sendCameraFrame(jpegBytes)
-                  if (!sentFirstFrame) {
-                    sentFirstFrame = true
+                  sentFrameCount++
+                  if (!notifiedOn && sentFrameCount >= 2) {
                     notifiedOn = true
                     live.notifyCameraActive(
                       active = true,
                       isFrontCamera = useFrontCamera,
                       proactiveCuriosity = useFrontCamera,
                     )
-                  } else if (!notifiedOn) {
-                    notifiedOn = true
-                    live.notifyCameraActive(active = true, isFrontCamera = useFrontCamera)
                   }
                 }
               }

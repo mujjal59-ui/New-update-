@@ -451,6 +451,7 @@ fun RiyaHomeScreen(
   val themeIdx by RiyaState.homeThemeIndex.collectAsState()
   val activeTheme = remember(themeIdx) { HomeTheme.fromId(themeIdx) }
   val liveModelId by RiyaState.liveModelId.collectAsState()
+  val activeWorkLabel by RiyaState.activeWorkLabel.collectAsState()
   var showVoiceModelDialog by remember { mutableStateOf(false) }
 
   BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF03060F))) {
@@ -636,6 +637,28 @@ fun RiyaHomeScreen(
                   RoundedCornerShape(14.dp),
                 )
                 .padding(horizontal = 9.dp, vertical = 2.dp),
+          )
+        }
+      }
+
+      if (!activeWorkLabel.isNullOrBlank()) {
+        Row(
+          modifier =
+            Modifier
+              .testTag("active_work_banner")
+              .clip(RoundedCornerShape(16.dp))
+              .background(Color(0xE806142E))
+              .border(1.2.dp, CYBER_CYAN, RoundedCornerShape(16.dp))
+              .padding(horizontal = 10.dp, vertical = 3.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = activeWorkLabel.orEmpty(),
+            fontSize = if (isCharacterTheme) 9.5.sp else 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = CYBER_CYAN,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
         }
       }

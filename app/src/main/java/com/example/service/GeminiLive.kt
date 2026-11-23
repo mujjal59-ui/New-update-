@@ -85,8 +85,8 @@ object LiveVadConfig {
 
   fun effectiveEndOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
     when (delayOption) {
-      ReplyDelayOption.INSTANT -> 160L
-      ReplyDelayOption.FAST -> 240L
+      ReplyDelayOption.INSTANT -> 110L
+      ReplyDelayOption.FAST -> 220L
       ReplyDelayOption.NORMAL -> 320L
     }
 
@@ -100,6 +100,58 @@ object LiveVadConfig {
         .put("prefixPaddingMs", PREFIX_PADDING_MS)
         .put("silenceDurationMs", silenceMs),
     )
+}
+
+/** Human-readable Bengali indicator for every A-to-Z LXR--AI action currently running on screen/background. */
+object LxrToolWorkDescriber {
+  fun describeBn(toolName: String, args: JSONObject = JSONObject()): String {
+    val task =
+      when (toolName) {
+        "open_app" -> "${args.optString("app_name").ifBlank { "অ্যাপ" }} ওপেন করা হচ্ছে"
+        "send_message" -> "${args.optString("app_name").ifBlank { "মেসেজ" }}-এ মেসেজ পাঠানো হচ্ছে"
+        "inspect_contact_chat" -> "${args.optString("contact_name").ifBlank { "চ্যাট" }} ও কল যাচাই হচ্ছে"
+        "read_screen", "current_screen" -> "ফোনের স্ক্রিন পড়া হচ্ছে"
+        "click_text", "find_and_open_item" -> "${args.optString("text", args.optString("name")).ifBlank { "আইটেম" }} ট্যাপ করা হচ্ছে"
+        "type_text" -> "স্ক্রিনে লেখা টাইপ করা হচ্ছে"
+        "global_action" ->
+          when (args.optString("action").lowercase()) {
+            "home" -> "হোম স্ক্রিনে যাওয়া হচ্ছে"
+            "back" -> "পেছনে ফেরা হচ্ছে"
+            "notifications" -> "নোটিফিকেশন দেখা হচ্ছে"
+            else -> "সিস্টেম নেভিগেশন চলছে"
+          }
+        "scroll" -> "স্ক্রিন স্ক্রল করা হচ্ছে"
+        "control_device_setting" ->
+          when (args.optString("setting_name").lowercase()) {
+            "location", "gps", "লোকেশন", "জিপিএস" -> "GPS / Location নিয়ন্ত্রণ করা হচ্ছে"
+            "wifi", "ওয়াইফাই" -> "Wi-Fi নিয়ন্ত্রণ করা হচ্ছে"
+            "bluetooth", "ব্লুটুথ" -> "Bluetooth নিয়ন্ত্রণ করা হচ্ছে"
+            "flashlight", "torch" -> "ফ্ল্যাশলাইট নিয়ন্ত্রণ করা হচ্ছে"
+            else -> "ফোন সেটিংস নিয়ন্ত্রণ করা হচ্ছে"
+          }
+        "control_wifi" -> "Wi-Fi নিয়ন্ত্রণ করা হচ্ছে"
+        "control_bluetooth" -> "Bluetooth নিয়ন্ত্রণ করা হচ্ছে"
+        "toggle_flashlight" -> "ফ্ল্যাশলাইট নিয়ন্ত্রণ করা হচ্ছে"
+        "get_live_location", "open_navigation_directions" -> "লাইভ GPS লোকেশন দেখা হচ্ছে"
+        "call_contact" -> "${args.optString("name").ifBlank { "কন্টাক্ট" }}-এ কল যাচাই হচ্ছে"
+        "search_contact", "get_contacts_summary", "get_call_log_summary" -> "কন্টাক্ট ও কল লগ দেখা হচ্ছে"
+        "check_notifications", "reply_to_incoming_message" -> "নতুন মেসেজ ও কল দেখা হচ্ছে"
+        "diagnose_and_fix_self" -> "সিস্টেম পরীক্ষা ও সমাধান করা হচ্ছে"
+        "critical_task_solve" -> "এক্সট্রা ক্রিটিক্যাল এআই বিশ্লেষণ চলছে"
+        "switch_camera_lens" -> "ক্যামেরা লেন্স পরিবর্তন করা হচ্ছে"
+        "build_android_app", "prepare_app_requirements", "check_termux_build_status", "run_termux_command" ->
+          "অ্যাপ বিল্ড ও Termux কাজ চলছে"
+        "web_search", "deep_research" -> "ওয়েব রিসার্চ ও তথ্য যাচাই হচ্ছে"
+        "search_memory", "remember", "delete_memory_entry" -> "স্মৃতি / মেমোরি প্রক্রিয়া চলছে"
+        "inspect_form_fields", "fill_form_fields" -> "ওয়েব ফর্ম পড়া ও পূরণ করা হচ্ছে"
+        "facebook_action" -> "Facebook অটোমেশন কাজ চলছে"
+        "instagram_action" -> "Instagram অটোমেশন কাজ চলছে"
+        "play_youtube", "media_control" -> "YouTube / মিডিয়া নিয়ন্ত্রণ হচ্ছে"
+        "unlock_phone", "unlock_locked_app", "lock_phone" -> "স্ক্রিন লক প্রসেস চলছে"
+        else -> "${toolName.replace('_', ' ')} কাজ চলছে"
+      }
+    return "⚙️ LXR--AI এখন কাজ করছে: $task"
+  }
 }
 
 /**
@@ -211,10 +263,10 @@ object AudioEchoGuard {
 class GeminiLive(private val ctx: Context) {
   private val client =
     OkHttpClient.Builder()
-      .connectTimeout(10, TimeUnit.SECONDS)
+      .connectTimeout(16, TimeUnit.SECONDS)
       .readTimeout(0, TimeUnit.SECONDS)
-      .writeTimeout(15, TimeUnit.SECONDS)
-      .pingInterval(20, TimeUnit.SECONDS)
+      .writeTimeout(30, TimeUnit.SECONDS)
+      .pingInterval(35, TimeUnit.SECONDS)
       .retryOnConnectionFailure(true)
       .build()
   private val main = Handler(Looper.getMainLooper())
@@ -361,6 +413,7 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var netCallback: NetworkCallback? = null
   @Volatile private var lastServerActivityMs = 0L
   @Volatile private var lastBossTurnAtMs = 0L
+  @Volatile private var lastTurnSpeechChunks = 0
   @Volatile private var waitingServerReply = false
   @Volatile private var suppressStaleModelAudio = false
   @Volatile private var activeTurnHasStartedOutput = false
@@ -549,7 +602,7 @@ class GeminiLive(private val ctx: Context) {
             if (stopped) return@execute
             try {
               observeLiveLockAndScreen1s()
-              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
+              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 10 else 6
               if (liveWatchTick % imageEveryTicks == 0) {
                 watchScreen()
               }
@@ -574,6 +627,10 @@ class GeminiLive(private val ctx: Context) {
           val qBytes = ws?.queueSize() ?: 0L
           val bossTurnElapsed = if (lastBossTurnAtMs > 0L) now - lastBossTurnAtMs else 0L
           val serverSilence = if (lastServerActivityMs > 0L) now - lastServerActivityMs else 0L
+          // Clear waitingServerReply silently if triggered by a brief ambient blip rather than killing a healthy socket
+          if (waitingServerReply && lastTurnSpeechChunks < 6 && bossTurnElapsed > 16_000L && qBytes == 0L) {
+            waitingServerReply = false
+          }
           if (ready && !isExecutingTool) {
             if (
               NetworkStabilityGuard.shouldWatchdogReconnect(
@@ -767,21 +824,8 @@ class GeminiLive(private val ctx: Context) {
     val openChat = obs.openChatName?.let { " | খোলা চ্যাট: $it" }.orEmpty()
     val stateKey = "${obs.lockPhase}:${obs.foregroundPackage}:$openChat"
 
-    if (ready && !stopped && stateKey != lastObservedPhoneStateKey && !RiyaState.cameraOn) {
+    if (stateKey != lastObservedPhoneStateKey) {
       lastObservedPhoneStateKey = stateKey
-      // Push live realtime lock alert ONLY when genuinely locked — never spam "স্ক্রিন আনলক আছে / খোলা আছে"!
-      if (obs.isLocked && (ws?.queueSize() ?: 0L) < 8_000L) {
-        try {
-          ws?.send(
-            JSONObject()
-              .put(
-                "realtimeInput",
-                JSONObject().put("text", "[লক সতর্কতা]: ${obs.lockSummaryBn}"),
-              )
-              .toString(),
-          )
-        } catch (_: Throwable) {}
-      }
     }
 
     // Proactively detect incoming/missed voice or video calls visible on screen inside messaging apps (e.g. imo, WhatsApp, Messenger)
@@ -814,7 +858,7 @@ class GeminiLive(private val ctx: Context) {
 
   private fun watchScreen() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isExecutingTool || activeTurnHasStartedOutput || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
-    if ((ws?.queueSize() ?: 0L) > 1_500L) return
+    if ((ws?.queueSize() ?: 0L) > 500L) return
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     if (!pm.isInteractive) return
     val acc = RiyaAccessibilityService.instance ?: return
@@ -1016,6 +1060,8 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
     LxrFloatingOverlayManager.onInterruptSpeakRequest = null
     LxrFloatingOverlayManager.setSpeakingBoost(false)
+    LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
+    RiyaState.activeWorkLabel.value = null
     RiyaState.voiceMatchLiveLabel.value = ""
   }
 
@@ -1112,8 +1158,7 @@ class GeminiLive(private val ctx: Context) {
                   code == 1007 ||
                   reason.contains("not found", true) ||
                   reason.contains("not supported", true) ||
-                  reason.contains("quota", true) ||
-                  failCount >= 1)
+                  reason.contains("quota", true))
             ) {
               val curModel = modelOverride ?: Store.model(ctx)
               modelOverride =
@@ -1133,10 +1178,10 @@ class GeminiLive(private val ctx: Context) {
       {
         if (!stopped && !ready && ws === me) {
           me?.cancel()
-          fail("সেটআপের উত্তর আসেনি (১২ সেকেন্ড)")
+          fail("সেটআপের উত্তর আসেনি (২০ সেকেন্ড)")
         }
       },
-      12000,
+      20_000L,
     )
   }
 
@@ -1151,7 +1196,7 @@ class GeminiLive(private val ctx: Context) {
       if (failCount <= 1) "সংযোগ স্থাপন হচ্ছে…" else "পুনরায় সংযোগ হচ্ছে…"
     if (pending) return
     pending = true
-    val retryDelayMs = (minOf(failCount, 4) * 900L).coerceIn(1000L, 4500L)
+    val retryDelayMs = (minOf(failCount, 4) * 1000L).coerceIn(1000L, 4500L)
     main.postDelayed(
       {
         pending = false
@@ -1190,7 +1235,7 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.31.0, evolved from v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.32.0, evolved from v2.31.0 and v2.30.0)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
       - Live State: ${liveSnap.toCompactContextBn()}
@@ -1480,9 +1525,13 @@ class GeminiLive(private val ctx: Context) {
               val c = fc.getJSONObject(i)
               val callId = c.optString("id")
               val nm = c.optString("name")
+              val argsObj = c.optJSONObject("args") ?: JSONObject()
+              val workBanner = LxrToolWorkDescriber.describeBn(nm, argsObj)
+              RiyaState.activeWorkLabel.value = workBanner
+              LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, workBanner)
               val r =
                 try {
-                  runTool(nm, c.optJSONObject("args") ?: JSONObject())
+                  runTool(nm, argsObj)
                 } catch (e: Throwable) {
                   "টুল ত্রুটি: ${e.message ?: "unknown error"}"
                 }
@@ -1500,6 +1549,11 @@ class GeminiLive(private val ctx: Context) {
           } catch (_: Throwable) {
           } finally {
             isExecutingTool = false
+            RiyaState.activeWorkLabel.value = null
+            LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
+            if (!stopped && ready && !activeTurnHasStartedOutput) {
+              RiyaState.status.value = "শুনছি বস..."
+            }
           }
         }
       }
@@ -3033,6 +3087,7 @@ class GeminiLive(private val ctx: Context) {
                 if (justEndedTurn) {
                   bossActiveSpeechThisTurn = false
                   silentFrameCounter = 1
+                  lastTurnSpeechChunks = sentSpeechChunksThisTurn
                   if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
                     sendAudioStreamEndFlush()
                     waitingServerReply = true
@@ -3065,6 +3120,7 @@ class GeminiLive(private val ctx: Context) {
                   }
                   bossActiveSpeechThisTurn = false
                   silentFrameCounter = 1
+                  lastTurnSpeechChunks = sentSpeechChunksThisTurn
                   if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
                     sendAudioStreamEndFlush()
                     waitingServerReply = true
@@ -3277,7 +3333,23 @@ class GeminiLive(private val ctx: Context) {
     RiyaState.addLog("বস: $t")
     Store.remember(ctx, "Boss(text): $t")
     try {
-      ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", t)).toString())
+      val payload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", t)))
+                  ),
+              )
+              .put("turnComplete", true),
+          )
+      ws?.send(payload.toString())
     } catch (_: Throwable) {}
   }
 
@@ -3299,7 +3371,23 @@ class GeminiLive(private val ctx: Context) {
           "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন ২৪/৭ স্ক্রিন পর্যবেক্ষণ মোডে থাকো।"
       }
     try {
-      ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", hint)).toString())
+      val payload =
+        JSONObject()
+          .put(
+            "clientContent",
+            JSONObject()
+              .put(
+                "turns",
+                JSONArray()
+                  .put(
+                    JSONObject()
+                      .put("role", "user")
+                      .put("parts", JSONArray().put(JSONObject().put("text", hint)))
+                  ),
+              )
+              .put("turnComplete", active),
+          )
+      ws?.send(payload.toString())
     } catch (_: Throwable) {}
   }
 

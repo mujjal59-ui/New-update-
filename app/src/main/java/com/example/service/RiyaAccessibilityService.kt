@@ -1033,11 +1033,27 @@ class RiyaAccessibilityService : AccessibilityService() {
 
       return if (clicked) "OK" else "NOTFOUND"
     } finally {
-      // Close Quick Settings / Control Center shade cleanly
-      repeat(2) {
-        val curPkg = rootInActiveWindow?.packageName?.toString().orEmpty()
-        if (curPkg == "com.android.systemui") {
-          performGlobalAction(GLOBAL_ACTION_BACK)
+      // Close Quick Settings / Control Center shade cleanly across all windows (Android 14-16 / Infinix XOS)
+      val dmH = resources.displayMetrics.heightPixels.coerceAtLeast(1200)
+      repeat(3) {
+        val sysShadeVisible =
+          rootInActiveWindow?.packageName?.toString() == "com.android.systemui" ||
+            windows.orEmpty().any { w ->
+              val root = w.root
+              root?.packageName?.toString() == "com.android.systemui" &&
+                root.isVisibleToUser &&
+                run {
+                  val r = Rect()
+                  w.getBoundsInScreen(r)
+                  r.height() >= (dmH * 0.28f).toInt()
+                }
+            }
+        if (sysShadeVisible) {
+          if (it == 0 && Build.VERSION.SDK_INT >= 31) {
+            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+          } else {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+          }
           Thread.sleep(160)
         }
       }
@@ -1051,7 +1067,7 @@ class RiyaAccessibilityService : AccessibilityService() {
     return rect.width() > 0 && rect.height() > 0 && tapAt(rect.exactCenterX(), rect.exactCenterY())
   }
 
-  /** চালু স্ক্রিনের সুইচ (Wi-Fi/Bluetooth) খুঁজে অন/অফ করে। কখনো ভুল সুইচে চাপ দেয় না এবং ফল যাচাই করে। */
+  /** চালু স্ক্রিনের সুইচ (Wi-Fi/Bluetooth/Location) খুঁজে অন/অফ করে। কখনো ভুল সুইচে চাপ দেয় না এবং ফল যাচাই করে। */
   fun setSwitch(
     enable: Boolean,
     labels: List<String>,
@@ -1063,7 +1079,7 @@ class RiyaAccessibilityService : AccessibilityService() {
       for (i in 0 until n.childCount) allCheckables(n.getChild(i), out)
     }
 
-    val deadline = System.currentTimeMillis() + 3200L
+    val deadline = System.currentTimeMillis() + 3400L
     while (System.currentTimeMillis() < deadline) {
       val list = mutableListOf<AccessibilityNodeInfo>()
       windows?.forEach { w -> w.root?.let { allCheckables(it, list) } }
@@ -1086,12 +1102,27 @@ class RiyaAccessibilityService : AccessibilityService() {
         if (sw != null) {
           val curChecked = isNodeCheckedOrOn(sw)
           if (curChecked == enable) return "ALREADY"
-          val clicked = clickNodeOrBounds(sw)
+          var clicked = clickNodeOrBounds(sw)
+          Thread.sleep(360)
+          sw.refresh()
+          readEntireScreenTree()
+          var after = isNodeCheckedOrOn(sw)
+          if (after != enable) {
+            // Android 15/16 Settings MainSwitchBar often expects click on its clickable row/parent container
+            var p: AccessibilityNodeInfo? = sw.parent
+            var hops = 0
+            while (p != null && hops < 3 && after != enable) {
+              if (p.isClickable) {
+                if (clickNodeOrBounds(p)) clicked = true
+                Thread.sleep(360)
+                sw.refresh()
+                after = isNodeCheckedOrOn(sw)
+              }
+              p = p.parent
+              hops++
+            }
+          }
           if (clicked) {
-            Thread.sleep(360)
-            sw.refresh()
-            readEntireScreenTree()
-            val after = isNodeCheckedOrOn(sw)
             return if (after == enable) "OK" else "CLICKED"
           }
         }
