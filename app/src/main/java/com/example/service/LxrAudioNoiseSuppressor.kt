@@ -7,18 +7,16 @@ import kotlin.math.tanh
 
 /**
  * Real-time 16 kHz PCM-16 software Noise Cancellation & Speech Enhancement DSP
- * engineered to work identically on BOTH:
- *  - Wireless Bluetooth Headset / Earbuds (SCO / BLE)
- *  - Built-in Phone Mic (wideband close/room capture)
+ * engineered for BOTH Wireless Bluetooth Headset/TWS and Built-in Phone Mic.
  *
- * Performs:
- *  1. 1st-order 95 Hz High-Pass Filter -> removes wind, AC/fan rumble, traffic bass, thuds.
- *  2. Adaptive stationary noise-floor estimation -> separates continuous background noise
- *     (fan, market/crowd chatter, street hum) from actual human speech bursts.
- *  3. Smooth noise-gate & spectral attenuation -> suppresses ambient noise toward silence so
- *     Gemini Live VAD triggers cleanly in ~1s without waiting 10-12s on noisy mic input.
- *  4. Clean speech-only clarity boost (optional whisperBoost) -> only amplifies verified speech,
- *     never ambient noise.
+ * v2.29.0 Acoustic Upgrades:
+ *  1. 1st-order 95 Hz High-Pass Filter -> removes AC/fan rumble & traffic bass.
+ *  2. Tonal horn / whistle / steady TV tone rejection -> rejects sustained pure sinusoids & vehicle horns
+ *     (abnormal narrow periodicity + low crest factor).
+ *  3. Impulsive bark / bird chirp / clap transient rejection -> single isolated high-frequency or extreme-crest spikes
+ *     are suppressed without falsely triggering speech turns.
+ *  4. Bluetooth Whisper Boost clarity -> soft-spoken Boss whispers on Bluetooth SCO/BLE (`bluetoothMode && whisperBoostOn`)
+ *     are detected cleanly down to subtle voice RMS and gently amplified without background static pumping.
  */
 class LxrAudioNoiseSuppressor(
   private val sampleRate: Int = 16000,
@@ -29,7 +27,6 @@ class LxrAudioNoiseSuppressor(
     val isSpeechActive: Boolean,
   )
 
-  // High-pass filter state (~95 Hz @ 16 kHz -> rc = 1 / (2*pi*95) ~ 0.001675)
   private val hpAlpha: Double = run {
     val dt = 1.0 / sampleRate.coerceAtLeast(8000)
     val rc = 1.0 / (2.0 * Math.PI * 95.0)
@@ -42,6 +39,7 @@ class LxrAudioNoiseSuppressor(
   private var currentGain = 1.0
   private var speechHangFrames = 0
   private var consecutiveSpeechCandidates = 0
+  private var consecutiveTonalFrames = 0
   private var initializedFloor = false
 
   fun reset(initialFloor: Double = 45.0) {
@@ -51,13 +49,10 @@ class LxrAudioNoiseSuppressor(
     currentGain = 1.0
     speechHangFrames = 0
     consecutiveSpeechCandidates = 0
+    consecutiveTonalFrames = 0
     initializedFloor = false
   }
 
-  /**
-   * Processes 16-bit little-endian mono PCM in-place.
-   * Returns acoustic telemetry so the caller can decide VAD/hangover cleanly.
-   */
   fun processFrameInPlace(
     pcm: ByteArray,
     len: Int,
@@ -69,9 +64,11 @@ class LxrAudioNoiseSuppressor(
 
     val work = DoubleArray(sampleCount)
     var sumSq = 0.0
+    var diffSqSum = 0.0
     var zeroCrossings = 0
     var prevSign = 0
     var peakAbs = 0.0
+    var prevWork = 0.0
 
     var idx = 0
     for (s in 0 until sampleCount) {
@@ -83,6 +80,11 @@ class LxrAudioNoiseSuppressor(
       val a = abs(hp)
       if (a > peakAbs) peakAbs = a
       sumSq += hp * hp
+      if (s > 0) {
+        val d = hp - prevWork
+        diffSqSum += d * d
+      }
+      prevWork = hp
       val sign = if (hp >= 0.0) 1 else -1
       if (prevSign != 0 && sign != prevSign) zeroCrossings++
       prevSign = sign
@@ -92,27 +94,64 @@ class LxrAudioNoiseSuppressor(
     val rms = sqrt(sumSq / sampleCount)
     val crestFactor = if (rms > 1.0) peakAbs / rms else 1.0
     val zcrRate = zeroCrossings.toDouble() / sampleCount
+    val diffRms = if (sampleCount > 1) sqrt(diffSqSum / (sampleCount - 1)) else 0.0
+    val spectralRoughness = if (rms > 1.0) diffRms / rms else 1.0
 
     if (!initializedFloor) {
-      noiseFloorRms = rms.coerceIn(18.0, 260.0)
+      noiseFloorRms =
+        if (bluetoothMode && whisperBoostOn) rms.coerceIn(14.0, 24.0)
+        else rms.coerceIn(14.0, 140.0)
       initializedFloor = true
     }
 
-    // Speech characteristics: clear energy over noise floor, non-flat crest, balanced speech ZCR
+    // 1. Vehicle horn / high-SPL steady siren / continuous tonal alarm detector:
+    // Horns exhibit very steady near-sinusoid/square crest (<= 1.62) paired with elevated high frequencies (ZCR > 0.055)
+    // and sustained duration, unlike organic formant-modulated speech (~180-350 Hz fundamental + varying harmonics).
+    val looksLikeContinuousHorn =
+      crestFactor < 1.56 && zcrRate > 0.055 && rms > 500.0
+    if (looksLikeContinuousHorn) {
+      consecutiveTonalFrames++
+    } else {
+      consecutiveTonalFrames = 0
+    }
+    val rejectedTonalHorn = consecutiveTonalFrames >= 2
+
+    // 2. Sharp bird chirp / shrill whistle / dog bark transient detector:
+    // Very high ZCR (> 0.44, e.g. >3500 Hz chirps/squeaks) or explosive impulsive bark spike (crest > 6.8 without sustained formants)
+    val looksLikeChirpOrHiss = zcrRate > 0.44 && !bluetoothMode
+    val looksLikeBtChirpOrHiss = zcrRate > 0.48 && bluetoothMode
+    val looksLikeSuddenBarkOrClap = crestFactor > 6.8 && zcrRate > 0.28 && consecutiveSpeechCandidates == 0
+
+    // Speech thresholds: ultra-sensitive for soft Bluetooth whispers when whisperBoostOn is active
     val baseMinSpeech =
       when {
-        bluetoothMode && whisperBoostOn -> 52.0
-        bluetoothMode -> 72.0
-        whisperBoostOn -> 64.0
-        else -> 92.0
+        bluetoothMode && whisperBoostOn -> 34.0
+        bluetoothMode -> 58.0
+        whisperBoostOn -> 46.0
+        else -> 82.0
       }
-    val requiredSnr = if (whisperBoostOn) 1.85 else 2.20
+    val requiredSnr =
+      when {
+        bluetoothMode && whisperBoostOn -> 1.55
+        whisperBoostOn -> 1.72
+        else -> 2.15
+      }
     val snrThreshold = max(baseMinSpeech, noiseFloorRms * requiredSnr)
 
-    // Broadband impulsive static or ultra-high-frequency hiss check
-    val speechLikeBand = zcrRate in 0.015..0.48 || rms > snrThreshold * 1.45
-    val candidate = rms >= snrThreshold && speechLikeBand
-    val strongSpeech = rms >= snrThreshold * 1.40 && speechLikeBand
+    val speechBandOk =
+      if (bluetoothMode) zcrRate in 0.014..0.46 else zcrRate in 0.015..0.43
+    val acousticNotNonHuman =
+      !rejectedTonalHorn &&
+        !looksLikeChirpOrHiss &&
+        !looksLikeBtChirpOrHiss &&
+        !looksLikeSuddenBarkOrClap &&
+        spectralRoughness in 0.04..1.85
+
+    val candidate = rms >= snrThreshold && speechBandOk && acousticNotNonHuman
+    val strongSpeech =
+      rms >= snrThreshold * 1.40 &&
+        (speechBandOk || (rms > snrThreshold * 2.2 && zcrRate <= 0.46)) &&
+        acousticNotNonHuman
 
     if (candidate) {
       consecutiveSpeechCandidates++
@@ -125,49 +164,44 @@ class LxrAudioNoiseSuppressor(
         (candidate && (speechHangFrames > 0 || consecutiveSpeechCandidates >= 2))
 
     if (rawSpeechDetected) {
-      speechHangFrames = 1 // ~40ms crisp syllable bridge for sub-second turn handoff
+      speechHangFrames = 1
     } else if (speechHangFrames > 0) {
       speechHangFrames--
     }
     val isSpeechActive = rawSpeechDetected || speechHangFrames > 0
 
-    // Adapt stationary noise floor quickly when ambient noise rises (e.g. fan/traffic) so end-of-speech triggers cleanly
     if (!rawSpeechDetected) {
       noiseFloorRms =
         if (rms < noiseFloorRms) {
           noiseFloorRms * 0.84 + rms * 0.16
         } else {
-          val steadyStep = if (crestFactor < 3.6) 0.09 else 0.03
+          val steadyStep = if (crestFactor < 3.6 || rejectedTonalHorn) 0.10 else 0.03
           noiseFloorRms * (1.0 - steadyStep) + rms * steadyStep
-        }.coerceIn(15.0, 750.0)
+        }.coerceIn(14.0, 750.0)
     }
 
-    // Compute desired frame gain:
-    // - Non-speech: suppress background noise cleanly to silence so Gemini VAD triggers immediately!
-    // - Speech: clean spectral subtraction factor * optional clarity boost
     val desiredGain =
       if (!isSpeechActive) {
-        if (rms < noiseFloorRms * 1.25) 0.0 else 0.06
+        if (rejectedTonalHorn || rms < noiseFloorRms * 1.25) 0.0 else 0.04
       } else {
         val subtractRatio =
-          ((rms - 0.60 * noiseFloorRms) / max(rms, 1.0)).coerceIn(0.45, 1.0)
+          ((rms - 0.55 * noiseFloorRms) / max(rms, 1.0)).coerceIn(0.45, 1.0)
         val speechBoost =
-          if (!whisperBoostOn) 1.05
+          if (!whisperBoostOn) 1.08
           else {
-            val phoneMult = if (bluetoothMode) 1.0 else 1.18
+            val btWhisperFactor = if (bluetoothMode) 1.26 else 1.15
             when {
-              rms < 180.0 -> 2.8 * phoneMult
-              rms < 480.0 -> 2.2 * phoneMult
-              rms < 1200.0 -> 1.65 * phoneMult
-              rms < 2400.0 -> 1.25 * phoneMult
+              rms < 120.0 -> 3.3 * btWhisperFactor
+              rms < 280.0 -> 2.6 * btWhisperFactor
+              rms < 650.0 -> 1.85 * btWhisperFactor
+              rms < 1400.0 -> 1.35 * btWhisperFactor
               else -> 1.0
             }
           }
-        (subtractRatio * speechBoost).coerceIn(0.45, 3.6)
+        (subtractRatio * speechBoost).coerceIn(0.45, 4.2)
       }
 
-    // Smooth gain attack/release per frame to eliminate audible gating clicks
-    val attackReleaseAlpha = if (desiredGain > currentGain) 0.55 else 0.30
+    val attackReleaseAlpha = if (desiredGain > currentGain) 0.58 else 0.30
     val startGain = currentGain
     val endGain = startGain * (1.0 - attackReleaseAlpha) + desiredGain * attackReleaseAlpha
     currentGain = endGain

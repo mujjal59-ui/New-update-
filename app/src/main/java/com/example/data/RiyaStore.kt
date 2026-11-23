@@ -196,7 +196,7 @@ object RiyaState {
 }
 
 object Store {
-  const val CAP = 30L * 1024 * 1024 // 30 MB memory cap
+  const val CAP = 64L * 1024 * 1024 // 64 MB memory cap (6-month history)
   const val DEFAULT_LIVE_MODEL = "gemini-3.1-flash-live-preview"
   const val TTS_MODEL_ID = "gemini-3.1-flash-tts-preview"
   const val TTS_MODEL_LABEL = "Gemini 3.1 Flash TTS (preview)"
@@ -410,6 +410,11 @@ object Store {
 
   fun setAlways(c: Context, v: Boolean) = p(c).edit().putBoolean("always", v).apply()
 
+  fun userStoppedService(c: Context): Boolean = p(c).getBoolean("userStoppedService", false)
+
+  fun setUserStoppedService(c: Context, stopped: Boolean) =
+    p(c).edit().putBoolean("userStoppedService", stopped).commit()
+
   fun oemDone(c: Context): Boolean =
     p(c).getBoolean("oemDone", false) || legacyPrefs(c).getBoolean("oemDone", false)
 
@@ -524,7 +529,7 @@ object Store {
         ScreenLockType.PATTERN -> appPattern(c).length >= 4
       }
 
-  const val RETENTION_DAYS = 30
+  const val RETENTION_DAYS = 180 // 6 months continuous rolling memory
   private const val MILLIS_PER_DAY = 86_400_000L
   private val TS_LINE_REGEX = Regex("^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2})]\\s*(.*)$")
   @Volatile private var writeCountSincePrune = 0
@@ -535,6 +540,57 @@ object Store {
 
   fun clear(c: Context) {
     f(c).delete()
+  }
+
+  /**
+   * Deletes only memory lines matching [query] tokens when Boss explicitly asks to erase a specific memory/topic,
+   * preserving all unrelated 6-month history safely.
+   */
+  @Synchronized
+  fun deleteMemoryEntries(
+    c: Context,
+    query: String,
+    maxDays: Int = RETENTION_DAYS,
+    nowMs: Long = System.currentTimeMillis(),
+  ): Pair<Int, List<String>> {
+    val file = f(c)
+    if (!file.exists()) return 0 to emptyList()
+    val cleanQuery = query.trim().lowercase()
+    if (cleanQuery.isBlank()) return 0 to emptyList()
+
+    val stopWords =
+      setOf("ডিলিট", "মুছে", "দাও", "ফেলো", "স্মৃতি", "মেমোরি", "কথা", "বিষয়ে", "সম্পর্কে", "delete", "remove", "memory")
+    val tokens =
+      cleanQuery
+        .split(Regex("[\\s,।?!.;:\"'()\\[\\]{}/\\\\]+"))
+        .map { it.trim() }
+        .filter { it.length >= 2 && it !in stopWords }
+        .ifEmpty { listOf(cleanQuery) }
+
+    val cutoffMs = nowMs - (maxDays.coerceAtLeast(1).toLong() * MILLIS_PER_DAY)
+    val allLines = file.readLines(Charsets.UTF_8)
+    val kept = ArrayList<String>(allLines.size)
+    val removedLines = ArrayList<String>()
+
+    for (line in allLines) {
+      if (line.isBlank()) continue
+      val lower = line.lowercase()
+      val ts = parseLineTimestampMs(line)
+      val inWindow = ts == null || ts >= cutoffMs
+      val matched =
+        inWindow &&
+          (lower.contains(cleanQuery) || tokens.all { lower.contains(it) })
+      if (matched) {
+        removedLines.add(line)
+      } else {
+        kept.add(line)
+      }
+    }
+
+    if (removedLines.isNotEmpty()) {
+      file.writeText(if (kept.isEmpty()) "" else kept.joinToString("\n") + "\n", Charsets.UTF_8)
+    }
+    return removedLines.size to removedLines
   }
 
   private fun sanitizeLine(line: String): String =
@@ -634,9 +690,16 @@ object Store {
     }
   }
 
+  fun build180DayDigest(
+    c: Context,
+    maxChars: Int = 4500,
+    days: Int = RETENTION_DAYS,
+    nowMs: Long = System.currentTimeMillis(),
+  ): String = build30DayDigest(c, maxChars, days, nowMs)
+
   /**
-   * Builds a compact day-by-day awareness digest across the past [days] days so LXR--AI knows
-   * events from 1 day to 30 days ago right at session startup.
+   * Builds a compact day-by-day awareness digest across the past [days] days (default 180 days / 6 months)
+   * so LXR--AI remembers key events right at session startup.
    */
   @Synchronized
   fun build30DayDigest(

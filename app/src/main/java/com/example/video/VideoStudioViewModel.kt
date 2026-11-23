@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.service.LxrStudioHandoff
 import com.example.service.LxrUsageLedger
+import com.example.service.RiyaVoiceManager
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -759,6 +760,14 @@ class VideoStudioViewModel(application: Application) : AndroidViewModel(applicat
             completedStages = completed,
           ),
           lastActionBanner = qualityReport.verdictBn,
+        )
+      }
+      runCatching {
+        RiyaVoiceManager.initialize(ctx)
+        RiyaVoiceManager.speak(
+          "বস, '${finalProj.title}' ভিডিও তৈরি সম্পন্ন হয়েছে। টাইটেল, থাম্বনেইল বা YouTube SEO নিয়ে কোনো পরিবর্তন করতে চাইলে বলো।",
+          interrupt = false,
+          forceSpeak = false,
         )
       }
     } catch (c: CancellationException) {

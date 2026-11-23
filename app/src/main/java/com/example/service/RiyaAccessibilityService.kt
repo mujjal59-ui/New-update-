@@ -117,7 +117,13 @@ class RiyaAccessibilityService : AccessibilityService() {
       val isContentChange =
         event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
           (com.example.data.RiyaState.running.value || pkg == "com.android.systemui")
-      val minGap = if (isStateChange) 320L else 850L
+      val minGap =
+        when {
+          isStateChange && com.example.data.RiyaState.running.value -> 95L
+          isStateChange -> 220L
+          com.example.data.RiyaState.running.value -> 320L
+          else -> 750L
+        }
       if ((isStateChange || isContentChange) &&
         now - lastScan >= minGap &&
         !scanScheduled

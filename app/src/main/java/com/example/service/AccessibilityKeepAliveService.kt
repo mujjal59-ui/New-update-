@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -9,6 +10,7 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -17,6 +19,8 @@ import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
+import com.example.data.RiyaState
+import com.example.data.Store
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +49,11 @@ class AccessibilityKeepAliveService : Service() {
         } catch (_: Throwable) {
           false
         }
-      return accAlive || notifAllowed
+      val ryaAlwaysOn =
+        !Store.userStoppedService(appCtx) &&
+          Store.apiKey(appCtx).isNotBlank() &&
+          RiyaState.running.value
+      return accAlive || notifAllowed || ryaAlwaysOn
     }
 
     fun sync(context: Context) {
@@ -101,8 +109,10 @@ class AccessibilityKeepAliveService : Service() {
     super.onCreate()
     promoteForegroundSafe()
     scope.launch {
+      var loopCount = 0
       while (true) {
         delay(8_000L)
+        loopCount++
         try {
           Keep.ensureAccessibility(applicationContext)
           val notifAllowed =
@@ -112,6 +122,23 @@ class AccessibilityKeepAliveService : Service() {
             NotificationListenerService.requestRebind(
               ComponentName(applicationContext, RiyaNotificationListenerService::class.java)
             )
+          }
+          if (
+            loopCount % 2 == 0 &&
+              !Store.userStoppedService(applicationContext) &&
+              Store.apiKey(applicationContext).isNotBlank() &&
+              !RiyaState.running.value &&
+              ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.RECORD_AUDIO,
+              ) == PackageManager.PERMISSION_GRANTED
+          ) {
+            try {
+              ContextCompat.startForegroundService(
+                applicationContext,
+                Intent(applicationContext, RiyaService::class.java),
+              )
+            } catch (_: Throwable) {}
           }
           AccessibilityStatusMonitor.refreshNow(applicationContext, speakIfTurnedOff = false)
         } catch (_: Throwable) {}

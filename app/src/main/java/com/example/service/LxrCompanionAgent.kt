@@ -132,6 +132,12 @@ object UnlockPolicyGuard {
       "media_control",
       "toggle_flashlight",
       "reply_to_incoming_message",
+      "delete_memory_entry",
+      "get_device_hardware_info",
+      "get_live_location",
+      "get_contacts_summary",
+      "get_call_log_summary",
+      "inspect_form_fields",
     )
 
   /**

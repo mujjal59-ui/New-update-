@@ -62,8 +62,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
@@ -77,6 +79,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -263,6 +266,9 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     add(Manifest.permission.CAMERA)
     add(Manifest.permission.READ_CONTACTS)
     add(Manifest.permission.CALL_PHONE)
+    add(Manifest.permission.READ_CALL_LOG)
+    add(Manifest.permission.ACCESS_FINE_LOCATION)
+    add(Manifest.permission.ACCESS_COARSE_LOCATION)
     if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
   }
   val missingRt = runtime.filter { !hasPerm(ctx, it) }
@@ -404,6 +410,23 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         hasPerm(ctx, Manifest.permission.CALL_PHONE),
         rt(Manifest.permission.CALL_PHONE),
       ),
+      PermItem(
+        "Call Logs",
+        "ডায়ালারের আসা, করা ও মিসড কল লগ পড়ে শোনাতে",
+        Icons.Filled.History,
+        listOf(CYBER_BLUE, CYBER_PURPLE),
+        hasPerm(ctx, Manifest.permission.READ_CALL_LOG),
+        rt(Manifest.permission.READ_CALL_LOG),
+      ),
+      PermItem(
+        "Location (GPS)",
+        "বসের বর্তমান ঠিকানা জানাতে ও ম্যাপ নেভিগেশন চালু করতে",
+        Icons.Filled.LocationOn,
+        listOf(CYBER_CYAN, CYBER_GREEN),
+        hasPerm(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ||
+          hasPerm(ctx, Manifest.permission.ACCESS_COARSE_LOCATION),
+        rt(Manifest.permission.ACCESS_FINE_LOCATION),
+      ),
     )
 
   Column(
@@ -464,7 +487,10 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         }
       }
     }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(
+      modifier = Modifier.testTag("perm_list"),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
       items(list) { p ->
         Column(
           Modifier
@@ -1404,6 +1430,9 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var searchQuery by remember { mutableStateOf("") }
   var used by remember { mutableLongStateOf(0L) }
   var text by remember { mutableStateOf("") }
+  var showDeleteConfirm by remember { mutableStateOf(false) }
+  var deleteMatchingOnly by remember { mutableStateOf(false) }
+
   LaunchedEffect(refresh, searchQuery) {
     val (sz, loaded) =
       withContext(Dispatchers.IO) {
@@ -1416,18 +1445,82 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     used = sz
     text = loaded
   }
+
+  if (showDeleteConfirm) {
+    AlertDialog(
+      onDismissRequest = { showDeleteConfirm = false },
+      modifier = Modifier.testTag("memory_clear_confirm_dialog"),
+      containerColor = Color(0xFF171C30),
+      titleContentColor = Color.White,
+      textContentColor = Color(0xFFD5DCF0),
+      title = {
+        Text(
+          if (deleteMatchingOnly) "'${searchQuery.trim()}' বিষয়ক স্মৃতি মুছবেন?"
+          else "সব সংরক্ষিত স্মৃতি মুছে ফেলবেন?",
+          fontWeight = FontWeight.Bold,
+        )
+      },
+      text = {
+        Text(
+          if (deleteMatchingOnly) {
+            "সতর্কতা: '${searchQuery.trim()}'-এর সাথে মিলে যাওয়া গত ১৮০ দিনের স্মৃতি স্থায়ীভাবে মুছে যাবে। আপনি কি নিশ্চিত?"
+          } else {
+            "সতর্কতা: একবার মুছে ফেললে গত ১৮০ দিনের (৬ মাসের) সব সংরক্ষিত কথোপকথন ও স্মৃতি আর ফিরিয়ে আনা যাবে না। আপনি কি নিশ্চিত?"
+          },
+          fontSize = 14.sp,
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            showDeleteConfirm = false
+            val targetQ = searchQuery.trim()
+            val matchOnly = deleteMatchingOnly && targetQ.isNotBlank()
+            scope.launch(Dispatchers.IO) {
+              if (matchOnly) {
+                Store.deleteMemoryEntries(ctx, targetQ)
+              } else {
+                Store.clear(ctx)
+              }
+              withContext(Dispatchers.Main) {
+                refresh++
+                Toast.makeText(
+                  ctx,
+                  if (matchOnly) "'$targetQ' বিষয়ক স্মৃতি মুছে ফেলা হয়েছে ✓" else "সব স্মৃতি মুছে ফেলা হয়েছে ✓",
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            }
+          },
+          modifier = Modifier.testTag("memory_confirm_delete_button"),
+          colors = ButtonDefaults.buttonColors(containerColor = CYBER_RED),
+        ) {
+          Text("হ্যাঁ, মুছে ফেলুন", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = { showDeleteConfirm = false },
+          modifier = Modifier.testTag("memory_cancel_delete_button"),
+        ) {
+          Text("না, থাকুক", color = CYBER_CYAN)
+        }
+      },
+    )
+  }
+
   Column(
     Modifier.fillMaxSize().background(FULL_BG_GRADIENT).statusBarsPadding().padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     SubPageTopBar(
-      title = "Memory (৩০ দিন)",
+      title = "Memory (১৮০ দিন / ৬ মাস)",
       icon = Icons.Filled.Memory,
       iconColors = listOf(CYBER_BLUE, CYBER_CYAN),
       onBack = back,
       onNavigate = onNavigate,
     )
-    Text("%.2f MB / 30 MB ব্যবহৃত হয়েছে (গত ৩০ দিনের স্মৃতি সুরক্ষিত)".format(used / 1048576.0), color = Color.White, fontSize = 13.sp)
+    Text("%.2f MB / 64 MB ব্যবহৃত হয়েছে (গত ১৮০ দিনের স্মৃতি সুরক্ষিত)".format(used / 1048576.0), color = Color.White, fontSize = 13.sp)
     LinearProgressIndicator(
       progress = { (used.toFloat() / Store.CAP).coerceIn(0f, 1f) },
       modifier = Modifier.fillMaxWidth(),
@@ -1438,7 +1531,7 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       onValueChange = { searchQuery = it },
       modifier = Modifier.fillMaxWidth().testTag("memory_search_input"),
       singleLine = true,
-      placeholder = { Text("১ মাসের পুরনো কথার সূত্র দিয়ে খুঁজুন…", color = Color.Gray, fontSize = 13.sp) },
+      placeholder = { Text("৬ মাসের পুরনো কথার সূত্র দিয়ে খুঁজুন…", color = Color.Gray, fontSize = 13.sp) },
       colors =
         OutlinedTextFieldDefaults.colors(
           focusedTextColor = Color.White,
@@ -1458,16 +1551,25 @@ fun MemPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       color = Color.White,
       fontSize = 13.sp,
     )
+    if (searchQuery.isNotBlank()) {
+      OutlinedButton(
+        onClick = {
+          deleteMatchingOnly = true
+          showDeleteConfirm = true
+        },
+        modifier = Modifier.fillMaxWidth().testTag("memory_delete_filtered_button"),
+      ) {
+        Text("'${searchQuery.trim()}' বিষয়ক স্মৃতি মুছুন", color = CYBER_AMBER)
+      }
+    }
     OutlinedButton(
       onClick = {
-        scope.launch(Dispatchers.IO) {
-          Store.clear(ctx)
-          withContext(Dispatchers.Main) { refresh++ }
-        }
+        deleteMatchingOnly = false
+        showDeleteConfirm = true
       },
       modifier = Modifier.fillMaxWidth().testTag("memory_clear_button"),
     ) {
-      Text("স্মৃতি মুছে ফেলুন", color = CYBER_RED)
+      Text("সব স্মৃতি মুছে ফেলুন", color = CYBER_RED)
     }
   }
 }

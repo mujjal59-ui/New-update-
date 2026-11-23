@@ -113,6 +113,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.service.LxrDownloadStorage
+import com.example.service.RiyaVoiceManager
 import com.example.service.LxrProviderRegistry
 import com.example.service.LxrResearchEngine
 import com.example.service.LxrStorageCategory
@@ -622,6 +623,15 @@ fun SeoStudioScreen(back: () -> Unit, onNavigate: (String) -> Unit) {
       seoResult = result
       loading = false
       exportMessage = "তৈরি সম্পন্ন ✓ (${result.providerLabel} • ${result.checkedAtDhaka})"
+      runCatching {
+        val topTitle = result.titles.firstOrNull().orEmpty().take(55)
+        RiyaVoiceManager.initialize(ctx)
+        RiyaVoiceManager.speak(
+          "বস, YouTube SEO প্যাক তৈরি সম্পন্ন হয়েছে। সেরা টাইটেল: $topTitle। কোনো বদল করতে চাইলে বলো।",
+          interrupt = false,
+          forceSpeak = false,
+        )
+      }
     }
   }
 

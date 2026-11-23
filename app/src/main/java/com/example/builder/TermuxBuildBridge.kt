@@ -161,6 +161,7 @@ object TermuxBuildBridge {
         echo "Using cached Android cmdline-tools from Download folder..."
         unzip -qo "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" -d "${'$'}ANDROID_HOME/cmdline-tools/"
       elif [ ! -d "${'$'}ANDROID_HOME/cmdline-tools/latest" ]; then
+        echo "DOWNLOAD_NOTICE: ফ্রি Android cmdline-tools (~140MB) গুগল সার্ভার থেকে ডাউনলোড করা হচ্ছে..."
         echo "Downloading free Android cmdline-tools into Download toolchain..."
         wget -q -O "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
         unzip -qo "${'$'}TOOLCHAIN_DIR/cmdline-tools.zip" -d "${'$'}ANDROID_HOME/cmdline-tools/"

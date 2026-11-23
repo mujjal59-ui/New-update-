@@ -247,8 +247,19 @@ class GeminiLive(private val ctx: Context) {
       {"name":"current_time","description":"বাংলাদেশের বর্তমান সময় (Asia/Dhaka), তারিখ ও বার জানো"},
       {"name":"web_search","description":"Google ও DuckDuckGo সার্চ করে যাচাইকৃত সঠিক তথ্য ও লিংক খুঁজে আনো","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}},
       {"name":"deep_research","description":"Google Search, Web Search, Wikipedia এবং কনফিগার করা থাকলে Perplexity ও You.com ব্যবহার করে আসল URL তথ্যসূত্রসহ গভীর রিসার্চ করো।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"},"engine":{"type":"STRING","description":"auto, google, perplexity, you"}},"required":["query"]}},
-      {"name":"search_memory","description":"গত ৩০ দিনের (১ মাসের) সংরক্ষিত স্মৃতি ও কথোপকথন থেকে ছোট্ট সূত্র, মানুষের নাম, তারিখ বা বিষয় খুঁজে আসল ঘটনা বের করো।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"সূত্র, মানুষের নাম, তারিখ বা মূল শব্দ"}},"required":["query"]}},
-      {"name":"remember","description":"বসের জরুরি কথা মেমোরিতে সংরক্ষণ করো","parameters":{"type":"OBJECT","properties":{"fact":{"type":"STRING"}},"required":["fact"]}}
+      {"name":"search_memory","description":"গত ১৮০ দিনের (৬ মাসের) সংরক্ষিত স্মৃতি ও কথোপকথন থেকে ছোট্ট সূত্র, মানুষের নাম, তারিখ বা বিষয় খুঁজে আসল ঘটনা বের করো।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"সূত্র, মানুষের নাম, তারিখ বা মূল শব্দ"}},"required":["query"]}},
+      {"name":"delete_memory_entry","description":"বস নির্দিষ্ট কোনো বিষয়, নাম বা কথোপকথনের স্মৃতি মেমোরি থেকে মুছে ফেলতে বললে সরাসরি সেটি মুছে দাও।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"যে বিষয় বা কথা মুছতে হবে"}},"required":["query"]}},
+      {"name":"remember","description":"বসের জরুরি কথা মেমোরিতে সংরক্ষণ করো","parameters":{"type":"OBJECT","properties":{"fact":{"type":"STRING"}},"required":["fact"]}},
+      {"name":"control_device_setting","description":"ফোনের বিস্তারিত হার্ডওয়্যার ও সেটিংস (mobile_data, hotspot, brightness, auto_rotate, dnd, location, volume, wifi, bluetooth, flashlight) নিয়ন্ত্রণ করো।","parameters":{"type":"OBJECT","properties":{"setting_name":{"type":"STRING","description":"wifi, bluetooth, mobile_data, hotspot, flashlight, auto_rotate, dnd, location, brightness, volume, ring_volume"},"enabled":{"type":"BOOLEAN"},"value_percent":{"type":"INTEGER","description":"ব্রাইটনেস বা ভলিউমের জন্য ০-১০০ শতাংশ"}},"required":["setting_name"]}},
+      {"name":"get_device_hardware_info","description":"ফোনের সম্পূর্ণ হার্ডওয়্যার, মডেল, প্রসেসর/CPU, RAM, ইন্টারনাল স্টোরেজ, ব্যাটারি হেলথ/তাপমাত্রা, Android OS ভার্সন, ডিসপ্লে ও সেন্সর তথ্য পড়ো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_live_location","description":"GPS থেকে বসের বর্তমান লাইভ ঠিকানা, স্থানাঙ্ক ও ম্যাপ লিংক বের করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"open_navigation_directions","description":"Google Maps-এ নির্দিষ্ট গন্তব্যের দিকে যাওয়ার লাইভ নেভিগেশন ও দিকনির্দেশনা চালু করো।","parameters":{"type":"OBJECT","properties":{"destination":{"type":"STRING","description":"যে জায়গার দিকে যেতে হবে"},"travel_mode":{"type":"STRING","description":"driving, walking, bicycling বা two_wheeler"}},"required":["destination"]}},
+      {"name":"get_contacts_summary","description":"ফোনে মোট কতটি কন্টাক্ট এবং কতটি নম্বর সেভ করা আছে তার সঠিক হিসাব ও নামের উদাহরণ বের করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_call_log_summary","description":"ফোনের ডায়ালারের সাম্প্রতিক আসা (incoming), করা (outgoing) ও মিসড (missed) কল লগ ও সংখ্যা পড়ো।","parameters":{"type":"OBJECT","properties":{"filter_type":{"type":"STRING","description":"all, missed, incoming অথবা outgoing"},"limit":{"type":"INTEGER","description":"কতগুলো কল দেখাবে (ডিফল্ট ১০)"}},"required":[]}},
+      {"name":"inspect_form_fields","description":"Chrome ব্রাউজার বা বর্তমান অ্যাপের স্ক্রিনে খোলা ওয়েবপেজ ও ফর্মের সব ইনপুট ফিল্ড, লেবেল ও খালি ঘর পড়ে বের করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"fill_form_fields","description":"ফর্মের ইনপুট ফিল্ডে বসের দেওয়া তথ্য বসাও এবং কোন কোন ঘর এখনো ফাঁকা আছে জানাও।","parameters":{"type":"OBJECT","properties":{"fields_json":{"type":"STRING","description":"যেমন '{\"Name\":\"Md Uzzal\",\"Phone\":\"017...\"}' অথবা 'Name=Md Uzzal;Email=abc@gmail.com'"}},"required":["fields_json"]}},
+      {"name":"facebook_action","description":"Facebook অ্যাপ খুলে পোস্ট পড়া, সার্চ করা, রিয়্যাক্ট/লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা স্ট্যাটাস/ফটো/রিল পোস্ট করা (পাবলিক কাজের আগে confirmed=true)।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_status, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
+      {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}}
     ]}]"""
 
   private val devCb =
@@ -1095,8 +1106,8 @@ class GeminiLive(private val ctx: Context) {
 
       [RUNTIME MEMORY & CLOCK]
       - Time: $now | Current Screen: [$screenContext]
-      - ১ মাসের স্মৃতি (৩০ দিন): পুরনো কোনো কথা/সূত্র/তারিখ নিয়ে প্রশ্ন করলে অনুমান না করে `search_memory` টুল চালাবে।
-      ${Store.build30DayDigest(ctx, 2000)}
+      - ৬ মাসের স্মৃতি (১৮০ দিন): পুরনো কোনো কথা/সূত্র/তারিখ নিয়ে প্রশ্ন করলে অনুমান না করে `search_memory` টুল চালাবে; আর মুছতে বললে `delete_memory_entry` চালাবে।
+      ${Store.build180DayDigest(ctx, 2200)}
       ${Store.recent(ctx, 4000)}
       """
         .trimIndent()
@@ -1372,6 +1383,11 @@ class GeminiLive(private val ctx: Context) {
       "call_contact",
       "control_wifi",
       "control_bluetooth",
+      "control_device_setting",
+      "fill_form_fields",
+      "facebook_action",
+      "instagram_action",
+      "open_navigation_directions",
     )
   private val needsFind = setOf("find_and_open_item", "click_text")
 
@@ -1597,10 +1613,77 @@ class GeminiLive(private val ctx: Context) {
           "${report.summaryBn}\n[ইঞ্জিন স্ট্যাটাস]: ${report.engineStatuses.joinToString(", ")}"
         }
         "search_memory" -> Store.searchMemory(ctx, a.optString("query"), maxDays = Store.RETENTION_DAYS)
+        "delete_memory_entry" -> {
+          val q = a.optString("query").trim()
+          val (removed, _) = Store.deleteMemoryEntries(ctx, q)
+          if (removed > 0) {
+            "হয়েছে, বস! '$q' সম্পর্কিত $removed টি স্মৃতি এন্ট্রি মেমোরি থেকে চিরতরে মুছে ফেলেছি।"
+          } else {
+            "বস, '$q' সম্পর্কিত কোনো পুরনো সংরক্ষিত স্মৃতি মেমোরিতে পাওয়া যায়নি (তবে ভবিষ্যতেও মনে রাখবো না)।"
+          }
+        }
         "remember" -> {
           Store.remember(ctx, "FACT: " + a.optString("fact"))
           "হয়েছে, বস! কথাটা মেমোরিতে সেভ করে রেখেছি।"
         }
+        "control_device_setting" -> {
+          val setting = a.optString("setting_name")
+          val sLow = setting.trim().lowercase()
+          when {
+            sLow == "wifi" -> toggleWifi(a.optBoolean("enabled", true))
+            sLow == "bluetooth" -> toggleBluetooth(a.optBoolean("enabled", true))
+            sLow == "flashlight" -> setFlashlight(a.optBoolean("enabled", true))
+            else ->
+              LxrDeviceAndHardwareEngine.controlDeviceSetting(
+                ctx = ctx,
+                acc = acc,
+                settingName = setting,
+                enabled = if (a.has("enabled")) a.optBoolean("enabled") else null,
+                valueInt = if (a.has("value_percent")) a.optInt("value_percent") else null,
+              )
+          }
+        }
+        "get_device_hardware_info" -> LxrDeviceAndHardwareEngine.getHardwareAndSystemDiagnostics(ctx)
+        "get_live_location" -> LxrDeviceAndHardwareEngine.getLiveLocationReport(ctx)
+        "open_navigation_directions" ->
+          LxrDeviceAndHardwareEngine.openNavigationDirections(
+            ctx = ctx,
+            destination = a.optString("destination"),
+            travelMode = a.optString("travel_mode", "driving"),
+          )
+        "get_contacts_summary" -> LxrDeviceAndHardwareEngine.getContactsSummary(ctx)
+        "get_call_log_summary" ->
+          LxrDeviceAndHardwareEngine.getCallLogSummary(
+            ctx = ctx,
+            filterType = a.optString("filter_type", "all"),
+            limit = a.optInt("limit", 10).coerceIn(1, 25),
+          )
+        "inspect_form_fields" -> {
+          if (acc == null) noAcc
+          else LxrSocialAndBrowserAgent.collectFormFields(acc).second
+        }
+        "fill_form_fields" -> {
+          if (acc == null) noAcc
+          else LxrSocialAndBrowserAgent.fillFormFields(acc, parseFieldPairs(a.optString("fields_json")))
+        }
+        "facebook_action" ->
+          LxrSocialAndBrowserAgent.performFacebookAction(
+            ctx = ctx,
+            acc = acc,
+            action = a.optString("action"),
+            text = a.optString("text"),
+            query = a.optString("query"),
+            confirmed = a.optBoolean("confirmed", false),
+          )
+        "instagram_action" ->
+          LxrSocialAndBrowserAgent.performInstagramAction(
+            ctx = ctx,
+            acc = acc,
+            action = a.optString("action"),
+            text = a.optString("text"),
+            query = a.optString("query"),
+            confirmed = a.optBoolean("confirmed", false),
+          )
         else -> "unknown tool"
       }
     } catch (e: Exception) {
@@ -1801,21 +1884,48 @@ class GeminiLive(private val ctx: Context) {
       return "'$targetLabel' অ্যাপটি ফোনে ইনস্টল করা নেই বা সিস্টেম লঞ্চারে পাওয়া যায়নি বস (তাই অন্য কোনো ভুল অ্যাপ খোলা হয়নি)।"
     }
 
-    // 3. Last resort only for unknown custom apps: look on Home screen strictly (no fuzzy contact matching)
-    goHomeAndVerify(acc)
-    if (acc != null) {
-      val res = acc.clickText(query, isContact = false)
-      if (res.contains("ক্লিক করা হয়েছে")) {
-        Thread.sleep(600)
-        val fullScreen = acc.readScreen()
-        RiyaState.markTaskCompleted(
-          "$query অ্যাপ খোলা হয়েছে।",
-          "",
-        )
-        return "হোম স্ক্রিন থেকে $query ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${fullScreen.take(2200)}"
+    // 3. Exhaustive smart launcher + home screen + app drawer + search bar discovery with full-screen read
+    return LxrSocialAndBrowserAgent.discoverAndLaunchFromLauncher(
+      ctx = ctx,
+      acc = acc,
+      rawQuery = query,
+      goHomeFn = { goHomeAndVerify(acc) },
+    )
+  }
+
+  private fun parseFieldPairs(raw: String): List<Pair<String, String>> {
+    val clean = raw.trim()
+    if (clean.isBlank()) return emptyList()
+    if (clean.startsWith("{")) {
+      runCatching {
+        val obj = JSONObject(clean)
+        val out = mutableListOf<Pair<String, String>>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+          val k = keys.next()
+          out.add(k to obj.optString(k))
+        }
+        return out
       }
     }
-    return "ফোনে '$query' অ্যাপটি ইনস্টল করা বা খুঁজে পাওয়া যায়নি বস।"
+    if (clean.startsWith("[")) {
+      runCatching {
+        val arr = JSONArray(clean)
+        val out = mutableListOf<Pair<String, String>>()
+        for (i in 0 until arr.length()) {
+          val o = arr.optJSONObject(i) ?: continue
+          val k = o.optString("field").ifBlank { o.optString("name") }
+          val v = o.optString("value")
+          if (k.isNotBlank()) out.add(k to v)
+        }
+        return out
+      }
+    }
+    return clean.split(';', '\n').mapNotNull { part ->
+      val idx = part.indexOf('=')
+      if (idx <= 0) null
+      else part.substring(0, idx).trim() to part.substring(idx + 1).trim()
+    }
   }
 
   private fun messageSend(a: JSONObject): String {
@@ -2546,6 +2656,7 @@ class GeminiLive(private val ctx: Context) {
             ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
           }
 
+          var recReadFailures = 0
           while (!stopped) {
             val activeRec = synchronized(recLock) { rec } ?: break
             val n =
@@ -2555,7 +2666,24 @@ class GeminiLive(private val ctx: Context) {
               } catch (_: Throwable) {
                 -1
               }
-            if (n < 0) break
+            if (n < 0) {
+              if (stopped) break
+              recReadFailures++
+              if (recReadFailures > 5) break
+              Thread.sleep(180L)
+              try {
+                val old = synchronized(recLock) { rec }
+                runCatching { old?.stop() }
+                runCatching { old?.release() }
+                val fresh = createBestAudioRecord(min)
+                if (usingBtAudio) findBluetoothInputDevice()?.let { fresh.setPreferredDevice(it) }
+                else findBuiltInMicDevice()?.let { fresh.setPreferredDevice(it) }
+                fresh.startRecording()
+                synchronized(recLock) { rec = fresh }
+              } catch (_: Throwable) {}
+              continue
+            }
+            recReadFailures = 0
             if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0L) < 48_000L) {
               val now = System.currentTimeMillis()
               if (now - lastVmRefreshAt > 400L) {
