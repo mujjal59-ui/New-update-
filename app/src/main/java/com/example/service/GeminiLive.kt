@@ -39,6 +39,7 @@ import android.util.Base64
 import com.example.MainActivity
 import com.example.ai.RiyaPersona
 import com.example.builder.AppBuilderRuntimeBridge
+import com.example.data.ReplyDelayOption
 import com.example.data.RiyaState
 import com.example.data.Store
 import java.util.concurrent.CountDownLatch
@@ -69,13 +70,27 @@ data class PendingIncomingMessage(
 object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
   const val END_SENSITIVITY = "END_SENSITIVITY_LOW"
-  const val PREFIX_PADDING_MS = 20
-  // Balanced anti-cutoff timings: never chop Boss mid-sentence on brief breaths while keeping replies crisp
-  const val SILENCE_DURATION_MS = 740
-  const val MIC_HANGOVER_MS = 320L
-  const val END_OF_TURN_FLUSH_MS = 460L
+  const val PREFIX_PADDING_MS = 16
+  // Balanced anti-cutoff constants (verified in tests) + dynamic ReplyDelayOption speed profiles
+  const val SILENCE_DURATION_MS = 700
+  const val MIC_HANGOVER_MS = 280L
+  const val END_OF_TURN_FLUSH_MS = 240L
 
-  fun buildRealtimeInputConfigJson(): JSONObject =
+  fun effectiveSilenceDurationMs(delayOption: ReplyDelayOption): Int =
+    when (delayOption) {
+      ReplyDelayOption.INSTANT -> 360
+      ReplyDelayOption.FAST -> 540
+      ReplyDelayOption.NORMAL -> SILENCE_DURATION_MS
+    }
+
+  fun effectiveEndOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
+    when (delayOption) {
+      ReplyDelayOption.INSTANT -> 160L
+      ReplyDelayOption.FAST -> 240L
+      ReplyDelayOption.NORMAL -> 320L
+    }
+
+  fun buildRealtimeInputConfigJson(silenceMs: Int = SILENCE_DURATION_MS): JSONObject =
     JSONObject().put(
       "automaticActivityDetection",
       JSONObject()
@@ -83,8 +98,52 @@ object LiveVadConfig {
         .put("startOfSpeechSensitivity", START_SENSITIVITY)
         .put("endOfSpeechSensitivity", END_SENSITIVITY)
         .put("prefixPaddingMs", PREFIX_PADDING_MS)
-        .put("silenceDurationMs", SILENCE_DURATION_MS),
+        .put("silenceDurationMs", silenceMs),
     )
+}
+
+/**
+ * Detects natural Bengali & English mid-speech interrupt cues ("শোনো", "থামো", "দাঁড়াও", "stop", "wait")
+ * so LXR stops speaking immediately and listens to Boss with zero friction.
+ */
+object LxrSpeechInterruptGuard {
+  private val EXACT_TOKENS =
+    setOf(
+      "শোনো",
+      "শোন",
+      "থামো",
+      "থাম",
+      "চুপ",
+      "দাঁড়াও",
+      "দাঁড়া",
+      "stop",
+      "wait",
+      "listen",
+      "pause",
+    )
+
+  private val PHRASE_ROOTS =
+    listOf(
+      "শোনো",
+      "থামো",
+      "দাঁড়াও",
+      "দাঁড়া",
+      "একটু শোন",
+      "এই শোন",
+      "এক মিনিট",
+      "চুপ কর",
+      "অপেক্ষা কর",
+      "hold on",
+      "shut up",
+    )
+
+  fun containsInterruptCommand(rawText: String): Boolean {
+    val clean = rawText.trim().lowercase().replace(Regex("\\s+"), " ")
+    if (clean.isBlank()) return false
+    val tokens = clean.split(Regex("[\\s,।?!.;:\"'()\\[\\]{}]+")).filter { it.isNotBlank() }
+    if (tokens.any { it in EXACT_TOKENS }) return true
+    return PHRASE_ROOTS.any { phrase -> clean.contains(phrase) }
+  }
 }
 
 /**
@@ -116,7 +175,7 @@ object AudioEchoGuard {
   /**
    * Smart Phone Speaker + Bluetooth barge-in guard:
    * - Unmutes automatically during brief silent pauses between sentences/A-to-Z list items.
-   * - Allows Boss to interrupt mid-sentence via Voice Match OR strong close-talk speech.
+   * - Allows Boss to interrupt mid-sentence via Voice Match OR close-talk speech ("শোনো", "থামো").
    */
   fun shouldMuteMicWithBargeIn(
     usingBtAudio: Boolean,
@@ -130,6 +189,8 @@ object AudioEchoGuard {
     voiceMatchBargeIn: Boolean,
     consecutiveLoudChunks: Int,
     phoneTailHoldMs: Long = 140L,
+    minDirectBargeInRms: Double = 8500.0,
+    directRatio: Double = 2.1,
   ): Boolean {
     if (nowMs < micMuteUntilMs) return !voiceMatchBargeIn
     if (ttsIsSpeaking) return !voiceMatchBargeIn
@@ -139,7 +200,7 @@ object AudioEchoGuard {
     }
     if (voiceMatchBargeIn) return false
     val loudDirectBossBargeIn =
-      consecutiveLoudChunks >= 2 && rawRms >= maxOf(8500.0, lastSpeakerOutputRms * 2.1)
+      consecutiveLoudChunks >= 2 && rawRms >= maxOf(minDirectBargeInRms, lastSpeakerOutputRms * directRatio)
     if (loudDirectBossBargeIn) return false
     return isSpeakerAudiblyPlayingNow ||
       (lastAudibleStopMs > 0L && (nowMs - lastAudibleStopMs) < phoneTailHoldMs)
@@ -217,7 +278,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"open_app","description":"ফোনে ঠিক যে অ্যাপের নাম বলা হয়েছে সেটি সরাসরি ওপেন করে (imo বললে imo, WhatsApp বললে WhatsApp, Messenger বললে Messenger — কখনোই এলোমেলো বা অন্য অ্যাপ খোলে না, এবং অ্যাপ লক থাকলে খুলে দেয়)।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING"}},"required":["app_name"]}},
       {"name":"send_message","description":"যেকোনো মেসেজিং অ্যাপে (WhatsApp, imo, Messenger) নামের চ্যাট খুলে মেসেজ পাঠাও, অথবা Gemini/ChatGPT-তে লেখো। বস যে অ্যাপের নাম বলেছেন হুবহু সেটি দাও।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger","Gemini","ChatGPT"]},"contact_name":{"type":"STRING","description":"চ্যাট বা প্রেরকের নাম (Gemini/ChatGPT এর জন্য ফাঁকা)"},"message":{"type":"STRING","description":"কী মেসেজ লিখবে"}},"required":["app_name","message"]}},
       {"name":"inspect_contact_chat","description":"সঠিক মেসেজিং অ্যাপ (WhatsApp, imo বা Messenger) খুলে নির্দিষ্ট কন্টাক্টের চ্যাট থ্রেডে ঢুকে উপরের চ্যাট হেডার যাচাই করে বাম পাশের প্রাপ্ত মেসেজ, ডান পাশের নিজের পাঠানো মেসেজ এবং ইনকামিং বা মিসড ভয়েস/ভিডিও কল আছে কিনা সত্য তথ্য বের করো।","parameters":{"type":"OBJECT","properties":{"app_name":{"type":"STRING","enum":["WhatsApp","imo","Messenger"]},"contact_name":{"type":"STRING","description":"যে কন্টাক্টের চ্যাট বা কল যাচাই করতে হবে"}},"required":["app_name"]}},
-      {"name":"unlock_phone","description":"শুধুমাত্র বস সরাসরি 'ফোন বা স্ক্রিন আনলক করো' বললে এবং স্ক্রিন সত্যিই লক অবস্থায় থাকলে explicit=true দিয়ে আনলক করো। সাধারণ কথা, সময়, সার্চ বা রিড-অনলি কাজে কখনোই আনলক চালাবে না।","parameters":{"type":"OBJECT","properties":{"explicit":{"type":"BOOLEAN","description":"বস সরাসরি আনলক করতে বললে true"}},"required":["explicit"]}},
+      {"name":"unlock_phone","description":"যদি বস সরাসরি 'ফোন বা স্ক্রিন আনলক করো' বলেন তখন explicit=true দিয়ে আনলক করো। আর স্ক্রিন লক অবস্থায় থাকা কোনো কমান্ড (যেমন WhatsApp/imo/Messenger মেসেজ চেক, স্ক্রিন পড়া বা অ্যাপ খোলা) এলে সিস্টেম নিজেই নীরবে আনলক করে কাজ শেষে রিলক করবে।","parameters":{"type":"OBJECT","properties":{"explicit":{"type":"BOOLEAN","description":"বস সরাসরি আনলক করতে বললে true"}},"required":["explicit"]}},
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে সরাসরি অ্যাপ লক খুলে দাও। পিন বা পাসওয়ার্ডের কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
@@ -293,6 +354,7 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var hadCommandOrToolThisTurn = false
   @Volatile private var lastWakeOrMicPopupMs = 0L
   @Volatile private var turnUnlockedMainScreenByLxr = false
+  @Volatile private var pendingVoiceDelayUntilMs = 0L
   @Volatile private var playbackSpeed: Float = Store.voiceSpeed(ctx)
   private var audioRouteThread: HandlerThread? = null
   private var audioRouteHandler: Handler? = null
@@ -305,6 +367,12 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var lastBossSpeechDetectedMs = 0L
   private val audioPlaybackEpoch = java.util.concurrent.atomic.AtomicLong(0L)
   private val micNoiseSuppressor = LxrAudioNoiseSuppressor(16000)
+
+  fun onReplyDelayOptionChanged() {
+    if (Store.replyDelayOption(ctx) == ReplyDelayOption.INSTANT) {
+      pendingVoiceDelayUntilMs = 0L
+    }
+  }
 
   fun updatePlaybackSpeed(speed: Float) {
     val clamped = speed.coerceIn(Store.MIN_VOICE_SPEED, Store.MAX_VOICE_SPEED)
@@ -1111,17 +1179,27 @@ class GeminiLive(private val ctx: Context) {
     val assistStatus = if (LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx)) "DEFAULT" else "NOT_DEFAULT"
     val extraModel = Store.extraCriticalModel(ctx)
 
+    val delayOpt = Store.replyDelayOption(ctx)
+    val replySpeedDesc =
+      when (delayOpt) {
+        ReplyDelayOption.INSTANT -> "Instant (00.0s — ০ মিলিসেকেন্ড দেরি ছাড়াই সাথে সাথে উত্তর দাও)"
+        ReplyDelayOption.FAST -> "Fast (00.5s)"
+        ReplyDelayOption.NORMAL -> "Normal (00.10s)"
+      }
+
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.31.0, evolved from v2.30.0)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus
-      - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel
+      - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
       - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
-      - Natural Complete Human Voice Discipline (ULTRA-CRITICAL): বসের কথা সম্পূর্ণ শোনার পর পরিষ্কার, আন্তরিক, বাস্তব মানুষের মতো বাংলায় একটি একক ও সম্পূর্ণ উত্তর বলো — কথার মাঝখানে অযথা থেমে যাবে না এবং কখনোই দ্বৈত বা ভাঙা কণ্ঠ তৈরি করবে না।
-      - STRICT LOCK & SILENCE DISCIPLINE: স্ক্রিন বা অ্যাপ আনলক অবস্থায় থাকলে কখনোই "অ্যাপস লক খোলা আছে", "অ্যাপ লক স্ক্রিন খোলা আছে", "স্ক্রিন আনলক আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না। কেবল আসল লক স্ক্রিন বাধা দিলে বা বস জিজ্ঞেস করলে তবেই লকের কথা বলবে।
-      - SELF-DIAGNOSIS PERMISSION RULE: নিজের কোনো অনুমতি/সার্ভিসে সমস্যা পেলে `diagnose_and_fix_self(mode="diagnose")` দিয়ে বসকে সত্য বুঝিয়ে বলো এবং বসের অনুমতি নিয়েই সেটিংস খোলো।
+      - Natural Complete Human Voice Discipline (ULTRA-CRITICAL): বসের কথা সম্পূর্ণ শোনার পর পরিষ্কার, ইউনিক ও সূক্ষ্ম চিন্তাসম্পন্ন বাস্তব মানুষের মতো বাংলায় একটি একক ও সম্পূর্ণ উত্তর বলো — কথার মাঝখানে অযথা থেমে যাবে না এবং কখনোই দ্বৈত বা ভাঙা কণ্ঠ তৈরি করবে না। বস "শোনো" বা "থামো" বললে সাথে সাথে থেমে বসের কথা শোনো।
+      - STRICT SILENT LOCK & EXECUTION DISCIPLINE:
+        * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না।
+        * স্ক্রিন সত্যিই লক থাকাকালে বস মেসেজ, WhatsApp/imo/Messenger, নোটিফিকেশন, স্ক্রিন দেখা বা অ্যাপ খোলার কাজ বললে কোনো অনুমতি বা প্রশ্ন না করেই (সিস্টেম নিজেই নীরবে আনলক ও কাজ শেষে অটো-রিলক করবে) সরাসরি টুল চালিয়ে বসের প্রশ্নের আসল উত্তর দেবে!
+      - SELF-DIAGNOSIS & SELF-REPAIR PERMISSION RULE: নিজের কোনো অনুমতি/সার্ভিসে সমস্যা বা ব্যর্থতা হলে প্রথমে `diagnose_and_fix_self(mode="diagnose")` দিয়ে কারণ বুঝে বসকে স্পষ্ট বলো এবং বসের অনুমতি নিয়ে `diagnose_and_fix_self(mode="fix", issue_key=...)` দিয়ে সমাধান করো।
 
       ${RiyaPersona.TEXT}
 
@@ -1153,7 +1231,12 @@ class GeminiLive(private val ctx: Context) {
     s.put("generationConfig", genConfig)
 
     if (!vadConfigCompatFallback) {
-      s.put("realtimeInputConfig", LiveVadConfig.buildRealtimeInputConfigJson())
+      s.put(
+        "realtimeInputConfig",
+        LiveVadConfig.buildRealtimeInputConfigJson(
+          silenceMs = LiveVadConfig.effectiveSilenceDurationMs(delayOpt),
+        ),
+      )
     }
     if (!transcriptionCompatFallback) {
       s.put("inputAudioTranscription", JSONObject())
@@ -1195,6 +1278,20 @@ class GeminiLive(private val ctx: Context) {
           lastBossSpeechDetectedMs = System.currentTimeMillis()
           uText.append(it)
           val snippet = uText.toString().takeLast(64)
+          val lxrSpeakingNow =
+            activeTurnHasStartedOutput || isAiSpeakingRecently() || RiyaVoiceManager.isActivelySpeaking()
+          if (
+            lxrSpeakingNow &&
+              (LxrSpeechInterruptGuard.containsInterruptCommand(it) ||
+                LxrSpeechInterruptGuard.containsInterruptCommand(snippet))
+          ) {
+            suppressStaleModelAudio = true
+            activeTurnHasStartedOutput = false
+            waitingServerReply = false
+            pendingVoiceDelayUntilMs = 0L
+            interruptSpeakerForBoss()
+            RiyaVoiceManager.stopSpeaking()
+          }
           if (
             LxrFloatingOverlayManager.containsWakeWord(it) ||
               LxrFloatingOverlayManager.containsWakeWord(snippet)
@@ -1221,9 +1318,16 @@ class GeminiLive(private val ctx: Context) {
           if (suppressStaleModelAudio) {
             // Discard stale residual audio packets from an interrupted turn to eliminate split/double replies
           } else {
-            if (!activeTurnHasStartedOutput) {
-              RiyaVoiceManager.stopSpeaking()
-            }
+            val isFirstChunkOfTurn = !activeTurnHasStartedOutput
+            val holdUntilMs =
+              if (isFirstChunkOfTurn) {
+                RiyaVoiceManager.stopSpeaking()
+                val target = pendingVoiceDelayUntilMs
+                pendingVoiceDelayUntilMs = 0L
+                target
+              } else {
+                0L
+              }
             activeTurnHasStartedOutput = true
             val turnEpoch = audioPlaybackEpoch.get()
             for (i in 0 until ps.length()) {
@@ -1234,10 +1338,20 @@ class GeminiLive(private val ctx: Context) {
                   RiyaState.status.value = "LXR--AI কথা বলছে..."
                   LxrFloatingOverlayManager.setSpeakingBoost(true)
                   LxrFloatingOverlayManager.cancelPendingHide()
+                  val applyDelay = i == 0 && holdUntilMs > 0L
                   try {
                     if (!playExec.isShutdown) {
                       playExec.execute {
                         if (stopped || suppressStaleModelAudio || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                        if (applyDelay) {
+                          val remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
+                          if (remain > 0L) {
+                            try {
+                              Thread.sleep(remain)
+                            } catch (_: Throwable) {}
+                          }
+                          if (stopped || suppressStaleModelAudio || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                        }
                         synchronized(trackLock) {
                           if (stopped || suppressStaleModelAudio || turnEpoch != audioPlaybackEpoch.get()) return@synchronized
                           val t = track
@@ -1423,7 +1537,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun runTool(name: String, a: JSONObject): String {
-    val acc = RiyaAccessibilityService.instance
+    var acc = RiyaAccessibilityService.instance
     val genuinelyLocked = LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
     val explicitUnlock = a.optBoolean("explicit", false)
     val shouldAutoUnlock =
@@ -1436,6 +1550,14 @@ class GeminiLive(private val ctx: Context) {
       val unlockRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
       if (unlockRes.status == UnlockStatus.UNLOCKED_SUCCESSFULLY) {
         turnUnlockedMainScreenByLxr = true
+        // Wait briefly for keyguard dismissal and refresh screen tree so tools read live UI immediately
+        val settleDeadline = System.currentTimeMillis() + 550L
+        while (System.currentTimeMillis() < settleDeadline) {
+          acc = RiyaAccessibilityService.instance
+          if (LockVaultManager.isScreenUnlockedNow(ctx, acc)) break
+          Thread.sleep(90L)
+        }
+        acc?.readEntireScreenTree(includeAllWindows = true)
       } else if (unlockRes.status != UnlockStatus.ALREADY_UNLOCKED) {
         return unlockRes.messageBn
       }
@@ -1462,12 +1584,7 @@ class GeminiLive(private val ctx: Context) {
         LockVaultManager.unlockAppLockIfPresent(ctx, acc)
         Thread.sleep(180L)
       }
-      val base = if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
-      return if (turnUnlockedMainScreenByLxr && shouldAutoUnlock) {
-        "$base\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না।"
-      } else {
-        base
-      }
+      return if (watch && name == "current_screen") r + "\n[স্ক্রিন এখন]:\n" + screenSnapshot() else r
     }
     RiyaState.status.value = "স্ক্রিন দেখছি বস…"
     val before = screenSnapshot()
@@ -1487,16 +1604,13 @@ class GeminiLive(private val ctx: Context) {
       Thread.sleep(220L)
     }
     var after = screenSnapshot()
-    val lockNote =
-      if (turnUnlockedMainScreenByLxr) "\n[নিরাপত্তা নোট]: মেইন স্ক্রিন আগে লক ছিল বলে আনলক করা হয়েছে; কাজ শেষে আবার লক হবে। এক কথা দুইবার বলবে না।"
-      else ""
     if (name in needsFind && (r.contains("খুঁজে পাওয়া যায়নি") || r.contains("সার্চ বাটন চাপতে পারিনি"))) {
       val r2 = runToolRaw(name, a)
       Thread.sleep(160)
       after = screenSnapshot()
-      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after$lockNote"
+      return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after"
     }
-    return "$r\n[এখনকার স্ক্রিন]:\n$after$lockNote"
+    return "$r\n[এখনকার স্ক্রিন]:\n$after"
   }
 
   private fun runToolRaw(name: String, a: JSONObject): String =
@@ -1511,16 +1625,22 @@ class GeminiLive(private val ctx: Context) {
           else MessageAgent.inspectContactChat(ctx, acc, a.optString("app_name"), a.optString("contact_name"))
         }
         "unlock_phone" -> {
-          turnUnlockedMainScreenByLxr = false
           val explicit = a.optBoolean("explicit", false)
           val genuinelyLocked = LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
           val appLocked = LockVaultManager.isAppLockScreenShowing(acc)
           when {
-            !genuinelyLocked && !appLocked ->
+            turnUnlockedMainScreenByLxr && !appLocked -> {
+              turnUnlockedMainScreenByLxr = false
+              "ফোনের স্ক্রিন আনলক সম্পন্ন হয়েছে।"
+            }
+            !genuinelyLocked && !appLocked -> {
+              if (!turnUnlockedMainScreenByLxr) turnUnlockedMainScreenByLxr = false
               "ফোনের স্ক্রিন আগে থেকেই খোলা আছে (অযথা আনলক করার দরকার নেই)।"
+            }
             !explicit ->
               "বসের স্পষ্ট 'আনলক করো' নির্দেশ না থাকায় স্বয়ংক্রিয় আনলক করা হয়নি।"
             else -> {
+              turnUnlockedMainScreenByLxr = false
               val devRes = LockVaultManager.unlockDeviceIfLocked(ctx, acc)
               if (
                 (devRes.status == UnlockStatus.ALREADY_UNLOCKED ||
@@ -2581,7 +2701,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf, 5120))
+        .setBufferSizeInBytes(maxOf(minAudioBuf, 2048))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -2618,7 +2738,7 @@ class GeminiLive(private val ctx: Context) {
             16000,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuf, 6400),
+            maxOf(minBuf, 2560),
           )
         if (candidate.state == AudioRecord.STATE_INITIALIZED) {
           return candidate
@@ -2632,7 +2752,7 @@ class GeminiLive(private val ctx: Context) {
         16000,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
-        maxOf(minBuf, 6400),
+        maxOf(minBuf, 2560),
       )
   }
 
@@ -2715,6 +2835,9 @@ class GeminiLive(private val ctx: Context) {
           }
 
           fun sendAudioStreamEndFlush() {
+            val d = ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value).voiceDelayMs
+            pendingVoiceDelayUntilMs = if (d > 0L) System.currentTimeMillis() + d else 0L
+            suppressStaleModelAudio = false
             ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
           }
 
@@ -2774,16 +2897,16 @@ class GeminiLive(private val ctx: Context) {
                 synchronized(trackLock) {
                   val activeTrack = track
                   val head = (activeTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
-                  val recentlyWrote = lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) <= 450L
+                  val recentlyWrote = lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) <= 340L
                   activeTrack != null &&
                     activeTrack.state == AudioTrack.STATE_INITIALIZED &&
                     activeTrack.playState == AudioTrack.PLAYSTATE_PLAYING &&
                     recentlyWrote &&
                     head < lastAudibleEndFrame
                 }
-              // Bridge brief 50-350ms WebSocket audio jitter gaps while LxR is actively speaking a sentence
+              // Bridge brief WebSocket audio jitter gaps while LxR is actively speaking a sentence
               val activeModelTurnAudioHold =
-                activeTurnHasStartedOutput && lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) < 950L
+                activeTurnHasStartedOutput && lastSpeakerWriteMs > 0L && (now - lastSpeakerWriteMs) < 340L
               val speakerSpeakingGuardNow = isSpeakerAudiblyPlayingNow || activeModelTurnAudioHold
               val ttsSpeakingNow = RiyaVoiceManager.isActivelySpeaking()
               if (speakerSpeakingGuardNow || ttsSpeakingNow) {
@@ -2792,28 +2915,28 @@ class GeminiLive(private val ctx: Context) {
                 lastSpeakerOutputRms *= 0.85
               }
 
-              if ((speakerSpeakingGuardNow || ttsSpeakingNow) && rawRms >= maxOf(9500.0, lastSpeakerOutputRms * 2.4)) {
+              if ((speakerSpeakingGuardNow || ttsSpeakingNow) && rawRms >= maxOf(3200.0, lastSpeakerOutputRms * 1.55)) {
                 consecutiveLoudMicChunks++
               } else {
                 consecutiveLoudMicChunks = 0
               }
 
-              // Multi-chunk Voice Match barge-in check (~160ms+ clear speech) so faint room noise never stops LxR mid-sentence
+              // Fast Voice Match barge-in check (~100ms+ clear Boss speech) so "শোনো / থামো" breaks through reliably
               var voiceMatchBargeInNow = false
               if (
                 (speakerSpeakingGuardNow || ttsSpeakingNow) &&
                   voiceMatchActive &&
                   vmProfile != null &&
                   vmProfile.isComplete &&
-                  rawRms >= maxOf(1800.0, lastSpeakerOutputRms * 1.35)
+                  rawRms >= maxOf(1100.0, lastSpeakerOutputRms * 1.15)
               ) {
                 bargeVerifyStream.write(buf, 0, n)
-                if (bargeVerifyStream.size() >= 5120) {
+                if (bargeVerifyStream.size() >= 3200) {
                   val res = VoiceMatchEngine.verifyPcmChunk(vmProfile, bargeVerifyStream.toByteArray(), vmSensitivity)
                   if (res?.matched == true) {
                     voiceMatchBargeInNow = true
                     bargeVerifyStream.reset()
-                  } else if (bargeVerifyStream.size() >= 10240) {
+                  } else if (bargeVerifyStream.size() >= 6400) {
                     bargeVerifyStream.reset()
                   }
                 }
@@ -2823,8 +2946,8 @@ class GeminiLive(private val ctx: Context) {
 
               val directLoudBargeIn =
                 !voiceMatchActive &&
-                  consecutiveLoudMicChunks >= 4 &&
-                  rawRms >= maxOf(9500.0, lastSpeakerOutputRms * 2.4)
+                  consecutiveLoudMicChunks >= 2 &&
+                  rawRms >= maxOf(3200.0, lastSpeakerOutputRms * 1.55)
 
               val isSoftMuted =
                 AudioEchoGuard.shouldMuteMicWithBargeIn(
@@ -2838,18 +2961,23 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
                   consecutiveLoudChunks = if (directLoudBargeIn) consecutiveLoudMicChunks else 0,
-                  phoneTailHoldMs = 480L,
+                  phoneTailHoldMs = 150L,
+                  minDirectBargeInRms = 3200.0,
+                  directRatio = 1.55,
                 )
 
               if (
                 !isSoftMuted &&
-                  speakerSpeakingGuardNow &&
-                  !ttsSpeakingNow &&
+                  (speakerSpeakingGuardNow || ttsSpeakingNow) &&
                   (voiceMatchBargeInNow || directLoudBargeIn)
               ) {
-                // Genuine Boss interruption mid-speech: flush playback cleanly so LxR listens
+                // Genuine Boss interruption mid-speech: flush playback cleanly so LxR listens immediately
                 sentSpeechChunksThisTurn = 0
+                suppressStaleModelAudio = true
+                activeTurnHasStartedOutput = false
+                pendingVoiceDelayUntilMs = 0L
                 interruptSpeakerForBoss()
+                RiyaVoiceManager.stopSpeaking()
               }
 
               // Capture raw voice frame BEFORE DSP filtering so VoiceMatch compares natural mic timbre
@@ -2885,16 +3013,20 @@ class GeminiLive(private val ctx: Context) {
                 preRollRing.addLast(buf.copyOf(n))
               }
 
+              val currentFlushMs =
+                LiveVadConfig.effectiveEndOfTurnFlushMs(
+                  ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value)
+                )
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.MIC_HANGOVER_MS
               val withinEndOfTurnSilence =
-                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= LiveVadConfig.END_OF_TURN_FLUSH_MS
+                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= currentFlushMs
               val withinVmPauseGrace =
                 voiceMatchActive && gateState == 1 && !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= 650L
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
 
-              // Wait until Boss finishes full phrase (END_OF_TURN_FLUSH_MS) before flushing turn
+              // Wait until Boss finishes full phrase (currentFlushMs) before flushing turn
               val justEndedTurn =
-                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > LiveVadConfig.END_OF_TURN_FLUSH_MS
+                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > currentFlushMs
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {
@@ -3149,10 +3281,16 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
   }
 
-  fun notifyCameraActive(active: Boolean, isFrontCamera: Boolean = RiyaState.useFrontCamera.value) {
+  fun notifyCameraActive(
+    active: Boolean,
+    isFrontCamera: Boolean = RiyaState.useFrontCamera.value,
+    proactiveCuriosity: Boolean = false,
+  ) {
     if (!ready || stopped) return
     val hint =
       when {
+        active && isFrontCamera && proactiveCuriosity ->
+          "[সিস্টেম ফ্রন্ট ক্যামেরা ভিশন]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরা এখন চালু হয়েছে এবং সরাসরি বসের লাইভ ছবি তোমার কাছে পৌঁছেছে। এইমাত্র আসা image/jpeg ছবিতে বসকে ভালো করে দেখে নিজে থেকেই আন্তরিক, প্রাণবন্ত ও বাস্তব মানুষের মতো কৌতূহল দেখিয়ে বসকে মজার ও যত্নশীল কিছু জিজ্ঞাসা করো (যেমন: 'বস, আজ তো তোমাকে দারুণ লাগছে! এখন কী করছো / মন কেমন?' ইত্যাদি)!"
         active && isFrontCamera ->
           "[সিস্টেম ফ্রন্ট ক্যামেরা চালু]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলোতে সরাসরি তোমার প্রাণপ্রিয় বসকে দেখতে পাচ্ছো। মানুষের মতো আন্তরিক কৌতূহল ও মায়া নিয়ে বসকে দেখে স্বাভাবিকভাবে কথা বলো, ভালো-মন্দ জিজ্ঞেস করো।"
         active ->

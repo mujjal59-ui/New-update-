@@ -126,14 +126,10 @@ object UnlockPolicyGuard {
       "show_wake_orb",
       "lock_phone",
       "unlock_phone",
-      "read_screen",
-      "current_screen",
-      "check_notifications",
       "search_contact",
       "set_sound_mode",
       "media_control",
       "toggle_flashlight",
-      "reply_to_incoming_message",
       "delete_memory_entry",
       "get_device_hardware_info",
       "get_live_location",
@@ -148,9 +144,10 @@ object UnlockPolicyGuard {
   /**
    * Unlocks the phone ONLY when:
    * 1) Phone main screen is genuinely locked, AND
-   * 2) Either Boss gave an explicit physical UI/action command (open_app, send_message, call_contact, etc.)
+   * 2) Either Boss gave an explicit physical UI/action/screen/messaging command (open_app, send_message,
+   *    inspect_contact_chat, check_notifications, read_screen, current_screen, call_contact, etc.)
    *    OR Boss explicitly called `unlock_phone` with explicit=true.
-   * Casual conversation and passive inspection tools NEVER auto-unlock the phone.
+   * Casual conversation and pure non-UI background API tools NEVER auto-unlock the phone.
    */
   fun shouldAttemptAutoUnlockBeforeTool(
     toolName: String,

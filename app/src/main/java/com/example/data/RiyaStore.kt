@@ -118,10 +118,11 @@ enum class ReplyDelayOption(
   val seconds: Int,
   val optionLabel: String,
   val selectedLabel: String,
+  val voiceDelayMs: Long,
 ) {
-  INSTANT(0, "Instant — 00.0 sec (Default)", "Selected: Instant (00.0 sec)"),
-  FAST(5, "Fast — 00.5 sec", "Selected: Fast (00.5 sec)"),
-  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)"),
+  INSTANT(0, "Instant — 00.0 sec (Default)", "Selected: Instant (00.0 sec)", 0L),
+  FAST(5, "Fast — 00.5 sec", "Selected: Fast (00.5 sec)", 500L),
+  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)", 1000L),
   ;
 
   companion object {
@@ -416,6 +417,7 @@ object Store {
     val valid = ReplyDelayOption.fromSeconds(seconds).seconds
     p(c).edit().putInt("replyDelaySec", valid).commit()
     RiyaState.replyDelaySeconds.value = valid
+    RiyaState.live?.onReplyDelayOptionChanged()
   }
 
   fun replyLimitMax(c: Context): Int =

@@ -35,6 +35,7 @@ fun LiveCamera(modifier: Modifier = Modifier) {
     var provider: ProcessCameraProvider? = null
     var analysisRef: ImageAnalysis? = null
     var notifiedOn = false
+    var sentFirstFrame = false
     val future = ProcessCameraProvider.getInstance(ctx)
     future.addListener(
       {
@@ -61,10 +62,6 @@ fun LiveCamera(modifier: Modifier = Modifier) {
                 val live = RiyaState.live
                 if (live != null && live.isReady()) {
                   lastSentMs = now
-                  if (!notifiedOn) {
-                    notifiedOn = true
-                    live.notifyCameraActive(true, isFrontCamera = useFrontCamera)
-                  }
                   bmp = img.toBitmap()
                   val rot = img.imageInfo.rotationDegrees
                   val rotated =
@@ -100,6 +97,18 @@ fun LiveCamera(modifier: Modifier = Modifier) {
                   finalBmp.compress(Bitmap.CompressFormat.JPEG, 55, out)
                   val jpegBytes = out.toByteArray()
                   live.sendCameraFrame(jpegBytes)
+                  if (!sentFirstFrame) {
+                    sentFirstFrame = true
+                    notifiedOn = true
+                    live.notifyCameraActive(
+                      active = true,
+                      isFrontCamera = useFrontCamera,
+                      proactiveCuriosity = useFrontCamera,
+                    )
+                  } else if (!notifiedOn) {
+                    notifiedOn = true
+                    live.notifyCameraActive(active = true, isFrontCamera = useFrontCamera)
+                  }
                 }
               }
             } catch (_: Throwable) {

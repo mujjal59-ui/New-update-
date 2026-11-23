@@ -2055,6 +2055,12 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         note = if (nextEnable) "ফোনের GPS / Location চালু করা হচ্ছে..." else "ফোনের GPS / Location বন্ধ করা হচ্ছে..."
         scope.launch(Dispatchers.IO) {
           val msg = LxrDeviceAndHardwareEngine.controlDeviceSetting(ctx, acc, "location", enabled = nextEnable)
+          repeat(4) {
+            LxrCompanionAgent.sampleNow(ctx)
+            withContext(Dispatchers.Main) { tick++ }
+            if (LxrDeviceAndHardwareEngine.isLocationEnabledNow(ctx) == nextEnable) return@repeat
+            kotlinx.coroutines.delay(250L)
+          }
           LxrCompanionAgent.sampleNow(ctx)
           withContext(Dispatchers.Main) {
             note = msg

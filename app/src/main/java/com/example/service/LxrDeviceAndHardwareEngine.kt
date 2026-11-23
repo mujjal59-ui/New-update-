@@ -317,17 +317,23 @@ object LxrDeviceAndHardwareEngine {
         val curOn = isLocationEnabledNow(ctx)
         if (curOn == want) return "ফোনের Location/GPS আগেই ${if (want) "চালু" else "বন্ধ"} আছে বস।"
         if (acc != null) {
-          val qs = acc.toggleQuickSettingTile(want, listOf("location", "gps", "লোকেশন"), hardwareStateKnown = curOn)
+          val qs =
+            acc.toggleQuickSettingTile(
+              enable = want,
+              labels = listOf("location", "gps", "লোকেশন", "অবস্থান"),
+              excludeLabels = listOf("scanning", "emergency"),
+              hardwareStateKnown = curOn,
+            )
           if (qs == "OK" || qs == "ALREADY" || isLocationEnabledNow(ctx) == want) {
             return "হয়েছে, বস! ফোনের Location/GPS ${if (want) "চালু" else "বন্ধ"} করেছি।"
           }
           // Fallback: open Location Settings page directly and flip the Location master switch
           ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-          val waitDeadline = System.currentTimeMillis() + 2600L
+          val waitDeadline = System.currentTimeMillis() + 2800L
           while (System.currentTimeMillis() < waitDeadline) {
             val curPkg = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
             if (curPkg == "com.android.settings") {
-              Thread.sleep(240)
+              Thread.sleep(260)
               break
             }
             Thread.sleep(160)
@@ -335,10 +341,18 @@ object LxrDeviceAndHardwareEngine {
           val res =
             acc.setSwitch(
               enable = want,
-              labels = listOf("use location", "location", "access to my location", "লোকেশন"),
-              excludeLabels = listOf("scanning", "emergency", "history", "timeline", "wifi", "wi-fi", "bluetooth", "service"),
+              labels = listOf("use location", "location access", "access to my location", "location", "লোকেশন", "অবস্থান"),
+              excludeLabels = listOf("wi-fi scanning", "bluetooth scanning", "emergency location", "location history", "timeline", "accuracy"),
             )
-          if (res == "OK" || res == "ALREADY" || isLocationEnabledNow(ctx) == want) {
+          if (res == "NOTFOUND") {
+            acc.clickText("Use location")
+            Thread.sleep(320)
+          }
+          val confirmDeadline = System.currentTimeMillis() + 750L
+          while (isLocationEnabledNow(ctx) != want && System.currentTimeMillis() < confirmDeadline) {
+            Thread.sleep(150)
+          }
+          if (isLocationEnabledNow(ctx) == want || res == "OK" || res == "ALREADY") {
             acc.global("back")
             return "হয়েছে, বস! লোকেশন সেটিংস থেকে ফোনের GPS/Location ${if (want) "চালু" else "বন্ধ"} করে দিয়েছি।"
           }

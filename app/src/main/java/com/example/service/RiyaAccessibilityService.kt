@@ -23,6 +23,31 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+object SwitchRowMatcher {
+  /**
+   * Scores how well a single preference row's text matches desired [labels] while rejecting [excludeLabels].
+   * Returns -1 when excluded or unmatched, or a positive score (>= 10 exact row label match) otherwise.
+   */
+  fun scoreRowMatch(rowTextRaw: String, labels: List<String>, excludeLabels: List<String>): Int {
+    val rowLower = rowTextRaw.trim().lowercase()
+    if (rowLower.isEmpty()) return -1
+    if (excludeLabels.any { ex -> rowLower.contains(ex.lowercase()) }) return -1
+    var best = -1
+    for (lbl in labels) {
+      val k = lbl.lowercase().trim()
+      if (k.isEmpty()) continue
+      if (rowLower == k) {
+        best = maxOf(best, 100)
+      } else if (rowLower.split('\n', '|', ';').any { it.trim() == k }) {
+        best = maxOf(best, 85)
+      } else if (rowLower.contains(k)) {
+        best = maxOf(best, 50)
+      }
+    }
+    return best
+  }
+}
+
 class RiyaAccessibilityService : AccessibilityService() {
   companion object {
     private const val TAG = "RiyaAccessibilitySvc"
@@ -357,7 +382,16 @@ class RiyaAccessibilityService : AccessibilityService() {
       if (n == null || rows.size > 260 || depth > 45) return
       val raw = n.text?.toString()?.trim()
       val desc = n.contentDescription?.toString()?.trim()
-      val t = if (!raw.isNullOrEmpty()) raw else desc
+      val stateDesc =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) n.stateDescription?.toString()?.trim()
+        else null
+      val t =
+        when {
+          !raw.isNullOrEmpty() -> raw
+          !desc.isNullOrEmpty() -> desc
+          !stateDesc.isNullOrEmpty() -> stateDesc
+          else -> null
+        }
       val hint = if (Build.VERSION.SDK_INT >= 26) n.hintText?.toString()?.trim() else null
       val viewId = n.viewIdResourceName.orEmpty()
       val r = Rect()
@@ -386,14 +420,19 @@ class RiyaAccessibilityService : AccessibilityService() {
               EditableFieldRole.BODY -> " [মূল নোট লেখার বক্স / Body — নোট এখানে লিখবে]"
               else -> " [লেখার বক্স]"
             }
-          n.isCheckable -> if (n.isChecked) " [সুইচ: চালু]" else " [সুইচ: বন্ধ]"
+          n.isCheckable -> if (isNodeCheckedOrOn(n)) " [সুইচ: চালু]" else " [সুইচ: বন্ধ]"
           bubbleDirectionTag.isNotEmpty() -> bubbleDirectionTag
           n.isClickable -> " [বাটন]"
           else -> ""
         }
       val label: String? =
         when {
-          !t.isNullOrEmpty() -> t.take(120)
+          !t.isNullOrEmpty() -> {
+            val withState =
+              if (!stateDesc.isNullOrEmpty() && stateDesc != t && !n.isCheckable) "$t ($stateDesc)"
+              else t
+            withState.take(120)
+          }
           n.isEditable ->
             if (!hint.isNullOrEmpty()) "(খালি লেখার বক্স, হিন্ট: ${hint.take(40)})"
             else "(খালি লেখার বক্স)"
@@ -403,11 +442,15 @@ class RiyaAccessibilityService : AccessibilityService() {
       for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
     }
     walk(root, 0)
-    // Also inspect sibling non-IME windows when active root is sparse (WebView dialogs, split sheets, overlays)
-    if (rows.size < 12) {
+    // Also inspect sibling non-IME visible windows (dialogs, bottom sheets, split panels, alerts)
+    if (rows.size < 45) {
       runCatching {
         windows.orEmpty()
-          .filter { it.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+          .filter {
+            it.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+              (it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION ||
+                it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM)
+          }
           .mapNotNull { it.root }
           .filter { it != root }
           .forEach { sibRoot -> walk(sibRoot, 0) }
@@ -782,6 +825,62 @@ class RiyaAccessibilityService : AccessibilityService() {
     return candidates.firstOrNull { it.isEditable } ?: candidates.firstOrNull()
   }
 
+  private fun isListOrScrollContainer(node: AccessibilityNodeInfo): Boolean {
+    if (node.isScrollable) return true
+    val cls = node.className?.toString()?.lowercase().orEmpty()
+    return cls.contains("recyclerview") ||
+      cls.contains("listview") ||
+      cls.contains("scrollview") ||
+      cls.contains("viewpager")
+  }
+
+  private fun countCheckablesInSubtree(node: AccessibilityNodeInfo?, depth: Int = 0, limit: Int = 3): Int {
+    if (node == null || depth > 6) return 0
+    var c = if (node.isCheckable) 1 else 0
+    if (c >= limit) return c
+    for (i in 0 until node.childCount) {
+      c += countCheckablesInSubtree(node.getChild(i), depth + 1, limit)
+      if (c >= limit) return c
+    }
+    return c
+  }
+
+  /**
+   * Collects text strictly from the preference/setting ROW wrapping [n], NEVER spilling into neighboring
+   * RecyclerView rows (prevents "Emergency Location Service" / "Wi-Fi scanning" from polluting "Use location").
+   */
+  private fun collectRowScopedNodeText(n: AccessibilityNodeInfo): String {
+    val sb = StringBuilder()
+    fun appendTree(node: AccessibilityNodeInfo?, depth: Int) {
+      if (node == null || depth > 5) return
+      node.text?.let { if (it.isNotBlank()) sb.append(it).append('\n') }
+      node.contentDescription?.let { if (it.isNotBlank()) sb.append(it).append('\n') }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        node.stateDescription?.let { if (it.isNotBlank()) sb.append(it).append('\n') }
+      }
+      for (i in 0 until node.childCount) {
+        appendTree(node.getChild(i), depth + 1)
+      }
+    }
+
+    var rowRoot: AccessibilityNodeInfo = n
+    var p: AccessibilityNodeInfo? = n.parent
+    var hops = 0
+    while (p != null && hops < 4) {
+      if (isListOrScrollContainer(p)) break
+      if (countCheckablesInSubtree(p) > 1) break
+      rowRoot = p
+      if (p.isClickable) break
+      p = p.parent
+      hops++
+    }
+    appendTree(rowRoot, 0)
+    if (sb.isEmpty()) {
+      n.viewIdResourceName?.let { sb.append(it) }
+    }
+    return sb.toString().trim()
+  }
+
   private fun collectNodeHierarchyText(n: AccessibilityNodeInfo): String {
     val sb = StringBuilder()
     fun appendNode(node: AccessibilityNodeInfo?) {
@@ -795,7 +894,8 @@ class RiyaAccessibilityService : AccessibilityService() {
     }
     var p: AccessibilityNodeInfo? = n
     var depth = 0
-    while (p != null && depth < 5) {
+    while (p != null && depth < 3) {
+      if (depth > 0 && isListOrScrollContainer(p)) break
       appendNode(p)
       for (i in 0 until p.childCount) {
         val c = p.getChild(i)
@@ -881,7 +981,7 @@ class RiyaAccessibilityService : AccessibilityService() {
     if (hardwareStateKnown != null && hardwareStateKnown == enable) return "ALREADY"
 
     performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
-    var foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 950L)
+    var foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 900L)
 
     // Infinix Android 16 XOS split Control Center: top-right downward swipe opens Control Center directly!
     if (foundTile == null) {
@@ -890,7 +990,12 @@ class RiyaAccessibilityService : AccessibilityService() {
         val w = dm.widthPixels.coerceAtLeast(720).toFloat()
         val h = dm.heightPixels.coerceAtLeast(1280).toFloat()
         swipe(w * 0.82f, h * 0.02f, w * 0.82f, h * 0.52f, durationMs = 260L)
-        foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 1150L)
+        foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 1050L)
+        // If not visible on page 1 of Control Center, swipe left to inspect page 2
+        if (foundTile == null) {
+          swipe(w * 0.86f, h * 0.36f, w * 0.14f, h * 0.36f, durationMs = 240L)
+          foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 950L)
+        }
       } catch (_: Throwable) {}
     }
 
@@ -968,11 +1073,14 @@ class RiyaAccessibilityService : AccessibilityService() {
 
       if (list.isNotEmpty()) {
         val sw =
-          list.firstOrNull { n ->
-            val text = collectNodeHierarchyText(n)
-            labels.any { text.contains(it.lowercase()) } &&
-              excludeLabels.none { text.contains(it.lowercase()) }
-          }
+          list
+            .map { node ->
+              val rowText = collectRowScopedNodeText(node)
+              node to SwitchRowMatcher.scoreRowMatch(rowText, labels, excludeLabels)
+            }
+            .filter { it.second >= 0 }
+            .maxByOrNull { it.second }
+            ?.first
             ?: if (list.size == 1) list.first() else null
 
         if (sw != null) {

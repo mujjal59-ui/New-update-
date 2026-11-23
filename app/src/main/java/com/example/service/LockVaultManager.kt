@@ -137,7 +137,6 @@ object LockVaultManager {
   fun resolveBestForegroundPackage(acc: RiyaAccessibilityService?): String {
     if (acc == null) return ""
     val rootPkg = acc.rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
-    if (isRegularAppPackage(rootPkg)) return rootPkg
     return try {
       val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
       val wins = acc.windows.orEmpty()
@@ -148,7 +147,7 @@ object LockVaultManager {
           if (wp == "com.android.systemui") {
             val r = Rect()
             w.getBoundsInScreen(r)
-            if (r.height() >= (screenH * 0.65f).toInt() && (w.isActive || w.isFocused)) {
+            if (r.height() >= (screenH * 0.45f).toInt()) {
               val txt = w.root?.let { collectCompactScreenText(listOf(it)).lowercase() }.orEmpty()
               return@any isKeyguardTextDump(txt)
             }
@@ -156,6 +155,7 @@ object LockVaultManager {
           false
         }
       if (hasFullScreenKeyguardWin) return "com.android.systemui"
+      if (isRegularAppPackage(rootPkg)) return rootPkg
 
       val topAppWin =
         wins
@@ -209,8 +209,6 @@ object LockVaultManager {
     if (activePkg.contains("keyguard") || activePkg.contains("lockscreen")) {
       return true
     }
-    // If foreground active window is already a regular user app (not systemui), do NOT mistake status bar for keyguard!
-    if (isRegularAppPackage(activePkg)) return false
     val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
     val keyguardRoots =
       roots.filter { r ->
@@ -586,7 +584,7 @@ object LockVaultManager {
     Thread.sleep(220L)
 
     if (isScreenUnlockedNow(ctx, acc, lockType)) {
-      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+      return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিনের আলো জ্বালিয়ে আনলক করা হয়েছে ✓")
     }
 
     // Extra safety check: NEVER swipe upward on an unlocked app window (causes "Slide again to unlock" on Infinix XOS)
@@ -597,7 +595,7 @@ object LockVaultManager {
         hasBouncerUiShowing(acc, lockType) ||
         (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow))
     if (!keyguardConfirmed && (pm?.isInteractive != false)) {
-      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+      return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিনের আলো জ্বালিয়ে আনলক করা হয়েছে ✓")
     }
 
     val dm = acc.resources.displayMetrics
