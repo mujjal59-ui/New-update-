@@ -171,6 +171,8 @@ object RiyaState {
   val voiceMatchLiveLabel = MutableStateFlow("")
   val homeThemeIndex = MutableStateFlow(0)
   val liveModelId = MutableStateFlow(Store.DEFAULT_LIVE_MODEL)
+  val extraCriticalModelId = MutableStateFlow(Store.DEFAULT_EXTRA_CRITICAL_MODEL)
+  val useFrontCamera = MutableStateFlow(false)
   val replyDelaySeconds = MutableStateFlow(0)
   val replyLimitMax = MutableStateFlow(-1)
 
@@ -198,6 +200,7 @@ object RiyaState {
 object Store {
   const val CAP = 64L * 1024 * 1024 // 64 MB memory cap (6-month history)
   const val DEFAULT_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+  const val DEFAULT_EXTRA_CRITICAL_MODEL = "gemini-2.5-pro"
   const val TTS_MODEL_ID = "gemini-3.1-flash-tts-preview"
   const val TTS_MODEL_LABEL = "Gemini 3.1 Flash TTS (preview)"
   const val TTS_LOCALE_TAG = "bn-BD"
@@ -255,6 +258,22 @@ object Store {
     }
   }
 
+  val EXTRA_CRITICAL_MODEL_OPTIONS =
+    listOf(
+      LiveVoiceModelOption(
+        id = "gemini_2_5_pro_critical",
+        title = "Gemini 2.5 Pro (গভীর বিশ্লেষণ ও জটিল কাজ)",
+        modelId = "gemini-2.5-pro",
+        badge = "Deep Logic",
+      ),
+      LiveVoiceModelOption(
+        id = "gemini_2_5_flash_critical",
+        title = "Gemini 2.5 Flash (দ্রুত অতিরিক্ত রিজনিং)",
+        modelId = "gemini-2.5-flash",
+        badge = "Fast Extra",
+      ),
+    )
+
   private fun p(c: Context) = c.getSharedPreferences("lxr_ai_prefs", Context.MODE_PRIVATE)
 
   private fun legacyPrefs(c: Context) = c.getSharedPreferences("riya_ai", Context.MODE_PRIVATE)
@@ -284,6 +303,18 @@ object Store {
     val clean = v.trim().ifBlank { DEFAULT_LIVE_MODEL }
     p(c).edit().putString("model", clean).commit()
     RiyaState.liveModelId.value = clean
+  }
+
+  fun extraCriticalModel(c: Context): String =
+    p(c).getString("extraCriticalModel", DEFAULT_EXTRA_CRITICAL_MODEL)
+      ?.trim()
+      ?.ifBlank { DEFAULT_EXTRA_CRITICAL_MODEL }
+      ?: DEFAULT_EXTRA_CRITICAL_MODEL
+
+  fun setExtraCriticalModel(c: Context, modelId: String) {
+    val clean = modelId.trim().ifBlank { DEFAULT_EXTRA_CRITICAL_MODEL }
+    p(c).edit().putString("extraCriticalModel", clean).commit()
+    RiyaState.extraCriticalModelId.value = clean
   }
 
   fun liveVoiceModelOption(c: Context): LiveVoiceModelOption = liveVoiceModelById(model(c))

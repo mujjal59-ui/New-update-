@@ -37,6 +37,7 @@ data class LiveObservationSnapshot(
   val isCharging: Boolean = false,
   val wifiOn: Boolean = false,
   val bluetoothOn: Boolean = false,
+  val locationEnabled: Boolean = false,
   val soundModeLabel: String = "NORMAL",
   val flashlightOn: Boolean = false,
   val dhakaTimeBn: String = "",
@@ -54,6 +55,7 @@ data class LiveObservationSnapshot(
       append(" | ব্যাটারি: ${if (batteryPct >= 0) "$batteryPct%" else "N/A"}${if (isCharging) "(Charging)" else ""}")
       append(" | Wi-Fi: ${if (wifiOn) "ON" else "OFF"}")
       append(" | BT: ${if (bluetoothOn) "ON" else "OFF"}")
+      append(" | GPS: ${if (locationEnabled) "ON" else "OFF"}")
       append(" | Sound: $soundModeLabel")
       append(" | Accessibility: ${if (accessibilityOn) "ON" else "OFF"}")
       append(" | বাংলাদেশ সময়: $dhakaDayBn, $dhakaDateBn, $dhakaTimeBn")
@@ -138,6 +140,9 @@ object UnlockPolicyGuard {
       "get_contacts_summary",
       "get_call_log_summary",
       "inspect_form_fields",
+      "diagnose_and_fix_self",
+      "critical_task_solve",
+      "switch_camera_lens",
     )
 
   /**
@@ -261,6 +266,7 @@ object LxrCompanionAgent {
   @Volatile private var cachedCharging: Boolean = false
   @Volatile private var cachedWifiOn: Boolean = false
   @Volatile private var cachedBtOn: Boolean = false
+  @Volatile private var cachedLocationOn: Boolean = false
   @Volatile private var cachedSoundLabel: String = "NORMAL"
 
   private val bdZone: TimeZone = TimeZone.getTimeZone("Asia/Dhaka")
@@ -359,6 +365,9 @@ object LxrCompanionAgent {
         cachedBtOn = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter?.isEnabled == true
       }
       runCatching {
+        cachedLocationOn = LxrDeviceAndHardwareEngine.isLocationEnabledNow(ctx)
+      }
+      runCatching {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         cachedSoundLabel =
           when (am?.ringerMode) {
@@ -386,6 +395,7 @@ object LxrCompanionAgent {
         isCharging = cachedCharging,
         wifiOn = cachedWifiOn,
         bluetoothOn = cachedBtOn,
+        locationEnabled = cachedLocationOn,
         soundModeLabel = cachedSoundLabel,
         flashlightOn = cachedTorchOn,
         dhakaTimeBn = tBn,

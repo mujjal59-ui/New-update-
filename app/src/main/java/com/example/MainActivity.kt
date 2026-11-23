@@ -48,14 +48,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -908,6 +911,7 @@ fun RiyaHomeScreen(
     }
 
     if (camOn) {
+      val useFrontCam by RiyaState.useFrontCamera.collectAsState()
       Box(
         Modifier
           .align(Alignment.TopStart)
@@ -918,7 +922,7 @@ fun RiyaHomeScreen(
       ) {
         LiveCamera(Modifier.fillMaxSize())
         Text(
-          text = "LIVE VISION",
+          text = if (useFrontCam) "FRONT CAM" else "LIVE VISION",
           color = Color.Black,
           fontSize = 9.sp,
           fontWeight = FontWeight.ExtraBold,
@@ -929,6 +933,26 @@ fun RiyaHomeScreen(
               .background(CYBER_CYAN, RoundedCornerShape(8.dp))
               .padding(horizontal = 6.dp, vertical = 2.dp),
         )
+        IconButton(
+          onClick = { RiyaState.useFrontCamera.value = !useFrontCam },
+          modifier =
+            Modifier
+              .align(Alignment.TopEnd)
+              .size(48.dp)
+              .padding(4.dp)
+              .testTag("camera_flip_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Cameraswitch,
+            contentDescription = if (useFrontCam) "Switch to back camera" else "Switch to front camera",
+            tint = Color.White,
+            modifier =
+              Modifier
+                .size(26.dp)
+                .background(Color(0x99081024), CircleShape)
+                .padding(4.dp),
+          )
+        }
       }
     }
 

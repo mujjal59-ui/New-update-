@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Assistant
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Call
@@ -75,6 +76,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
@@ -143,7 +145,9 @@ import com.example.data.VoiceMatchSensitivity
 import com.example.service.AccessibilityStatusMonitor
 import com.example.service.Keep
 import com.example.service.LxrCompanionAgent
+import com.example.service.LxrDeviceAndHardwareEngine
 import com.example.service.ReplyPolicyScheduler
+import com.example.service.RiyaAccessibilityService
 import com.example.service.RiyaVoiceManager
 import com.example.service.VoiceMatchManager
 import kotlinx.coroutines.Dispatchers
@@ -251,9 +255,19 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val dndOk =
     (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
       .isNotificationPolicyAccessGranted
+  val writeOk = remember(stamp) { LxrDeviceAndHardwareEngine.isWriteSettingsGranted(ctx) }
+  val assistOk = remember(stamp) { LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx) }
   val oemOk = prefs.getBoolean("oemDone", false)
   val accGo = { if (!Keep.ensureAccessibility(ctx)) Keep.openAccessibility(ctx) }
   val notifGo = { open(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+  val writeGo = { open(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, pkg)) }
+  val assistGo = {
+    try {
+      ctx.startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (_: Throwable) {
+      open(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+    }
+  }
   val batGo = { Keep.openBattery(ctx) }
   val oemGo = {
     prefs.edit().putBoolean("oemDone", true).apply()
@@ -277,6 +291,8 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       SpItem("acc", accOk, accGo),
       SpItem("notif", notifOk, notifGo),
       SpItem("overlay", overlayOk) { open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)) },
+      SpItem("write", writeOk, writeGo),
+      SpItem("assist", assistOk, assistGo),
       SpItem("bat", batOk, batGo),
       SpItem("dnd", dndOk) { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
       SpItem("oem", oemOk, oemGo),
@@ -370,6 +386,29 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         specials[2].go,
       ),
       PermItem(
+        "Modify System Settings",
+        "ব্রাইটনেস, অটো-রোটেট ও সিস্টেম সেটিংস সরাসরি বদলাতে",
+        Icons.Filled.Settings,
+        listOf(CYBER_CYAN, CYBER_PURPLE),
+        writeOk,
+        writeGo,
+        hint =
+          "সুইচ ধূসর (Greyed out) থাকলে: App info খুলুন → উপরে ডানে ⋮ → Allow restricted settings চালু করুন, তারপর এখানে Allow দিন।",
+        hintLabel = "App info খুলুন (Restricted settings)",
+        hintGo = { Keep.openAppInfo(ctx) },
+      ),
+      PermItem(
+        "Default Digital Assistant",
+        "ফোনের ডিফল্ট ডিজিটাল অ্যাসিস্ট্যান্ট ও দ্রুত স্ক্রিন রিডিংয়ের জন্য",
+        Icons.Filled.Assistant,
+        listOf(CYBER_PURPLE, CYBER_CYAN),
+        assistOk,
+        assistGo,
+        hint = "Android Default digital assistant app তালিকা থেকে LXR--AI নির্বাচন করুন।",
+        hintLabel = "Assistant সেটিংস খুলুন",
+        hintGo = assistGo,
+      ),
+      PermItem(
         "Battery optimization OFF",
         "ব্যাকগ্রাউন্ডে LXR--AI ও Accessibility সচল রাখতে",
         Icons.Filled.BatteryChargingFull,
@@ -392,7 +431,7 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         Icons.Filled.DoNotDisturbOn,
         listOf(CYBER_PURPLE, CYBER_BLUE),
         dndOk,
-        specials[4].go,
+        { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
       ),
       PermItem(
         "Contacts",
@@ -536,6 +575,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val ctx = LocalContext.current
   var key by remember { mutableStateOf(Store.apiKey(ctx)) }
   var model by remember { mutableStateOf(Store.model(ctx)) }
+  var extraModel by remember { mutableStateOf(Store.extraCriticalModel(ctx)) }
   var voice by remember { mutableStateOf(Store.voice(ctx)) }
   var ttsCloud by remember { mutableStateOf(Store.ttsCloudEnabled(ctx)) }
   var ttsStyle by remember { mutableStateOf(Store.ttsStyleInstruction(ctx)) }
@@ -558,7 +598,9 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   LaunchedEffect(Unit) {
     val persistedModel = Store.model(ctx)
     model = persistedModel
+    extraModel = Store.extraCriticalModel(ctx)
     RiyaState.liveModelId.value = persistedModel
+    RiyaState.extraCriticalModelId.value = extraModel
     RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(ctx)
     RiyaState.replyLimitMax.value = Store.replyLimitMax(ctx)
     selectedReplyDelay = Store.replyDelayOption(ctx)
@@ -681,6 +723,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   fun applyVoiceSettings() {
     Store.setApiKey(ctx, key)
     Store.setModel(ctx, model)
+    Store.setExtraCriticalModel(ctx, extraModel)
     Store.setVoice(ctx, voice)
     Store.setTtsCloudEnabled(ctx, ttsCloud)
     Store.setTtsStyleInstruction(ctx, ttsStyle)
@@ -785,6 +828,61 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       singleLine = true,
       colors = fieldColors,
     )
+
+    // Extra Critical-Task Reasoning AI Model selector card
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("extra_critical_model_card")
+          .background(CYBER_CARD, RoundedCornerShape(16.dp))
+          .border(1.dp, CYBER_PURPLE.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+          .padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(
+        "এক্সট্রা ক্রিটিক্যাল টাস্ক AI মডেল (Deep Reasoning)",
+        color = Color.White,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.5.sp,
+      )
+      Text(
+        "জটিল কোডিং, পরিকল্পনা ও গভীর বিশ্লেষণের জন্য লাইভ ভয়েস মডেলের পাশাপাশি অতিরিক্ত শক্তিশালী মডেল",
+        color = Color(0xFFAAB4D0),
+        fontSize = 11.sp,
+      )
+      Store.EXTRA_CRITICAL_MODEL_OPTIONS.forEach { opt ->
+        val selected = extraModel.equals(opt.modelId, ignoreCase = true)
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .heightIn(min = 48.dp)
+              .testTag("extra_model_option_${opt.id}")
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (selected) CYBER_PURPLE.copy(alpha = 0.22f) else Color(0xFF0E152E))
+              .border(
+                1.dp,
+                if (selected) CYBER_PURPLE else Color(0xFF2D3759),
+                RoundedCornerShape(12.dp),
+              )
+              .clickable {
+                extraModel = opt.modelId
+                Store.setExtraCriticalModel(ctx, opt.modelId)
+              }
+              .padding(horizontal = 12.dp, vertical = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(Modifier.weight(1f)) {
+            Text(opt.title, color = if (selected) Color.White else Color(0xFFD5DEF5), fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+            Text("${opt.modelId} • ${opt.badge}", color = CYBER_CYAN, fontSize = 10.5.sp)
+          }
+          if (selected) {
+            Icon(Icons.Filled.CheckCircle, contentDescription = "Selected extra model", tint = CYBER_GREEN, modifier = Modifier.size(18.dp))
+          }
+        }
+      }
+    }
 
     // Google Free Voice Studio (Gemini 3.1 Flash TTS Preview • bn-BD)
     Column(
@@ -1731,6 +1829,17 @@ private fun TileIcon(kind: String, color: Color) {
           style = st,
         )
       }
+      "gps" -> {
+        val pin =
+          Path().apply {
+            moveTo(w * 0.5f, h * 0.94f)
+            cubicTo(w * 0.14f, h * 0.56f, w * 0.18f, h * 0.14f, w * 0.5f, h * 0.12f)
+            cubicTo(w * 0.82f, h * 0.14f, w * 0.86f, h * 0.56f, w * 0.5f, h * 0.94f)
+            close()
+          }
+        drawPath(pin, color = color, style = st)
+        drawCircle(color = color, radius = w * 0.14f, center = Offset(w * 0.5f, h * 0.40f))
+      }
       else -> {
         drawRoundRect(
           color = color,
@@ -1857,6 +1966,7 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   }
   val wifiOn = liveSnap.wifiOn
   val btOn = liveSnap.bluetoothOn
+  val gpsOn = liveSnap.locationEnabled
   val mode = liveSnap.soundModeLabel
   val pct = liveSnap.batteryPct
   val isCharging = liveSnap.isCharging
@@ -1932,15 +2042,36 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         scope.launch(Dispatchers.IO) { LxrCompanionAgent.sampleNow(ctx) }
       }
     }
-    StateTile(
-      Modifier.fillMaxWidth().testTag("settings_battery_tile"),
-      "Battery",
-      "battery",
-      true,
-      if (pct >= 0) "$pct%${if (isCharging) " ⚡" else ""}" else "N/A",
-    ) {
-      note = "ব্যাটারি: ${if (pct >= 0) "$pct%" else "N/A"} ${if (isCharging) "(চার্জিং চলছে ⚡)" else "(ব্যাটারি মোড)"}"
-      openIntent(ctx, Intent(Intent.ACTION_POWER_USAGE_SUMMARY))
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      StateTile(
+        Modifier.weight(1f).testTag("settings_gps_tile"),
+        "GPS / Location",
+        "gps",
+        gpsOn,
+        if (gpsOn) "ON" else "OFF",
+      ) {
+        val acc = RiyaAccessibilityService.instance
+        val nextEnable = !gpsOn
+        note = if (nextEnable) "ফোনের GPS / Location চালু করা হচ্ছে..." else "ফোনের GPS / Location বন্ধ করা হচ্ছে..."
+        scope.launch(Dispatchers.IO) {
+          val msg = LxrDeviceAndHardwareEngine.controlDeviceSetting(ctx, acc, "location", enabled = nextEnable)
+          LxrCompanionAgent.sampleNow(ctx)
+          withContext(Dispatchers.Main) {
+            note = msg
+            tick++
+          }
+        }
+      }
+      StateTile(
+        Modifier.weight(1f).testTag("settings_battery_tile"),
+        "Battery",
+        "battery",
+        true,
+        if (pct >= 0) "$pct%${if (isCharging) " ⚡" else ""}" else "N/A",
+      ) {
+        note = "ব্যাটারি: ${if (pct >= 0) "$pct%" else "N/A"} ${if (isCharging) "(চার্জিং চলছে ⚡)" else "(ব্যাটারি মোড)"}"
+        openIntent(ctx, Intent(Intent.ACTION_POWER_USAGE_SUMMARY))
+      }
     }
 
     // LxR 50%-Opacity Rotating Planet Wake Orb ON/OFF + quick test card

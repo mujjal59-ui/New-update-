@@ -259,7 +259,10 @@ class GeminiLive(private val ctx: Context) {
       {"name":"inspect_form_fields","description":"Chrome ব্রাউজার বা বর্তমান অ্যাপের স্ক্রিনে খোলা ওয়েবপেজ ও ফর্মের সব ইনপুট ফিল্ড, লেবেল ও খালি ঘর পড়ে বের করো।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"fill_form_fields","description":"ফর্মের ইনপুট ফিল্ডে বসের দেওয়া তথ্য বসাও এবং কোন কোন ঘর এখনো ফাঁকা আছে জানাও।","parameters":{"type":"OBJECT","properties":{"fields_json":{"type":"STRING","description":"যেমন '{\"Name\":\"Md Uzzal\",\"Phone\":\"017...\"}' অথবা 'Name=Md Uzzal;Email=abc@gmail.com'"}},"required":["fields_json"]}},
       {"name":"facebook_action","description":"Facebook অ্যাপ খুলে পোস্ট পড়া, সার্চ করা, রিয়্যাক্ট/লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা স্ট্যাটাস/ফটো/রিল পোস্ট করা (পাবলিক কাজের আগে confirmed=true)।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_status, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
-      {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}}
+      {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
+      {"name":"diagnose_and_fix_self","description":"LXR--AI নিজের সিস্টেম ও অনুমতি (Accessibility, Notification, Modify System Settings / Restricted Settings, Default Digital Assistant, GPS, Battery) পরীক্ষা করে ('diagnose') সমস্যা চিহ্নিত করে, এবং বস স্পষ্ট অনুমতি দিলে তবেই নির্দিষ্ট সমস্যার সেটিংস খুলে ঠিক করে ('fix')।","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","enum":["diagnose","fix"],"description":"আগে সমস্যা খুঁজতে 'diagnose'; বসের অনুমতি পাওয়ার পর ঠিক করতে 'fix'"},"issue_key":{"type":"STRING","description":"যেমন accessibility, notification, overlay, write_settings, assistant, battery, location, app_info"}},"required":["mode"]}},
+      {"name":"critical_task_solve","description":"অত্যন্ত জটিল বিশ্লেষণ, কোডিং, লজিক, পরিকল্পনা বা কঠিন কাজের জন্য বসের নির্বাচিত এক্সট্রা ক্রিটিক্যাল এআই মডেল (Gemini 2.5 Pro / Flash) ব্যবহার করে গভীর সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"কঠিন কাজ বা প্রশ্নের বিস্তারিত বর্ণনা"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিনের তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
+      {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"}},"required":["lens"]}}
     ]}]"""
 
   private val devCb =
@@ -478,7 +481,7 @@ class GeminiLive(private val ctx: Context) {
             if (stopped) return@execute
             try {
               observeLiveLockAndScreen1s()
-              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 10 else 8
+              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 6 else 4
               if (liveWatchTick % imageEveryTicks == 0) {
                 watchScreen()
               }
@@ -1036,15 +1039,22 @@ class GeminiLive(private val ctx: Context) {
             if (
               !ready &&
                 code != 1000 &&
-                modelOverride == null &&
                 (code == 1011 ||
                   code == 1008 ||
+                  code == 1007 ||
                   reason.contains("not found", true) ||
                   reason.contains("not supported", true) ||
                   reason.contains("quota", true) ||
                   failCount >= 1)
             ) {
-              modelOverride = "gemini-2.5-flash-native-audio-preview-12-2025"
+              val curModel = modelOverride ?: Store.model(ctx)
+              modelOverride =
+                when {
+                  curModel != Store.DEFAULT_LIVE_MODEL && curModel.contains("3.8") -> Store.DEFAULT_LIVE_MODEL
+                  curModel != "gemini-2.5-flash-native-audio-preview-12-2025" ->
+                    "gemini-2.5-flash-native-audio-preview-12-2025"
+                  else -> modelOverride
+                }
             }
             fail("বন্ধ [" + code + "] " + reason.take(90))
           }
@@ -1092,15 +1102,26 @@ class GeminiLive(private val ctx: Context) {
       if (Keep.accessibilityOn(ctx)) "ACTIVE"
       else "OFF (সত্য বলো ও চালু করতে বলো)"
 
+    val camDesc =
+      if (RiyaState.cameraOn) {
+        if (RiyaState.useFrontCamera.value) "ON (ফ্রন্ট ক্যামেরায় বসের দিকে তাকিয়ে দেখছি — আন্তরিক কৌতূহল রাখো)"
+        else "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)"
+      } else "OFF"
+    val writePerm = if (LxrDeviceAndHardwareEngine.isWriteSettingsGranted(ctx)) "GRANTED" else "OFF"
+    val assistStatus = if (LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx)) "DEFAULT" else "NOT_DEFAULT"
+    val extraModel = Store.extraCriticalModel(ctx)
+
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI
-      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | Live Observation: EVERY 0.1s (BACKGROUND) | Camera: ${if (RiyaState.cameraOn) "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)" else "OFF"}
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.30.0)
+      - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus
+      - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel
       - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
       - Natural Complete Human Voice Discipline (ULTRA-CRITICAL): বসের কথা সম্পূর্ণ শোনার পর পরিষ্কার, আন্তরিক, বাস্তব মানুষের মতো বাংলায় একটি একক ও সম্পূর্ণ উত্তর বলো — কথার মাঝখানে অযথা থেমে যাবে না এবং কখনোই দ্বৈত বা ভাঙা কণ্ঠ তৈরি করবে না।
-      - STRICT LOCK & SILENCE DISCIPLINE: স্ক্রিন বা অ্যাপ আনলক অবস্থায় থাকলে কখনোই "অ্যাপস লক খোলা আছে", "অ্যাপ লক স্ক্রিন খোলা আছে", "স্ক্রিন আনলক আছে" বা "স্ক্রিন খোলা আছে" বলবে না। কেবল আসল লক স্ক্রিন বাধা দিলে বা বস জিজ্ঞেস করলে তবেই লকের কথা বলবে।
+      - STRICT LOCK & SILENCE DISCIPLINE: স্ক্রিন বা অ্যাপ আনলক অবস্থায় থাকলে কখনোই "অ্যাপস লক খোলা আছে", "অ্যাপ লক স্ক্রিন খোলা আছে", "স্ক্রিন আনলক আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না। কেবল আসল লক স্ক্রিন বাধা দিলে বা বস জিজ্ঞেস করলে তবেই লকের কথা বলবে।
+      - SELF-DIAGNOSIS PERMISSION RULE: নিজের কোনো অনুমতি/সার্ভিসে সমস্যা পেলে `diagnose_and_fix_self(mode="diagnose")` দিয়ে বসকে সত্য বুঝিয়ে বলো এবং বসের অনুমতি নিয়েই সেটিংস খোলো।
 
       ${RiyaPersona.TEXT}
 
@@ -1561,23 +1582,29 @@ class GeminiLive(private val ctx: Context) {
           acc?.executeTermuxCommandViaUi(ctx, a.optString("command"))
             ?: noAcc
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
-        "current_screen" ->
+        "current_screen" -> {
+          val liveSnap = LxrCompanionAgent.sampleNow(ctx)
           if (RiyaState.cameraOn) {
-            "লাইভ ব্যাক ক্যামেরা এখন চালু আছে। ইনকামিং ভিডিও স্ট্রিম থেকে পাওয়া সর্বশেষ ক্যামেরা ফ্রেম দেখে সরাসরি উত্তর দাও।"
+            val camLabel = if (RiyaState.useFrontCamera.value) "ফ্রন্ট" else "ব্যাক"
+            "লাইভ $camLabel ক্যামেরা চালু আছে। ${liveSnap.toCompactContextBn()}"
           } else {
-            LxrCompanionAgent.sampleNow(ctx).toCompactContextBn()
+            liveSnap.toCompactContextBn()
           }
-        "read_screen" ->
-          if (RiyaState.cameraOn) {
-            "লাইভ ভিশন ক্যামেরা এখন চালু আছে! অ্যাপের UI নয়, সরাসরি ক্যামেরার ইনকামিং ভিডিও ফ্রেম দেখে বস যা দেখাচ্ছেন তা বলো।"
+        }
+        "read_screen" -> {
+          val wantCamera = a.optString("source").equals("camera", ignoreCase = true)
+          if (RiyaState.cameraOn && wantCamera) {
+            val camLabel = if (RiyaState.useFrontCamera.value) "ফ্রন্ট" else "ব্যাক"
+            "লাইভ $camLabel ক্যামেরা চালু আছে! ক্যামেরার ভিডিও ফ্রেম দেখে বস যা দেখাচ্ছেন তা বর্ণনা করো।"
           } else {
-            val report = LockVaultManager.describeLivePhoneState(ctx, acc)
-            if (report.isLocked) {
-              "${report.summaryBn}\n(ফোন/অ্যাপ লক আছে; আনলক করার নির্দেশ দিলে তবেই ভেতর পড়া যাবে।)"
-            } else {
-              acc?.readScreen() ?: noAcc
-            }
+            acc?.readScreen()
+              ?: LxrAssistScreenBridge.buildFallbackScreenReport(
+                snapshotLines = emptyList(),
+                currentScreenSummary = RiyaAccessibilityService.currentScreenSummary,
+                activePkgHint = LxrCompanionAgent.sampleNow(ctx).foregroundPackage,
+              )
           }
+        }
         "click_text" -> acc?.clickText(a.optString("text")) ?: noAcc
         "type_text" ->
           acc?.typeText(
@@ -1684,6 +1711,38 @@ class GeminiLive(private val ctx: Context) {
             query = a.optString("query"),
             confirmed = a.optBoolean("confirmed", false),
           )
+        "diagnose_and_fix_self" -> {
+          val mode = a.optString("mode", "diagnose").trim().lowercase()
+          val issueKey = a.optString("issue_key").trim()
+          if (mode == "fix" && issueKey.isNotBlank()) {
+            LxrDeviceAndHardwareEngine.repairIssueWithBossPermission(ctx, issueKey)
+          } else {
+            LxrDeviceAndHardwareEngine.diagnoseSelfHealth(ctx).summaryBn
+          }
+        }
+        "critical_task_solve" -> {
+          val taskPrompt = a.optString("task_prompt").trim()
+          val includeScreen = a.optBoolean("include_screen", true)
+          val scr = if (includeScreen) screenSnapshot() else ""
+          LxrDeviceAndHardwareEngine.solveCriticalTaskWithExtraModel(ctx, taskPrompt, scr)
+        }
+        "switch_camera_lens" -> {
+          val lens = a.optString("lens", "toggle").trim().lowercase()
+          val nextFront =
+            when (lens) {
+              "front", "selfie", "সামনে" -> true
+              "back", "rear", "পিছনে" -> false
+              else -> !RiyaState.useFrontCamera.value
+            }
+          RiyaState.useFrontCamera.value = nextFront
+          val lensLabel = if (nextFront) "ফ্রন্ট (সামনের)" else "ব্যাক (পিছনের)"
+          if (RiyaState.cameraOn) {
+            notifyCameraActive(true, isFrontCamera = nextFront)
+            "হয়েছে, বস! লাইভ ভিশন এখন $lensLabel ক্যামেরায় বদলানো হয়েছে।"
+          } else {
+            "হয়েছে, বস! ক্যামেরা মোড $lensLabel সেট করেছি। হোম স্ক্রিনের ক্যামেরা আইকনে ট্যাপ করলেই $lensLabel ক্যামেরা চালু হয়ে যাবে।"
+          }
+        }
         else -> "unknown tool"
       }
     } catch (e: Exception) {
@@ -1692,16 +1751,19 @@ class GeminiLive(private val ctx: Context) {
 
   private fun goHomeAndVerify(acc: RiyaAccessibilityService?) {
     val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-    val homePkg = ctx.packageManager.resolveActivity(homeIntent, 0)?.activityInfo?.packageName
-    if (acc != null) acc.global("home")
-    else ctx.startActivity(Intent(homeIntent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    repeat(8) {
-      Thread.sleep(160)
-      val cur = RiyaAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString()
-      if (homePkg != null && cur == homePkg) return
+    if (acc != null) {
+      acc.global("home")
+      val launchers = acc.resolveHomeLauncherPackages()
+      val cur = LockVaultManager.resolveBestForegroundPackage(acc)
+      if (cur in launchers || cur.contains("launcher", true)) return
     }
-    if (acc != null) acc.global("home")
-    Thread.sleep(220)
+    try {
+      val fallbackIntent =
+        Intent(homeIntent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+      acc?.resolveHomeLauncherPackages()?.firstOrNull()?.let { fallbackIntent.`package` = it }
+      ctx.startActivity(fallbackIntent)
+      Thread.sleep(320)
+    } catch (_: Throwable) {}
   }
 
   private fun sendGreetingTurn() {
@@ -3087,13 +3149,17 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
   }
 
-  fun notifyCameraActive(active: Boolean) {
+  fun notifyCameraActive(active: Boolean, isFrontCamera: Boolean = RiyaState.useFrontCamera.value) {
     if (!ready || stopped) return
     val hint =
-      if (active)
-        "[সিস্টেম ভিশন ক্যামেরা চালু]: বসের ফোনের লাইভ ব্যাক ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলো সরাসরি বসের ক্যামেরা থেকে লাইভ দৃশ্য। বস যা দেখাতে চাচ্ছেন বা জিজ্ঞেস করছেন, সরাসরি ক্যামেরার ভিডিও ছবি দেখে পরিষ্কার বাংলায় বর্ণনা করো।"
-      else
-        "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন স্ক্রিন ওয়াচ মোডে ফিরে যাও।"
+      when {
+        active && isFrontCamera ->
+          "[সিস্টেম ফ্রন্ট ক্যামেরা চালু]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলোতে সরাসরি তোমার প্রাণপ্রিয় বসকে দেখতে পাচ্ছো। মানুষের মতো আন্তরিক কৌতূহল ও মায়া নিয়ে বসকে দেখে স্বাভাবিকভাবে কথা বলো, ভালো-মন্দ জিজ্ঞেস করো।"
+        active ->
+          "[সিস্টেম ভিশন ব্যাক ক্যামেরা চালু]: বসের ফোনের লাইভ ব্যাক ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলো সরাসরি বসের ক্যামেরা থেকে লাইভ দৃশ্য। বস যা দেখাতে চাচ্ছেন বা জিজ্ঞেস করছেন, সরাসরি ক্যামেরার ভিডিও ছবি দেখে পরিষ্কার বাংলায় বর্ণনা করো।"
+        else ->
+          "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন ২৪/৭ স্ক্রিন পর্যবেক্ষণ মোডে থাকো।"
+      }
     try {
       ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", hint)).toString())
     } catch (_: Throwable) {}

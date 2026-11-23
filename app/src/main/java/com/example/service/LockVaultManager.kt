@@ -120,6 +120,73 @@ object LockVaultManager {
     }
   }
 
+  fun isRegularAppPackage(pkgRaw: String?): Boolean {
+    val pkg = pkgRaw?.trim()?.lowercase().orEmpty()
+    if (pkg.isEmpty()) return false
+    if (pkg == "com.android.systemui") return false
+    if (pkg.contains("keyguard") || pkg.contains("lockscreen") || pkg.contains("aod") || pkg.contains("alwayson")) {
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Inspects AccessibilityService root + interactive windows to find the true foreground non-systemui
+   * application package (preventing transient rootInActiveWindow==null from looking like a lockscreen).
+   */
+  fun resolveBestForegroundPackage(acc: RiyaAccessibilityService?): String {
+    if (acc == null) return ""
+    val rootPkg = acc.rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
+    if (isRegularAppPackage(rootPkg)) return rootPkg
+    return try {
+      val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
+      val wins = acc.windows.orEmpty()
+      val hasFullScreenKeyguardWin =
+        wins.any { w ->
+          val wp = w.root?.packageName?.toString()?.lowercase()?.trim().orEmpty()
+          if (wp.contains("keyguard") || wp.contains("lockscreen")) return@any true
+          if (wp == "com.android.systemui") {
+            val r = Rect()
+            w.getBoundsInScreen(r)
+            if (r.height() >= (screenH * 0.65f).toInt() && (w.isActive || w.isFocused)) {
+              val txt = w.root?.let { collectCompactScreenText(listOf(it)).lowercase() }.orEmpty()
+              return@any isKeyguardTextDump(txt)
+            }
+          }
+          false
+        }
+      if (hasFullScreenKeyguardWin) return "com.android.systemui"
+
+      val topAppWin =
+        wins
+          .filter { w ->
+            val p = w.root?.packageName?.toString()?.trim().orEmpty()
+            w.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION &&
+              isRegularAppPackage(p)
+          }
+          .maxWithOrNull(compareBy<android.view.accessibility.AccessibilityWindowInfo> { it.isActive || it.isFocused }.thenBy { it.layer })
+      topAppWin?.root?.packageName?.toString()?.trim().orEmpty().ifBlank { rootPkg }
+    } catch (_: Throwable) {
+      rootPkg
+    }
+  }
+
+  private fun isKeyguardTextDump(lower: String): Boolean {
+    return lower.contains("keyguard") ||
+      lower.contains("lock_icon") ||
+      lower.contains("pinentry") ||
+      lower.contains("lockpattern") ||
+      lower.contains("bouncer") ||
+      lower.contains("swipe up to unlock") ||
+      lower.contains("slide again to unlock") ||
+      lower.contains("enter password") ||
+      lower.contains("enter pin") ||
+      lower.contains("wrong pin") ||
+      lower.contains("unlock with fingerprint") ||
+      lower.contains("পিন দিন") ||
+      lower.contains("প্যাটার্ন আঁকুন")
+  }
+
   fun evaluateMainScreenLocked(
     screenInteractive: Boolean,
     keyguardLocked: Boolean,
@@ -128,53 +195,35 @@ object LockVaultManager {
     lockScreenVisibleInUi: Boolean,
   ): Boolean {
     if (!screenInteractive) return true
+    if (lockScreenVisibleInUi) return true
     val pkg = activeWindowPkg?.trim()?.lowercase().orEmpty()
-    val unlockedAppVisible =
-      pkg.isNotEmpty() &&
-        pkg != "com.android.systemui" &&
-        !pkg.contains("keyguard") &&
-        !pkg.contains("lockscreen") &&
-        !lockScreenVisibleInUi
+    val unlockedAppVisible = isRegularAppPackage(pkg)
     if (unlockedAppVisible) return false
-    return keyguardLocked || deviceLocked || lockScreenVisibleInUi
+    return keyguardLocked || deviceLocked
   }
 
   fun isSystemKeyguardUiShowing(acc: RiyaAccessibilityService?): Boolean {
     if (acc == null) return false
     val roots = collectAllRoots(acc)
-    val pkgs =
-      roots.mapNotNull { it.packageName?.toString()?.lowercase()?.trim() }.filter { it.isNotEmpty() }
     val activePkg = acc.rootInActiveWindow?.packageName?.toString()?.lowercase()?.trim().orEmpty()
-    if (activePkg.contains("keyguard") || activePkg.contains("lockscreen") ||
-      pkgs.any { it.contains("keyguard") || it.contains("lockscreen") }
-    ) {
+    if (activePkg.contains("keyguard") || activePkg.contains("lockscreen")) {
       return true
     }
     // If foreground active window is already a regular user app (not systemui), do NOT mistake status bar for keyguard!
-    if (activePkg.isNotEmpty() && activePkg != "com.android.systemui") return false
+    if (isRegularAppPackage(activePkg)) return false
     val screenH = acc.resources.displayMetrics.heightPixels.coerceAtLeast(1200)
     val keyguardRoots =
       roots.filter { r ->
         val p = r.packageName?.toString()?.lowercase()?.trim().orEmpty()
+        if (p.contains("keyguard") || p.contains("lockscreen")) return@filter true
         if (p != "com.android.systemui") return@filter false
         val rect = Rect()
         r.getBoundsInScreen(rect)
-        rect.height() >= (screenH * 0.45f).toInt() || rect.height() == 0
+        rect.height() >= (screenH * 0.45f).toInt()
       }
     if (keyguardRoots.isEmpty()) return false
     val textDump = collectCompactScreenText(keyguardRoots).lowercase()
-    return textDump.contains("keyguard") ||
-      textDump.contains("lock_icon") ||
-      textDump.contains("pinentry") ||
-      textDump.contains("lockpattern") ||
-      textDump.contains("bouncer") ||
-      textDump.contains("swipe up to unlock") ||
-      textDump.contains("enter password") ||
-      textDump.contains("enter pin") ||
-      textDump.contains("wrong pin") ||
-      textDump.contains("unlock with fingerprint") ||
-      textDump.contains("পিন দিন") ||
-      textDump.contains("প্যাটার্ন আঁকুন")
+    return isKeyguardTextDump(textDump)
   }
 
   /**
@@ -186,14 +235,16 @@ object LockVaultManager {
     if (pm != null && !pm.isInteractive) return true
     val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val keyguardLocked = km?.isKeyguardLocked == true
-    if (!keyguardLocked && !isSystemKeyguardUiShowing(acc)) return false
-    val activePkg = acc?.rootInActiveWindow?.packageName?.toString()
+    val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+    val lockUi = isSystemKeyguardUiShowing(acc)
+    if (!keyguardLocked && !deviceLocked && !lockUi) return false
+    val activePkg = resolveBestForegroundPackage(acc)
     return evaluateMainScreenLocked(
       screenInteractive = true,
       keyguardLocked = keyguardLocked,
-      deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked,
+      deviceLocked = deviceLocked,
       activeWindowPkg = activePkg,
-      lockScreenVisibleInUi = isSystemKeyguardUiShowing(acc),
+      lockScreenVisibleInUi = lockUi,
     )
   }
 
@@ -206,7 +257,7 @@ object LockVaultManager {
       val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
       val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
       val interactive = pm?.isInteractive ?: true
-      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
+      val activePkg = resolveBestForegroundPackage(acc)
       val lowerPkg = activePkg.lowercase()
       if (!interactive) {
         return LivePhoneStateReport(
@@ -275,12 +326,13 @@ object LockVaultManager {
       if (!interactive) return false
       val keyguardUi = isSystemKeyguardUiShowing(acc) || hasBouncerUiShowing(acc, lockType)
       if (keyguardUi) return false
-      if (km != null && !km.isKeyguardLocked) return true
-      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()?.trim()?.lowercase().orEmpty()
+      val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else (km?.isKeyguardLocked == true)
+      if (km != null && !km.isKeyguardLocked && !deviceLocked) return true
+      val activePkg = resolveBestForegroundPackage(acc).lowercase()
       if (!evaluateMainScreenLocked(
           screenInteractive = interactive,
           keyguardLocked = km?.isKeyguardLocked == true,
-          deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else (km?.isKeyguardLocked == true),
+          deviceLocked = deviceLocked,
           activeWindowPkg = activePkg,
           lockScreenVisibleInUi = keyguardUi,
         )
@@ -288,11 +340,7 @@ object LockVaultManager {
         return true
       }
       // On Android 16 / XOS launcher transition, KeyguardManager flag can lag behind real Home/App screen
-      activePkg.isNotEmpty() &&
-        activePkg != "com.android.systemui" &&
-        !activePkg.contains("keyguard") &&
-        !activePkg.contains("lockscreen") &&
-        !keyguardUi
+      isRegularAppPackage(activePkg) && !deviceLocked && !keyguardUi
     } catch (_: Throwable) {
       false
     }
@@ -306,7 +354,7 @@ object LockVaultManager {
       val keyguardLocked = km?.isKeyguardLocked == true
       val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
       val acc = RiyaAccessibilityService.instance
-      val activePkg = acc?.rootInActiveWindow?.packageName?.toString()
+      val activePkg = resolveBestForegroundPackage(acc)
       val lockUi = isSystemKeyguardUiShowing(acc)
       evaluateMainScreenLocked(
         screenInteractive = screenInteractive,
@@ -535,16 +583,30 @@ object LockVaultManager {
     while (pm?.isInteractive == false && System.currentTimeMillis() < wakeWaitDeadline) {
       Thread.sleep(60L)
     }
-    Thread.sleep(280L)
+    Thread.sleep(220L)
 
     if (isScreenUnlockedNow(ctx, acc, lockType)) {
-      return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+    }
+
+    // Extra safety check: NEVER swipe upward on an unlocked app window (causes "Slide again to unlock" on Infinix XOS)
+    val fgPkgNow = resolveBestForegroundPackage(acc)
+    val kmCheck = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    val keyguardConfirmed =
+      isSystemKeyguardUiShowing(acc) ||
+        hasBouncerUiShowing(acc, lockType) ||
+        (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow))
+    if (!keyguardConfirmed && (pm?.isInteractive != false)) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
 
     val dm = acc.resources.displayMetrics
     val strategies = buildLockscreenSwipeStrategies(dm.widthPixels.toFloat(), dm.heightPixels.toFloat())
     if (!hasBouncerUiShowing(acc, lockType)) {
       for (swipe in strategies) {
+        if (isScreenUnlockedNow(ctx, acc, lockType)) {
+          return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
+        }
         acc.swipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY, durationMs = swipe.durationMs)
         val bouncerReady =
           pollUnlocked(950L) {

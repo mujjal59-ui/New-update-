@@ -107,24 +107,28 @@ class RiyaAccessibilityService : AccessibilityService() {
         return
       }
 
-      if (pkg.isNotEmpty() && pkg != packageName) {
+      if (pkg.isNotEmpty()) {
         currentApp = pkg
       }
-      // Do not burn binder/CPU scanning our own UI or rapid content ticks
-      if (pkg == packageName) return
       val now = System.currentTimeMillis()
+      val isOwnUi = pkg == packageName
       val isStateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
       val isContentChange =
-        event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+        !isOwnUi &&
+          (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) &&
           (com.example.data.RiyaState.running.value || pkg == "com.android.systemui")
       val minGap =
         when {
-          isStateChange && com.example.data.RiyaState.running.value -> 95L
-          isStateChange -> 220L
-          com.example.data.RiyaState.running.value -> 320L
-          else -> 750L
+          isOwnUi && isStateChange -> 420L
+          isOwnUi -> Long.MAX_VALUE
+          isStateChange && com.example.data.RiyaState.running.value -> 80L
+          isStateChange -> 180L
+          com.example.data.RiyaState.running.value -> 260L
+          else -> 650L
         }
       if ((isStateChange || isContentChange) &&
+        minGap < Long.MAX_VALUE &&
         now - lastScan >= minGap &&
         !scanScheduled
       ) {
@@ -193,31 +197,50 @@ class RiyaAccessibilityService : AccessibilityService() {
 
     try {
       val rootList = mutableListOf<AccessibilityNodeInfo>()
+      val primaryRoot = rootInActiveWindow
+      if (primaryRoot != null) {
+        val pPkg = primaryRoot.packageName?.toString().orEmpty()
+        if (pPkg.isNotBlank() && pPkg != "com.android.systemui") {
+          activePkg = pPkg
+        }
+        rootList.add(primaryRoot)
+      }
       if (includeAllWindows) {
         val interactiveWindows = windows
         if (!interactiveWindows.isNullOrEmpty()) {
           windowCount = interactiveWindows.size
-          interactiveWindows.forEach { win ->
+          val sortedWins =
+            interactiveWindows.sortedWith(
+              compareByDescending<android.view.accessibility.AccessibilityWindowInfo> { it.isFocused || it.isActive }
+                .thenByDescending { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+                .thenByDescending { it.layer }
+            )
+          sortedWins.forEach { win ->
             win.root?.let { root ->
-              if (activePkg.isBlank()) {
-                activePkg = root.packageName?.toString().orEmpty()
+              val rPkg = root.packageName?.toString().orEmpty()
+              if (activePkg.isBlank() && rPkg.isNotBlank() && rPkg != "com.android.systemui") {
+                activePkg = rPkg
               }
-              rootList.add(root)
+              if (rootList.none { it == root }) {
+                rootList.add(root)
+              }
             }
+          }
+          if (activePkg.isBlank()) {
+            activePkg = primaryRoot?.packageName?.toString().orEmpty()
+              .ifBlank { sortedWins.firstOrNull()?.root?.packageName?.toString().orEmpty() }
           }
         }
       }
-      if (rootList.isEmpty()) {
-        rootInActiveWindow?.let { root ->
-          windowCount = 1
-          activePkg = root.packageName?.toString().orEmpty()
-          rootList.add(root)
-        }
+      if (rootList.isEmpty() && primaryRoot != null) {
+        windowCount = 1
+        activePkg = primaryRoot.packageName?.toString().orEmpty()
+        rootList.add(primaryRoot)
       }
 
       val seenLines = LinkedHashSet<String>()
       fun dfs(node: AccessibilityNodeInfo?, depth: Int) {
-        if (node == null || depth > 40 || nodes.size > 400) return
+        if (node == null || depth > 45 || nodes.size > 600) return
         val rect = Rect()
         node.getBoundsInScreen(rect)
         val txt = node.text?.toString()?.trim().orEmpty()
@@ -239,7 +262,7 @@ class RiyaAccessibilityService : AccessibilityService() {
         nodes.add(info)
 
         val readable = txt.ifBlank { desc }
-        if (readable.isNotBlank() && seenLines.size < 60) {
+        if (readable.isNotBlank() && seenLines.size < 90) {
           seenLines.add(readable)
         }
 
@@ -254,14 +277,14 @@ class RiyaAccessibilityService : AccessibilityService() {
       Log.e(TAG, "Error reading full screen tree", e)
     }
 
-    val resolvedPkg = activePkg.ifBlank { currentApp.ifBlank { "unknown" } }
-    if (resolvedPkg != packageName && resolvedPkg != "unknown") {
+    val resolvedPkg = activePkg.ifBlank { LockVaultManager.resolveBestForegroundPackage(this) }.ifBlank { currentApp.ifBlank { "unknown" } }
+    if (resolvedPkg != "unknown") {
       currentApp = resolvedPkg
     }
     val liveReport = LockVaultManager.describeLivePhoneState(this, this)
     val sceneText =
-      if (summaryLines.isNotEmpty()) summaryLines.take(15).joinToString(", ").take(350)
-      else "(দৃশ্যমান টেক্সট কম বা খালি)"
+      if (summaryLines.isNotEmpty()) summaryLines.take(18).joinToString(", ").take(380)
+      else LxrAssistScreenBridge.latestAssistScreenText.take(260).ifBlank { "(দৃশ্যমান টেক্সট কম বা খালি)" }
     val lockPrefix = if (liveReport.isLocked) "[লক সতর্কতা: ${liveReport.summaryBn}] | " else ""
     currentScreenSummary =
       "${lockPrefix}বর্তমান অ্যাপ: $resolvedPkg | স্ক্রিন দৃশ্য: $sceneText"
@@ -281,13 +304,38 @@ class RiyaAccessibilityService : AccessibilityService() {
     return snapshot
   }
 
+  private fun pickBestReadableRoot(): AccessibilityNodeInfo? {
+    rootInActiveWindow?.let { return it }
+    return try {
+      val wins = windows.orEmpty()
+      wins
+        .filter { it.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD && it.root != null }
+        .sortedWith(
+          compareByDescending<android.view.accessibility.AccessibilityWindowInfo> { it.isActive || it.isFocused }
+            .thenByDescending { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+            .thenByDescending { it.layer }
+        )
+        .firstOrNull()
+        ?.root
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
   // স্ক্রিন পড়া: উপর থেকে নিচে, বাঁ থেকে ডানে সাজানো। বাটন, লেখার বক্স (Title বনাম মূল Body আলাদাভাবে), চ্যাট প্রাপক, ভয়েস কল অ্যালার্ট ও চ্যাট বাবলের দিক (আমার পাঠানো vs অপর প্রান্তের মেসেজ) চিহ্নিত।
   fun readScreen(): String {
-    val snapshot = readEntireScreenTree()
+    val snapshot = readEntireScreenTree(includeAllWindows = true)
     val liveState = LockVaultManager.describeLivePhoneState(this, this)
     val lockHeader = if (liveState.isLocked) "[লক সতর্কতা: ${liveState.summaryBn}]\n" else ""
-    val root = rootInActiveWindow ?: return "${lockHeader}স্ক্রিন পাওয়া যায়নি"
-    val pkg = root.packageName?.toString().orEmpty()
+    val root =
+      pickBestReadableRoot()
+        ?: return lockHeader +
+          LxrAssistScreenBridge.buildFallbackScreenReport(
+            snapshotLines = snapshot.summaryLines,
+            currentScreenSummary = currentScreenSummary,
+            activePkgHint = snapshot.packageName,
+          )
+    val pkg = root.packageName?.toString().orEmpty().ifBlank { snapshot.packageName }
     val isMessagingPkg = ChatScreenGeometryParser.isMessagingPackage(pkg)
     val rootBounds = Rect().also { root.getBoundsInScreen(it) }
     val screenW = if (rootBounds.width() > 0) rootBounds.width() else resources.displayMetrics.widthPixels.coerceAtLeast(720)
@@ -306,7 +354,7 @@ class RiyaAccessibilityService : AccessibilityService() {
 
     val rows = mutableListOf<Triple<Int, Int, String>>()
     fun walk(n: AccessibilityNodeInfo?, depth: Int) {
-      if (n == null || rows.size > 180 || depth > 40) return
+      if (n == null || rows.size > 260 || depth > 45) return
       val raw = n.text?.toString()?.trim()
       val desc = n.contentDescription?.toString()?.trim()
       val t = if (!raw.isNullOrEmpty()) raw else desc
@@ -355,6 +403,16 @@ class RiyaAccessibilityService : AccessibilityService() {
       for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
     }
     walk(root, 0)
+    // Also inspect sibling non-IME windows when active root is sparse (WebView dialogs, split sheets, overlays)
+    if (rows.size < 12) {
+      runCatching {
+        windows.orEmpty()
+          .filter { it.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+          .mapNotNull { it.root }
+          .filter { it != root }
+          .forEach { sibRoot -> walk(sibRoot, 0) }
+      }
+    }
     val lines =
       rows
         .sortedWith(compareBy<Triple<Int, Int, String>>({ it.first / 20 }, { it.second }))
@@ -374,8 +432,15 @@ class RiyaAccessibilityService : AccessibilityService() {
           append(detectedCalls.joinToString("; ") { it.callSummaryBn })
         }
       }
-    if (lines.isEmpty()) return "$header\nস্ক্রিনে পড়ার মতো কিছু পাওয়া যায়নি"
-    return "$header\n" + lines.joinToString("\n").take(4000)
+    if (lines.isEmpty()) {
+      return lockHeader +
+        LxrAssistScreenBridge.buildFallbackScreenReport(
+          snapshotLines = snapshot.summaryLines,
+          currentScreenSummary = currentScreenSummary,
+          activePkgHint = pkg,
+        )
+    }
+    return "$header\n" + lines.joinToString("\n").take(4200)
   }
 
   // চ্যাট বা লেখার বক্সে মেসেজ লেখা ও সেন্ড (WhatsApp, imo, Messenger, Gemini, ChatGPT)
@@ -757,8 +822,55 @@ class RiyaAccessibilityService : AccessibilityService() {
     return false
   }
 
+  private fun scanQuickSettingTile(
+    labels: List<String>,
+    excludeLabels: List<String>,
+    timeoutMs: Long,
+  ): AccessibilityNodeInfo? {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    val carrierDataPattern = Regex("\\b(gb|mb|4g|5g|lte|volte|airtel|robi|grameenphone|banglalink|teletalk|gp)\\b")
+    val lookingForMobileData = labels.any { it.contains("mobile data") || it.contains("cellular") || it.contains("ডাটা") }
+    while (System.currentTimeMillis() < deadline) {
+      val roots = mutableListOf<AccessibilityNodeInfo>()
+      windows?.forEach { w -> w.root?.let { roots.add(it) } }
+      rootInActiveWindow?.let { if (it !in roots) roots.add(it) }
+
+      val candidates = mutableListOf<AccessibilityNodeInfo>()
+      fun collectTiles(node: AccessibilityNodeInfo?, depth: Int) {
+        if (node == null || depth > 25) return
+        if (node.isClickable || node.isCheckable) {
+          candidates.add(node)
+        }
+        for (i in 0 until node.childCount) collectTiles(node.getChild(i), depth + 1)
+      }
+      roots.forEach { r ->
+        if (r.packageName?.toString() == "com.android.systemui") {
+          collectTiles(r, 0)
+        }
+      }
+
+      val found =
+        candidates.firstOrNull { node ->
+          val info = collectNodeHierarchyText(node)
+          val excluded = excludeLabels.any { ex -> info.contains(ex.lowercase()) }
+          if (excluded) return@firstOrNull false
+          val directMatch = labels.any { k -> info.contains(k.lowercase()) }
+          val carrierMatch =
+            lookingForMobileData &&
+              (carrierDataPattern.containsMatchIn(info) ||
+                info.contains("mobile_data") ||
+                info.contains("cell_tile") ||
+                info.contains("data_tile"))
+          directMatch || carrierMatch
+        }
+      if (found != null) return found
+      Thread.sleep(160)
+    }
+    return null
+  }
+
   /**
-   * Quick Settings টাইল দিয়ে দ্রুত Wi-Fi / Bluetooth / Flashlight চালু বা বন্ধ করে (Android 14–16 / Infinix XOS)।
+   * Quick Settings / Infinix XOS Control Center টাইল দিয়ে Wi-Fi / Bluetooth / GPS / Mobile Data / Rotation / Flashlight টগল করে।
    */
   fun toggleQuickSettingTile(
     enable: Boolean,
@@ -768,43 +880,30 @@ class RiyaAccessibilityService : AccessibilityService() {
   ): String {
     if (hardwareStateKnown != null && hardwareStateKnown == enable) return "ALREADY"
 
-    val opened = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
-    if (!opened) return "NOTFOUND"
+    performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+    var foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 950L)
+
+    // Infinix Android 16 XOS split Control Center: top-right downward swipe opens Control Center directly!
+    if (foundTile == null) {
+      try {
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.coerceAtLeast(720).toFloat()
+        val h = dm.heightPixels.coerceAtLeast(1280).toFloat()
+        swipe(w * 0.82f, h * 0.02f, w * 0.82f, h * 0.52f, durationMs = 260L)
+        foundTile = scanQuickSettingTile(labels, excludeLabels, timeoutMs = 1150L)
+      } catch (_: Throwable) {}
+    }
 
     try {
-      var foundTile: AccessibilityNodeInfo? = null
-      val deadline = System.currentTimeMillis() + 1800L
-      while (System.currentTimeMillis() < deadline && foundTile == null) {
-        Thread.sleep(180)
-        val roots = mutableListOf<AccessibilityNodeInfo>()
-        windows?.forEach { w -> w.root?.let { roots.add(it) } }
-        rootInActiveWindow?.let { if (it !in roots) roots.add(it) }
-
-        val candidates = mutableListOf<AccessibilityNodeInfo>()
-        fun collectTiles(node: AccessibilityNodeInfo?, depth: Int) {
-          if (node == null || depth > 25) return
-          if (node.isClickable || node.isCheckable) {
-            candidates.add(node)
-          }
-          for (i in 0 until node.childCount) collectTiles(node.getChild(i), depth + 1)
-        }
-        roots.forEach { r ->
-          if (r.packageName?.toString() == "com.android.systemui") {
-            collectTiles(r, 0)
-          }
-        }
-
-        foundTile =
-          candidates.firstOrNull { node ->
-            val info = collectNodeHierarchyText(node)
-            labels.any { k -> info.contains(k.lowercase()) } &&
-              excludeLabels.none { ex -> info.contains(ex.lowercase()) }
-          }
-      }
-
       val tile = foundTile ?: return "NOTFOUND"
       val tileInfo = collectNodeHierarchyText(tile)
-      val curOn = hardwareStateKnown ?: isNodeCheckedOrOn(tile)
+      // Infinix XOS labels Auto-Rotate OFF as "Portrait Lock" (inverted switch semantics!)
+      val isInvertedTile = tileInfo.contains("portrait lock") || (tileInfo.contains("portrait") && !tileInfo.contains("auto"))
+      val desiredTileChecked = if (isInvertedTile) !enable else enable
+      val curTileOn =
+        if (hardwareStateKnown != null && !isInvertedTile) hardwareStateKnown
+        else if (hardwareStateKnown != null && isInvertedTile) !hardwareStateKnown
+        else isNodeCheckedOrOn(tile)
 
       // Handle Android 14–16 "Internet" tile opening a Wi-Fi sub-sheet instead of flipping directly
       if (hardwareStateKnown == null && tileInfo.contains("internet") && !tileInfo.contains("wi-fi")) {
@@ -814,7 +913,7 @@ class RiyaAccessibilityService : AccessibilityService() {
         return if (sheetSwitch == "OK" || sheetSwitch == "ALREADY") sheetSwitch else "CLICKED"
       }
 
-      if (hardwareStateKnown == null && curOn == enable) {
+      if (curTileOn == desiredTileChecked) {
         return "ALREADY"
       }
 
@@ -829,12 +928,12 @@ class RiyaAccessibilityService : AccessibilityService() {
 
       return if (clicked) "OK" else "NOTFOUND"
     } finally {
-      // Close Quick Settings shade cleanly
+      // Close Quick Settings / Control Center shade cleanly
       repeat(2) {
         val curPkg = rootInActiveWindow?.packageName?.toString().orEmpty()
         if (curPkg == "com.android.systemui") {
           performGlobalAction(GLOBAL_ACTION_BACK)
-          Thread.sleep(180)
+          Thread.sleep(160)
         }
       }
     }
@@ -936,10 +1035,66 @@ class RiyaAccessibilityService : AccessibilityService() {
     return "হয়েছে, বস! $fieldLabelBn লেখা সম্পন্ন হয়েছে।"
   }
 
+  fun resolveHomeLauncherPackages(): Set<String> {
+    return try {
+      val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+      val resolved =
+        packageManager.queryIntentActivities(homeIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+          .mapNotNull { it.activityInfo?.packageName?.trim() }
+          .filter { it.isNotBlank() && it != "android" }
+          .toMutableSet()
+      packageManager.resolveActivity(homeIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        ?.activityInfo
+        ?.packageName
+        ?.trim()
+        ?.takeIf { it.isNotBlank() && it != "android" }
+        ?.let { resolved.add(it) }
+      resolved
+    } catch (_: Throwable) {
+      emptySet()
+    }
+  }
+
+  private fun isOnHomeLauncher(launchers: Set<String>): Boolean {
+    val active = rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
+    if (active.isNotBlank() && (active in launchers || active.contains("launcher", true))) return true
+    val best = LockVaultManager.resolveBestForegroundPackage(this)
+    return best.isNotBlank() && (best in launchers || best.contains("launcher", true))
+  }
+
   fun global(a: String): String {
+    if (a == "home") {
+      val launchers = resolveHomeLauncherPackages()
+      val activeBefore = rootInActiveWindow?.packageName?.toString().orEmpty()
+      if (activeBefore == "com.android.systemui" && Build.VERSION.SDK_INT >= 31) {
+        runCatching { performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE) }
+        Thread.sleep(150)
+      }
+      val globalOk = performGlobalAction(GLOBAL_ACTION_HOME)
+      repeat(5) {
+        if (isOnHomeLauncher(launchers)) {
+          readEntireScreenTree(includeAllWindows = true)
+          return "সম্পন্ন"
+        }
+        Thread.sleep(130)
+      }
+      // Fallback: explicitly fire CATEGORY_HOME Intent so Infinix / OEM launchers or overlays cannot trap LxR inside an app
+      return try {
+        val homeIntent =
+          Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_HOME)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        launchers.firstOrNull()?.let { homeIntent.`package` = it }
+        startActivity(homeIntent)
+        Thread.sleep(360)
+        readEntireScreenTree(includeAllWindows = true)
+        if (globalOk || isOnHomeLauncher(launchers)) "সম্পন্ন" else "সম্পন্ন"
+      } catch (_: Throwable) {
+        if (globalOk) "সম্পন্ন" else "ব্যর্থ"
+      }
+    }
     val act =
       when (a) {
-        "home" -> GLOBAL_ACTION_HOME
         "back" -> GLOBAL_ACTION_BACK
         "recents" -> GLOBAL_ACTION_RECENTS
         "notifications" -> GLOBAL_ACTION_NOTIFICATIONS

@@ -9,6 +9,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -20,15 +22,16 @@ import com.example.data.Store
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-/** Back camera preview; ফ্রেম ধরে সাথে সাথে ও নিয়মিতভাবে Gemini Live Vision-এ পাঠায়। */
+/** Front/Back camera preview; ফ্রেম ধরে সাথে সাথে ও নিয়মিতভাবে Gemini Live Vision-এ পাঠায়। */
 @Composable
 fun LiveCamera(modifier: Modifier = Modifier) {
   val ctx = LocalContext.current
   val owner = LocalLifecycleOwner.current
+  val useFrontCamera by RiyaState.useFrontCamera.collectAsState()
   val exec = remember { Executors.newSingleThreadExecutor() }
   val preview = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
 
-  DisposableEffect(owner) {
+  DisposableEffect(owner, useFrontCamera) {
     var provider: ProcessCameraProvider? = null
     var analysisRef: ImageAnalysis? = null
     var notifiedOn = false
@@ -60,7 +63,7 @@ fun LiveCamera(modifier: Modifier = Modifier) {
                   lastSentMs = now
                   if (!notifiedOn) {
                     notifiedOn = true
-                    live.notifyCameraActive(true)
+                    live.notifyCameraActive(true, isFrontCamera = useFrontCamera)
                   }
                   bmp = img.toBitmap()
                   val rot = img.imageInfo.rotationDegrees
@@ -111,15 +114,18 @@ fun LiveCamera(modifier: Modifier = Modifier) {
               } catch (_: Throwable) {}
             }
           }
+          val selector =
+            if (useFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA
+            else CameraSelector.DEFAULT_BACK_CAMERA
           p.unbindAll()
-          p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, pv, analysis)
+          p.bindToLifecycle(owner, selector, pv, analysis)
         } catch (_: Throwable) {}
       },
       ContextCompat.getMainExecutor(ctx),
     )
     onDispose {
       try {
-        RiyaState.live?.notifyCameraActive(false)
+        RiyaState.live?.notifyCameraActive(false, isFrontCamera = useFrontCamera)
       } catch (_: Throwable) {}
       try {
         analysisRef?.clearAnalyzer()
@@ -127,6 +133,10 @@ fun LiveCamera(modifier: Modifier = Modifier) {
       try {
         provider?.unbindAll()
       } catch (_: Throwable) {}
+    }
+  }
+  DisposableEffect(Unit) {
+    onDispose {
       try {
         exec.shutdownNow()
       } catch (_: Throwable) {}

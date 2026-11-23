@@ -33,6 +33,8 @@ import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Full device hardware diagnostics, expanded phone settings toggles/sliders,
@@ -73,6 +75,34 @@ object LxrDeviceAndHardwareEngine {
       ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     return fine || coarse
+  }
+
+  fun isLocationEnabledNow(ctx: Context): Boolean {
+    return try {
+      val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+      if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled
+      else lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun isWriteSettingsGranted(ctx: Context): Boolean =
+    try {
+      Settings.System.canWrite(ctx)
+    } catch (_: Throwable) {
+      false
+    }
+
+  fun isDefaultAssistant(ctx: Context): Boolean {
+    return try {
+      val cur = Settings.Secure.getString(ctx.contentResolver, "assistant").orEmpty()
+      if (cur.contains(ctx.packageName, ignoreCase = true)) return true
+      val v = Settings.Secure.getString(ctx.contentResolver, "voice_interaction_service").orEmpty()
+      v.contains(ctx.packageName, ignoreCase = true)
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   @Suppress("DEPRECATION")
@@ -283,15 +313,36 @@ object LxrDeviceAndHardwareEngine {
       }
 
       s in setOf("location", "gps", "লোকেশন", "জিপিএস") -> {
-        val want = enabled ?: true
-        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val curOn = if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled else lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        val want = enabled ?: !isLocationEnabledNow(ctx)
+        val curOn = isLocationEnabledNow(ctx)
         if (curOn == want) return "ফোনের Location/GPS আগেই ${if (want) "চালু" else "বন্ধ"} আছে বস।"
         if (acc != null) {
           val qs = acc.toggleQuickSettingTile(want, listOf("location", "gps", "লোকেশন"), hardwareStateKnown = curOn)
-          if (qs == "OK" || qs == "ALREADY") {
+          if (qs == "OK" || qs == "ALREADY" || isLocationEnabledNow(ctx) == want) {
             return "হয়েছে, বস! ফোনের Location/GPS ${if (want) "চালু" else "বন্ধ"} করেছি।"
           }
+          // Fallback: open Location Settings page directly and flip the Location master switch
+          ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          val waitDeadline = System.currentTimeMillis() + 2600L
+          while (System.currentTimeMillis() < waitDeadline) {
+            val curPkg = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
+            if (curPkg == "com.android.settings") {
+              Thread.sleep(240)
+              break
+            }
+            Thread.sleep(160)
+          }
+          val res =
+            acc.setSwitch(
+              enable = want,
+              labels = listOf("use location", "location", "access to my location", "লোকেশন"),
+              excludeLabels = listOf("scanning", "emergency", "history", "timeline", "wifi", "wi-fi", "bluetooth", "service"),
+            )
+          if (res == "OK" || res == "ALREADY" || isLocationEnabledNow(ctx) == want) {
+            acc.global("back")
+            return "হয়েছে, বস! লোকেশন সেটিংস থেকে ফোনের GPS/Location ${if (want) "চালু" else "বন্ধ"} করে দিয়েছি।"
+          }
+          return "বস, Location সেটিংস খুলেছি এবং সুইচে ট্যাপ করেছি — অনুগ্রহ করে এক নজর দেখে নিন।"
         }
         ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         "Location সেটিংস স্ক্রিন খুলেছি বস, সুইচটি চালু/বন্ধ করে নিন।"
@@ -299,6 +350,226 @@ object LxrDeviceAndHardwareEngine {
 
       else -> "বস, '$settingName' সেটিংসটি সিস্টেম সেটিংস থেকে দেখে নিচ্ছি।"
     }
+  }
+
+  data class SelfHealthIssue(
+    val key: String,
+    val titleBn: String,
+    val detailBn: String,
+  )
+
+  data class SelfDiagnosisReport(
+    val isHealthy: Boolean,
+    val summaryBn: String,
+    val issues: List<SelfHealthIssue>,
+  )
+
+  fun diagnoseSelfHealth(ctx: Context): SelfDiagnosisReport {
+    val issues = mutableListOf<SelfHealthIssue>()
+    val pm = ctx.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+    if (!Keep.accessibilityOn(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "accessibility",
+          titleBn = "Accessibility সার্ভিস বন্ধ",
+          detailBn = "পূর্ণ স্ক্রিন রিডিং, হোম/ব্যাক ও অটো-টাস্কের জন্য LXR--AI Accessibility চালু থাকা জরুরি।",
+        )
+      )
+    }
+    if (!RiyaRuntimeBridge.isNotificationListenerConnected.value) {
+      issues.add(
+        SelfHealthIssue(
+          key = "notification",
+          titleBn = "Notification Access বন্ধ",
+          detailBn = "WhatsApp, imo ও Messenger-এর নতুন মেসেজ সাথে সাথে পড়তে Notification Access দরকার।",
+        )
+      )
+    }
+    if (!Settings.canDrawOverlays(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "overlay",
+          titleBn = "Display Over Other Apps বন্ধ",
+          detailBn = "ভাসমান LxR অরব দেখাতে এই অনুমতি প্রয়োজন।",
+        )
+      )
+    }
+    if (!isWriteSettingsGranted(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "write_settings",
+          titleBn = "Modify System Settings বন্ধ",
+          detailBn = "ব্রাইটনেস, অটো-রোটেট ও সিস্টেম সেটিংস সরাসরি নিয়ন্ত্রণের জন্য এই অনুমতি দরকার (ধূসর থাকলে App Info > ⋮ > Allow restricted settings চালু করতে হয়)।",
+        )
+      )
+    }
+    if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "battery",
+          titleBn = "Battery Optimization অন আছে",
+          detailBn = "২৪/৭ ব্যাকগ্রাউন্ড সচল রাখতে Battery Unrestricted করা উচিত।",
+        )
+      )
+    }
+    if (!isDefaultAssistant(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "assistant",
+          titleBn = "Default Digital Assistant হিসেবে সেট করা নেই",
+          detailBn = "সিস্টেম অ্যাসিস্ট্যান্ট বাটন ও গভীর স্ক্রিন-রিডিংয়ের জন্য LXR--AI-কে Default digital assistant app হিসেবে সেট করা যায়।",
+        )
+      )
+    }
+    if (!hasLocationPermission(ctx) || !isLocationEnabledNow(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "location",
+          titleBn = "GPS / Location অনুমতি বা সুইচ বন্ধ",
+          detailBn = "লাইভ লোকেশন ও ম্যাপ নেভিগেশনের জন্য Location চালু থাকা দরকার।",
+        )
+      )
+    }
+    if (com.example.data.Store.apiKey(ctx).isBlank()) {
+      issues.add(
+        SelfHealthIssue(
+          key = "api_key",
+          titleBn = "Gemini API Key সেট করা নেই",
+          detailBn = "কণ্ঠ ও বুদ্ধিমত্তা সচল রাখতে API Key প্রয়োজন।",
+        )
+      )
+    }
+    val summary =
+      if (issues.isEmpty()) {
+        "বস, আমি নিজের সম্পূর্ণ সিস্টেম পরীক্ষা করেছি — সব অনুমতি (Accessibility, Notification, Modify System Settings, Location, Battery) ও ইঞ্জিন ১০০% সুস্থ আছে।"
+      } else {
+        buildString {
+          appendLine("বস, আমি নিজের সিস্টেম পরীক্ষা করে ${issues.size}টি সমস্যা পেয়েছি:")
+          issues.forEachIndexed { i, iss ->
+            appendLine("${i + 1}. ${iss.titleBn} (key=${iss.key}) — ${iss.detailBn}")
+          }
+          append("বস অনুমতি দিলে আমি এখনই যেকোনো সমস্যার সেটিংস খুলে ঠিক করে নিতে পারি।")
+        }.trim()
+      }
+    return SelfDiagnosisReport(isHealthy = issues.isEmpty(), summaryBn = summary, issues = issues)
+  }
+
+  fun repairIssueWithBossPermission(ctx: Context, issueKey: String): String {
+    val k = issueKey.trim().lowercase()
+    return when {
+      k.contains("access") -> {
+        if (Keep.ensureAccessibility(ctx)) "হয়েছে বস! Accessibility স্বয়ংক্রিয়ভাবে চালু করেছি ✓"
+        else {
+          Keep.openAccessibility(ctx)
+          "বস, Accessibility সেটিংস খুলেছি — অনুগ্রহ করে LXR--AI অন করে দিন।"
+        }
+      }
+      k.contains("notif") -> {
+        Keep.openNotificationAccess(ctx)
+        "বস, Notification Access সেটিংস খুলেছি।"
+      }
+      k.contains("overlay") -> {
+        ctx.startActivity(
+          Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        "বস, Display over other apps সেটিংস খুলেছি।"
+      }
+      k.contains("write") || k.contains("restrict") -> {
+        try {
+          ctx.startActivity(
+            Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          )
+          "বস, Modify System Settings খুলেছি। সুইচ ধূসর থাকলে App info > উপরে ডানে ⋮ মেনু থেকে Allow restricted settings চালু করে দিলে এটি অন হয়ে যাবে।"
+        } catch (_: Throwable) {
+          Keep.openAppInfo(ctx)
+          "বস, App info খুলেছি — সেখান থেকে Restricted settings অনুমতি দিন।"
+        }
+      }
+      k.contains("assist") -> {
+        try {
+          ctx.startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Throwable) {
+          ctx.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        "বস, Default digital assistant সেটিংস খুলেছি — এখান থেকে LXR--AI নির্বাচন করে দিন।"
+      }
+      k.contains("bat") -> {
+        Keep.openBattery(ctx)
+        "বস, Battery Optimization সেটিংস খুলেছি।"
+      }
+      k.contains("loc") || k.contains("gps") -> {
+        controlDeviceSetting(ctx, RiyaAccessibilityService.instance, "location", enabled = true)
+      }
+      k.contains("app_info") -> {
+        Keep.openAppInfo(ctx)
+        "বস, LXR--AI App info পেজ খুলেছি।"
+      }
+      else -> diagnoseSelfHealth(ctx).summaryBn
+    }
+  }
+
+  fun solveCriticalTaskWithExtraModel(ctx: Context, taskPrompt: String, screenContext: String = ""): String {
+    val apiKey = com.example.data.Store.apiKey(ctx).trim()
+    if (apiKey.isBlank()) {
+      return "এক্সট্রা এআই মডেল চালানোর জন্য Gemini API Key প্রয়োজন বস।"
+    }
+    val preferred = com.example.data.Store.extraCriticalModel(ctx)
+    val candidates =
+      listOf(preferred, "gemini-2.5-flash", "gemini-2.0-flash").distinct()
+    val client =
+      okhttp3.OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(28, TimeUnit.SECONDS)
+        .build()
+    val promptBody =
+      buildString {
+        appendLine("তুমি LXR--AI-এর এক্সট্রা ক্রিটিক্যাল রিজনিং ও টাস্ক ইঞ্জিন। বসের কঠিন বা জটিল কাজের জন্য পরিষ্কার, সঠিক এবং কার্যকর বাংলা সমাধান ও ধাপ দাও।")
+        if (screenContext.isNotBlank()) {
+          appendLine("বর্তমান স্ক্রিন/সিস্টেম তথ্য: $screenContext")
+        }
+        appendLine("কাজ/প্রশ্ন: $taskPrompt")
+      }
+    for (modelId in candidates) {
+      try {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:generateContent?key=$apiKey"
+        val bodyJson =
+          org.json.JSONObject()
+            .put(
+              "contents",
+              org.json.JSONArray()
+                .put(
+                  org.json.JSONObject()
+                    .put("parts", org.json.JSONArray().put(org.json.JSONObject().put("text", promptBody)))
+                ),
+            )
+        val req =
+          okhttp3.Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+          val raw = resp.body?.string().orEmpty()
+          if (resp.isSuccessful && raw.isNotBlank()) {
+            val json = org.json.JSONObject(raw)
+            val txt =
+              json.optJSONArray("candidates")
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.optJSONObject(0)
+                ?.optString("text")
+                .orEmpty()
+                .trim()
+            if (txt.isNotBlank()) {
+              return "[$modelId ক্রিটিক্যাল মডেল]:\n$txt"
+            }
+          }
+        }
+      } catch (_: Throwable) {}
+    }
+    return "এক্সট্রা ক্রিটিক্যাল মডেল এই মুহূর্তে নেটওয়ার্ক থেকে সাড়া দিতে পারেনি বস।"
   }
 
   @Suppress("MissingPermission", "DEPRECATION")
