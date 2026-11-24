@@ -177,9 +177,15 @@ object RiyaState {
   val replyDelaySeconds = MutableStateFlow(0)
   val replyLimitMax = MutableStateFlow(-1)
   val activeWorkLabel = MutableStateFlow<String?>(null)
+  val visionCameraActive = MutableStateFlow(false)
 
   @Volatile var live: GeminiLive? = null
   @Volatile var cameraOn: Boolean = false
+
+  fun setVisionCameraActive(active: Boolean) {
+    cameraOn = active
+    visionCameraActive.value = active
+  }
 
   fun addLog(s: String) {
     val clean =

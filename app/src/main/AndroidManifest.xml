@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -96,7 +97,7 @@
             android:name=".service.RiyaService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="microphone|location" />
+            android:foregroundServiceType="microphone|location|camera" />
 
         <service
             android:name=".service.AccessibilityKeepAliveService"

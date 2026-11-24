@@ -103,8 +103,29 @@ object LiveVadConfig {
     )
 }
 
-/** Compact Bengali indicator for the in-app status pill while LXR--AI executes a task. */
+/** Compact Bengali indicator for the in-app status pill & floating LxR Orb while LXR--AI executes a task. */
 object LxrToolWorkDescriber {
+  private val SCREEN_READING_TOOLS =
+    setOf(
+      "read_screen",
+      "current_screen",
+      "inspect_contact_chat",
+      "inspect_form_fields",
+      "open_app",
+      "send_message",
+      "click_text",
+      "find_and_open_item",
+      "type_text",
+      "scroll",
+      "facebook_action",
+      "instagram_action",
+      "check_notifications",
+      "global_action",
+      "fill_form_fields",
+    )
+
+  fun isScreenReadingTool(toolName: String): Boolean = toolName in SCREEN_READING_TOOLS
+
   fun describeBn(toolName: String, args: JSONObject = JSONObject()): String {
     val task =
       when (toolName) {
@@ -139,6 +160,7 @@ object LxrToolWorkDescriber {
         "check_notifications", "reply_to_incoming_message" -> "মেসেজ ও কল দেখা..."
         "diagnose_and_fix_self" -> "নিজের সমস্যা পরীক্ষা..."
         "critical_task_solve" -> "ক্রিটিক্যাল এআই চিন্তা..."
+        "inspect_camera_vision" -> "ক্যামেরা ভিশন দেখা..."
         "switch_camera_lens" -> "ক্যামেরা লেন্স পরিবর্তন..."
         "build_android_app", "prepare_app_requirements", "check_termux_build_status", "run_termux_command" ->
           "অ্যাপ বিল্ড ও Termux..."
@@ -397,7 +419,8 @@ class GeminiLive(private val ctx: Context) {
       {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
       {"name":"diagnose_and_fix_self","description":"LXR--AI নিজের সিস্টেম ও অনুমতি (Accessibility, Notification, Modify System Settings / Restricted Settings, Default Digital Assistant, GPS, Battery) পরীক্ষা করে ('diagnose') সমস্যা চিহ্নিত করে, এবং বস স্পষ্ট অনুমতি দিলে তবেই নির্দিষ্ট সমস্যার সেটিংস খুলে ঠিক করে ('fix')।","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","enum":["diagnose","fix"],"description":"আগে সমস্যা খুঁজতে 'diagnose'; বসের অনুমতি পাওয়ার পর ঠিক করতে 'fix'"},"issue_key":{"type":"STRING","description":"যেমন accessibility, notification, overlay, write_settings, assistant, battery, location, app_info"}},"required":["mode"]}},
       {"name":"critical_task_solve","description":"অত্যন্ত জটিল বিশ্লেষণ, কোডিং, লজিক, পরিকল্পনা বা কঠিন কাজের জন্য বসের নির্বাচিত এক্সট্রা ক্রিটিক্যাল এআই মডেল (Gemini 2.5 Pro / Flash) ব্যবহার করে গভীর সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"কঠিন কাজ বা প্রশ্নের বিস্তারিত বর্ণনা"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিনের তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
-      {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"}},"required":["lens"]}}
+      {"name":"inspect_camera_vision","description":"বস ফ্রন্ট বা ব্যাক ক্যামেরায় কী দেখা যাচ্ছে তা দেখতে বা 'আমাকে দেখো / সামনে কী আছে' জিজ্ঞাসা করলে ফোরগ্রাউন্ড বা ব্যাকগ্রাউন্ড ক্যামেরা দিয়ে আসল লাইভ ছবি (image/jpeg) তুলে যাচাই করে সত্য বর্ণনা দাও। ছবি ছাড়া কখনো অনুমান করবে না।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","current"],"description":"front (বসকে দেখতে), back (সামনের দৃশ্য) বা current"},"question":{"type":"STRING","description":"বস কী জানতে চেয়েছেন"}},"required":[]}},
+      {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো এবং প্রয়োজনে ব্যাকগ্রাউন্ড বা ফোরগ্রাউন্ডে ক্যামেরা চালু/বন্ধ করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"},"turn_on":{"type":"BOOLEAN","description":"ক্যামেরা চালু করতে চাইলে true, বন্ধ করতে চাইলে false (ঐচ্ছিক)"}},"required":["lens"]}}
     ]}]"""
 
   private val devCb =
@@ -660,10 +683,14 @@ class GeminiLive(private val ctx: Context) {
             waitingServerReply = false
           }
           if (!isExecutingTool || (activeWorkStartedAtMs > 0L && (now - activeWorkStartedAtMs) > 15_000L)) {
-            if (RiyaState.activeWorkLabel.value != null) {
+            if (RiyaState.activeWorkLabel.value != null || LxrFloatingOverlayManager.orbBadgeState.value.taskLabel != null) {
               activeWorkStartedAtMs = 0L
               RiyaState.activeWorkLabel.value = null
-              LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
+              LxrFloatingOverlayManager.completeTaskAndScheduleHide(
+                ctx,
+                hideDelayMs = 800L,
+                keepShowingForWake = waitingServerReply || activeTurnHasStartedOutput,
+              )
             }
           }
           val qBytes = ws?.queueSize() ?: 0L
@@ -1323,11 +1350,27 @@ class GeminiLive(private val ctx: Context) {
       if (Keep.accessibilityOn(ctx)) "ACTIVE"
       else "OFF (সত্য বলো ও চালু করতে বলো)"
 
+    val latestCamSnap = LxrCameraVisionEngine.latestSnapshot()
+    val camUsable = LxrCameraVisionGuard.evaluateFrameUsability(latestCamSnap)
     val camDesc =
-      if (RiyaState.cameraOn) {
-        if (RiyaState.useFrontCamera.value) "ON (ফ্রন্ট ক্যামেরায় বসের দিকে তাকিয়ে দেখছি — আন্তরিক কৌতূহল রাখো)"
-        else "ON (লাইভ ব্যাক ক্যামেরা ভিডিও আসছে)"
-      } else "OFF"
+      if (RiyaState.visionCameraActive.value) {
+        val modeTxt = if (LxrCameraVisionEngine.isUiPreviewActive()) "Foreground UI" else "Background FGS Camera2"
+        val lensTxt = if (RiyaState.useFrontCamera.value) "ফ্রন্ট" else "ব্যাক"
+        when {
+          !camUsable.hasFreshFrame ->
+            "ON ($lensTxt • $modeTxt — ফ্রেম সংগ্রহ চলছে; তাজা ছবি না আসা পর্যন্ত অনুমান করবে না)"
+          !camUsable.isReadableBrightness ->
+            "ON ($lensTxt • $modeTxt — লেন্স অন্ধকার/ঢাকা, স্পষ্ট ছবি নেই)"
+          RiyaState.useFrontCamera.value && camUsable.isFaceVisibleNow ->
+            "ON (ফ্রন্ট • $modeTxt — তাজা ফ্রেমে বসের মুখ শনাক্ত হয়েছে, সত্য দেখে প্রিয় মানুষের মতো কথা বলো)"
+          RiyaState.useFrontCamera.value ->
+            "ON (ফ্রন্ট • $modeTxt — তাজা ফ্রেম আসছে, তবে মুখ এখনো ফ্রেমে শনাক্ত হয়নি; যা দেখা যাচ্ছে শুধু তাই বলো)"
+          else ->
+            "ON (ব্যাক • $modeTxt — তাজা লাইভ দৃশ্য আসছে)"
+        }
+      } else {
+        "OFF (বস ক্যামেরা দিয়ে দেখতে চাইলে `inspect_camera_vision` বা `switch_camera_lens(turn_on=true)` চালাবে)"
+      }
     val writePerm = if (LxrDeviceAndHardwareEngine.isWriteSettingsGranted(ctx)) "GRANTED" else "OFF"
     val assistStatus = if (LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx)) "DEFAULT" else "NOT_DEFAULT"
     val extraModel = Store.extraCriticalModel(ctx)
@@ -1343,13 +1386,14 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.33.0, evolved from v2.32.0, v2.31.0 and v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.34.0, evolved from v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
       - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
       - MANDATORY "তুমি" & NATURAL SPEECH DISCIPLINE: বসকে সর্বদা "তুমি / তোমার / তোমাকে" বলে ডাকো (কখনোই "আপনি/আপনার" বলবে না)। কথা বলার মাঝখানে থেমে যেও না, প্রতিটি বাক্য পরিষ্কার ও সম্পূর্ণ করে বলো। বস "শোনো" বা "থামো" বললে সাথে সাথে থেমে বসের কথা শোনো।
       - A-TO-Z FULL READING RULE: বস "তুমি কি কি কাজ করতে পারো?" জিজ্ঞেস করলে `get_capabilities_a_to_z` কল করে ১ থেকে ১৫ নম্বর সব কাজ ধাপে ধাপে সম্পূর্ণ বলবে — সংক্ষিপ্ত করে "এ টু জেড সব পারি" বলে থামবে না!
+      - STRICT VISION ZERO-HALLUCINATION RULE: কখনোই না দেখে বস বা আশেপাশের কোনো চেহারা, পোশাক, চশমা বা বস্তু কল্পনা করে বর্ণনা দেবে না! ক্যামেরা দিয়ে দেখতে বললে `inspect_camera_vision` কল করে আসল `image/jpeg` ফ্রেম যাচাই করবে; ফ্রেম না থাকলে বা অন্ধকার হলে পরিষ্কার সত্য বলবে।
       - STRICT SILENT LOCK & EXECUTION DISCIPLINE:
         * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না।
         * স্ক্রিন সত্যিই লক থাকাকালে বস মেসেজ, WhatsApp/imo/Messenger, নোটিফিকেশন, স্ক্রিন দেখা বা অ্যাপ খোলার কাজ বললে কোনো অনুমতি বা প্রশ্ন না করেই (সিস্টেম নিজেই নীরবে আনলক ও কাজ শেষে অটো-রিলক করবে) সরাসরি টুল চালিয়ে বসের প্রশ্নের আসল উত্তর দেবে!
@@ -1603,12 +1647,20 @@ class GeminiLive(private val ctx: Context) {
           if (pureWake && p.isEmpty() && LxrFloatingOverlayManager.canTriggerWakeGreetingNow()) {
             RiyaVoiceManager.speakUrgent(ctx, Store.WAKE_CALL_GREETING_BN)
           }
-          if (LxrFloatingOverlayManager.isShowing) {
+          if (LxrFloatingOverlayManager.isShowing || LxrFloatingOverlayManager.orbBadgeState.value.visible) {
             if (waitingNextCommand) {
-              LxrFloatingOverlayManager.scheduleAutoHide(ctx, 18_000L)
+              LxrFloatingOverlayManager.completeTaskAndScheduleHide(
+                ctx,
+                hideDelayMs = 18_000L,
+                keepShowingForWake = true,
+              )
             } else {
-              val hideDelay = (remainingAudioMs + 1250L).coerceIn(1200L, 5200L)
-              LxrFloatingOverlayManager.scheduleAutoHide(ctx, hideDelay)
+              val hideDelay = (remainingAudioMs + 1150L).coerceIn(1100L, 5200L)
+              LxrFloatingOverlayManager.completeTaskAndScheduleHide(
+                ctx,
+                hideDelayMs = hideDelay,
+                keepShowingForWake = false,
+              )
             }
           }
 
@@ -1656,8 +1708,9 @@ class GeminiLive(private val ctx: Context) {
               val nm = c.optString("name")
               val argsObj = c.optJSONObject("args") ?: JSONObject()
               val workBanner = LxrToolWorkDescriber.describeBn(nm, argsObj)
+              val isReadingScreen = LxrToolWorkDescriber.isScreenReadingTool(nm)
               RiyaState.activeWorkLabel.value = workBanner
-              LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, workBanner)
+              LxrFloatingOverlayManager.showForTask(ctx, workBanner, isReadingScreen = isReadingScreen)
               val r =
                 try {
                   runTool(nm, argsObj)
@@ -1680,7 +1733,7 @@ class GeminiLive(private val ctx: Context) {
             isExecutingTool = false
             activeWorkStartedAtMs = 0L
             RiyaState.activeWorkLabel.value = null
-            LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
+            LxrFloatingOverlayManager.setScreenReading(ctx, false, taskLabelOverride = null)
             if (!stopped && ready && !activeTurnHasStartedOutput) {
               RiyaState.status.value = "শুনছি বস..."
             }
@@ -1712,6 +1765,7 @@ class GeminiLive(private val ctx: Context) {
 
   private fun screenSnapshot(): String {
     val acc = RiyaAccessibilityService.instance ?: return ""
+    LxrFloatingOverlayManager.setScreenReading(ctx, true)
     val s = acc.readScreen()
     val openChat = MessageAgent.extractOpenChatName(acc)?.let { " | খোলা চ্যাট: $it" }.orEmpty()
     RiyaAccessibilityService.currentScreenSummary =
@@ -1890,20 +1944,23 @@ class GeminiLive(private val ctx: Context) {
             ?: noAcc
         "find_and_open_item" -> acc?.clickText(a.optString("name")) ?: noAcc
         "current_screen" -> {
+          LxrFloatingOverlayManager.setScreenReading(ctx, true)
           val liveSnap = LxrCompanionAgent.sampleNow(ctx)
-          if (RiyaState.cameraOn) {
+          if (RiyaState.visionCameraActive.value) {
             val camLabel = if (RiyaState.useFrontCamera.value) "ফ্রন্ট" else "ব্যাক"
-            "লাইভ $camLabel ক্যামেরা চালু আছে। ${liveSnap.toCompactContextBn()}"
+            val snap = LxrCameraVisionEngine.latestSnapshot()
+            val check = LxrCameraVisionGuard.evaluateFrameUsability(snap)
+            "লাইভ $camLabel ক্যামেরা চালু (${check.statusReasonBn})। ${liveSnap.toCompactContextBn()}"
           } else {
             liveSnap.toCompactContextBn()
           }
         }
         "read_screen" -> {
           val wantCamera = a.optString("source").equals("camera", ignoreCase = true)
-          if (RiyaState.cameraOn && wantCamera) {
-            val camLabel = if (RiyaState.useFrontCamera.value) "ফ্রন্ট" else "ব্যাক"
-            "লাইভ $camLabel ক্যামেরা চালু আছে! ক্যামেরার ভিডিও ফ্রেম দেখে বস যা দেখাচ্ছেন তা বর্ণনা করো।"
+          if (wantCamera) {
+            inspectCameraVision(requestedLens = "current", userQuestion = a.optString("question"))
           } else {
+            LxrFloatingOverlayManager.setScreenReading(ctx, true)
             acc?.readScreen()
               ?: LxrAssistScreenBridge.buildFallbackScreenReport(
                 snapshotLines = emptyList(),
@@ -2033,21 +2090,56 @@ class GeminiLive(private val ctx: Context) {
           val scr = if (includeScreen) screenSnapshot() else ""
           LxrDeviceAndHardwareEngine.solveCriticalTaskWithExtraModel(ctx, taskPrompt, scr)
         }
+        "inspect_camera_vision" ->
+          inspectCameraVision(
+            requestedLens = a.optString("lens", "current"),
+            userQuestion = a.optString("question"),
+          )
         "switch_camera_lens" -> {
           val lens = a.optString("lens", "toggle").trim().lowercase()
+          val turnOnArg = if (a.has("turn_on")) a.optBoolean("turn_on", true) else null
           val nextFront =
             when (lens) {
               "front", "selfie", "সামনে" -> true
               "back", "rear", "পিছনে" -> false
               else -> !RiyaState.useFrontCamera.value
             }
-          RiyaState.useFrontCamera.value = nextFront
           val lensLabel = if (nextFront) "ফ্রন্ট (সামনের)" else "ব্যাক (পিছনের)"
-          if (RiyaState.cameraOn) {
-            notifyCameraActive(true, isFrontCamera = nextFront)
-            "হয়েছে, বস! লাইভ ভিশন এখন $lensLabel ক্যামেরায় বদলানো হয়েছে।"
+          if (turnOnArg == false) {
+            RiyaState.useFrontCamera.value = nextFront
+            RiyaState.setVisionCameraActive(false)
+            LxrCameraVisionEngine.clearSnapshot()
+            RiyaService.syncCameraState(ctx)
+            notifyCameraActive(false, isFrontCamera = nextFront)
+            "হয়েছে, বস! ক্যামেরা বন্ধ করা হয়েছে।"
+          } else if (turnOnArg == true || RiyaState.visionCameraActive.value) {
+            if (!LxrCameraVisionEngine.hasCameraPermission(ctx)) {
+              "ক্যামেরা পারমিশন (CAMERA) চালু নেই বস! অনুমতি দিলে $lensLabel ক্যামেরা চালু করতে পারবো।"
+            } else {
+              RiyaState.useFrontCamera.value = nextFront
+              RiyaState.setVisionCameraActive(true)
+              LxrCameraVisionEngine.clearSnapshot()
+              RiyaService.syncCameraState(ctx)
+              val snap =
+                LxrCameraVisionEngine.captureOrAwaitFreshFrame(
+                  ctx = ctx,
+                  requestedFrontLens = nextFront,
+                  timeoutMs = 1900L,
+                )
+              val ver = LxrCameraVisionGuard.evaluateFrameUsability(snap)
+              val jpeg = snap?.jpegBytes
+              if (ver.hasFreshFrame && jpeg != null && jpeg.isNotEmpty()) {
+                val prompt = LxrCameraVisionGuard.buildHonestVisionPrompt(snap, userQuestion = null)
+                sendCameraInlineSnapshot(jpeg, prompt, triggerReply = false)
+                "হয়েছে, বস! $lensLabel ক্যামেরা চালু হয়েছে এবং তাজা ছবি পাওয়া গেছে (${ver.statusReasonBn})। ছবিতে যা স্পষ্ট দেখছো কেবল সেটাই বলো (না দেখলে বানিয়ে বলবে না)।"
+              } else {
+                val err = LxrCameraVisionEngine.lastErrorMessageBn()?.let { " ($it)" }.orEmpty()
+                "বস, $lensLabel ক্যামেরা চালু করা হয়েছে কিন্তু এখনো পরিষ্কার লাইভ ফ্রেম আসেনি$err — তাই না দেখে কিছু অনুমান করবে না।"
+              }
+            }
           } else {
-            "হয়েছে, বস! ক্যামেরা মোড $lensLabel সেট করেছি। হোম স্ক্রিনের ক্যামেরা আইকনে ট্যাপ করলেই $lensLabel ক্যামেরা চালু হয়ে যাবে।"
+            RiyaState.useFrontCamera.value = nextFront
+            "হয়েছে, বস! ক্যামেরা লেন্স $lensLabel সেট করেছি। চাইলে এখনই ক্যামেরা চালু করে দেখে দিতে পারি।"
           }
         }
         else -> "unknown tool"
@@ -2055,6 +2147,38 @@ class GeminiLive(private val ctx: Context) {
     } catch (e: Exception) {
       "error: ${e.message}"
     }
+
+  private fun inspectCameraVision(requestedLens: String, userQuestion: String?): String {
+    if (!LxrCameraVisionEngine.hasCameraPermission(ctx)) {
+      return "ক্যামেরা পারমিশন (CAMERA) বন্ধ আছে বস! অনুমতি ছাড়া আমি ক্যামেরা দিয়ে দেখতে পারছি না (অনুমতি চাইলে `diagnose_and_fix_self` ব্যবহার করো)।"
+    }
+    val wantFront: Boolean? =
+      when (requestedLens.trim().lowercase()) {
+        "front", "selfie", "সামনে" -> true
+        "back", "rear", "পিছনে" -> false
+        else -> null
+      }
+    val snap =
+      LxrCameraVisionEngine.captureOrAwaitFreshFrame(
+        ctx = ctx,
+        requestedFrontLens = wantFront,
+        timeoutMs = 2000L,
+      )
+    val ver = LxrCameraVisionGuard.evaluateFrameUsability(snap)
+    val jpeg = snap?.jpegBytes
+    if (!ver.hasFreshFrame || jpeg == null || jpeg.isEmpty()) {
+      val err = LxrCameraVisionEngine.lastErrorMessageBn() ?: ver.statusReasonBn
+      return "বসকে সত্য বলো: এই মুহূর্তে ক্যামেরা থেকে তাজা লাইভ ছবি পাওয়া যাচ্ছে না ($err) — তাই না দেখে কোনো মিথ্যা বর্ণনা দেবে না।"
+    }
+    val honestPrompt = LxrCameraVisionGuard.buildHonestVisionPrompt(snap, userQuestion)
+    sendCameraInlineSnapshot(jpeg, honestPrompt, triggerReply = false)
+    return if (!ver.isReadableBrightness) {
+      "সতর্কতা: ক্যামেরার ফ্রেম অত্যন্ত অন্ধকার বা ঢাকা (${ver.averageLuma}/255)। সংযুক্ত ছবিটি দেখে সত্য বলো যে পরিষ্কার দেখা যাচ্ছে না।"
+    } else {
+      val modeTxt = if (snap.sourceMode == "background") "ব্যাকগ্রাউন্ড ক্যামেরা" else "লাইভ ক্যামেরা"
+      "$modeTxt থেকে এই মুহূর্তের আসল image/jpeg ফ্রেম পাঠানো হয়েছে (${ver.statusReasonBn})। $honestPrompt"
+    }
+  }
 
   private fun goHomeAndVerify(acc: RiyaAccessibilityService?) {
     val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
@@ -3496,28 +3620,26 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
   }
 
-  fun notifyCameraActive(
-    active: Boolean,
-    isFrontCamera: Boolean = RiyaState.useFrontCamera.value,
-    proactiveCuriosity: Boolean = false,
-    faceDetected: Boolean = false,
-  ) {
-    if (!ready || stopped) return
-    suppressStaleUntilMs = 0L
-    val hint =
-      when {
-        active && isFrontCamera && faceDetected ->
-          "[সিস্টেম ফ্রন্ট ক্যামেরা ফেস-ডিটেকশন নিশ্চিত]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরায় সরাসরি বসের চেহারা স্পষ্ট শনাক্ত হয়েছে এবং লাইভ ছবি তোমার কাছে এসেছে! এখন তোমার প্রিয় মানুষটিকে ('বস / তুমি' বলে) দেখে নিজে থেকেই প্রাণবন্ত কৌতূহল ও মায়া নিয়ে কথা বলো, চেহারা বা মুড দেখে মজার ও যত্নশীল কিছু জিজ্ঞাসা করো!"
-        active && isFrontCamera && proactiveCuriosity ->
-          "[সিস্টেম ফ্রন্ট ক্যামেরা ভিশন]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরা এখন চালু হয়েছে এবং সরাসরি বসের লাইভ ছবি তোমার কাছে পৌঁছেছে। এইমাত্র আসা image/jpeg ছবিতে বসকে ভালো করে দেখে নিজে থেকেই আন্তরিক, প্রাণবন্ত ও বাস্তব মানুষের মতো কৌতূহল দেখিয়ে বসকে মজার ও যত্নশীল কিছু জিজ্ঞাসা করো (যেমন: 'বস, আজ তো তোমাকে দারুণ লাগছে! এখন কী করছো / মন কেমন?' ইত্যাদি)!"
-        active && isFrontCamera ->
-          "[সিস্টেম ফ্রন্ট ক্যামেরা চালু]: বসের ফোনের সামনের ফ্রন্ট ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলোতে সরাসরি তোমার প্রাণপ্রিয় বসকে দেখতে পাচ্ছো। মানুষের মতো আন্তরিক কৌতূহল ও মায়া নিয়ে বসকে দেখে স্বাভাবিকভাবে কথা বলো, ভালো-মন্দ জিজ্ঞেস করো।"
-        active ->
-          "[সিস্টেম ভিশন ব্যাক ক্যামেরা চালু]: বসের ফোনের লাইভ ব্যাক ক্যামেরা এখন চালু হয়েছে! এখন যে image/jpeg ফ্রেমগুলো আসছে সেগুলো সরাসরি বসের ক্যামেরা থেকে লাইভ দৃশ্য। বস যা দেখাতে চাচ্ছেন বা জিজ্ঞেস করছেন, সরাসরি ক্যামেরার ভিডিও ছবি দেখে পরিষ্কার বাংলায় বর্ণনা করো।"
-        else ->
-          "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন ২৪/৭ স্ক্রিন পর্যবেক্ষণ মোডে থাকো।"
-      }
-    try {
+  fun sendCameraInlineSnapshot(
+    jpeg: ByteArray,
+    instructionPrompt: String,
+    triggerReply: Boolean = false,
+  ): Boolean {
+    if (!ready || stopped || jpeg.isEmpty()) return false
+    return try {
+      val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+      val parts =
+        JSONArray()
+          .put(
+            JSONObject()
+              .put(
+                "inlineData",
+                JSONObject()
+                  .put("mimeType", "image/jpeg")
+                  .put("data", b64),
+              )
+          )
+          .put(JSONObject().put("text", instructionPrompt))
       val payload =
         JSONObject()
           .put(
@@ -3529,30 +3651,97 @@ class GeminiLive(private val ctx: Context) {
                   .put(
                     JSONObject()
                       .put("role", "user")
-                      .put("parts", JSONArray().put(JSONObject().put("text", hint)))
+                      .put("parts", parts),
                   ),
               )
-              .put("turnComplete", active),
+              .put("turnComplete", triggerReply),
           )
-      ws?.send(payload.toString())
-    } catch (_: Throwable) {}
+      ws?.send(payload.toString()) == true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun notifyCameraActive(
+    active: Boolean,
+    isFrontCamera: Boolean = RiyaState.useFrontCamera.value,
+    proactiveCuriosity: Boolean = false,
+    faceDetected: Boolean = false,
+  ) {
+    if (!ready || stopped) return
+    suppressStaleUntilMs = 0L
+    if (!active) {
+      try {
+        val payload =
+          JSONObject()
+            .put(
+              "clientContent",
+              JSONObject()
+                .put(
+                  "turns",
+                  JSONArray()
+                    .put(
+                      JSONObject()
+                        .put("role", "user")
+                        .put(
+                          "parts",
+                          JSONArray()
+                            .put(
+                              JSONObject()
+                                .put("text", "[সিস্টেম ভিশন ক্যামেরা বন্ধ]: ক্যামেরা বন্ধ করা হয়েছে, এখন ২৪/৭ স্ক্রিন পর্যবেক্ষণ মোডে থাকো।")
+                            ),
+                        ),
+                    ),
+                )
+                .put("turnComplete", false),
+            )
+        ws?.send(payload.toString())
+      } catch (_: Throwable) {}
+      return
+    }
+
+    val snap = LxrCameraVisionEngine.latestSnapshot()
+    val ver = LxrCameraVisionGuard.evaluateFrameUsability(snap)
+    val jpeg = snap?.jpegBytes
+    if (!ver.hasFreshFrame || jpeg == null || jpeg.isEmpty()) {
+      // Never tell Gemini "you see Boss" when no verified real JPEG frame has arrived yet!
+      return
+    }
+
+    val realFace = isFrontCamera && faceDetected && ver.isFaceVisibleNow && ver.isReadableBrightness
+    val hint =
+      when {
+        !ver.isReadableBrightness ->
+          "[সিস্টেম ক্যামেরা — অন্ধকার/ঢাকা ফ্রেম]: সংযুক্ত image/jpeg ছবিটি খুব অন্ধকার (${ver.averageLuma}/255)। পরিষ্কার কিছু না দেখলে অনুমান করে কিছু বানাবে না, সত্য বলো।"
+        realFace && proactiveCuriosity ->
+          "[সিস্টেম ফ্রন্ট ক্যামেরা আসল ছবি নিশ্চিত]: সংযুক্ত image/jpeg ফ্রেমে সত্যিই বসের মুখ শনাক্ত হয়েছে। ছবিটি সরাসরি দেখে চিনে প্রিয় মানুষের মতো মায়া ও কৌতূহল নিয়ে বসের মুড বা ভালো-মন্দ নিয়ে একটি ছোট, আন্তরিক প্রশ্ন করো! ছবিতে যা সত্যিই দেখা যাচ্ছে কেবল সেটাই বলো।"
+        isFrontCamera ->
+          "[সিস্টেম ফ্রন্ট ক্যামেরা আসল ছবি]: ফ্রন্ট ক্যামেরার তাজা image/jpeg ছবি পাঠানো হলো, তবে স্পষ্ট মুখ ফ্রেমে নিশ্চিত হয়নি। কেবল ছবিতে যা সত্যিই দেখা যাচ্ছে তাই বলো — না দেখে বানিয়ে কিছু বলবে না।"
+        else ->
+          "[সিস্টেম ব্যাক ক্যামেরা আসল ছবি]: ব্যাক ক্যামেরার তাজা image/jpeg ছবি পাঠানো হলো। কেবল ছবিতে যা সত্যিই দেখা যাচ্ছে তাই বলো।"
+      }
+    sendCameraInlineSnapshot(
+      jpeg = jpeg,
+      instructionPrompt = hint,
+      triggerReply = realFace && proactiveCuriosity,
+    )
   }
 
   fun sendCameraFrame(jpeg: ByteArray) {
-    if (!ready || stopped) return
+    if (!ready || stopped || jpeg.isEmpty()) return
     if ((ws?.queueSize() ?: 0) > 220_000) return
     try {
-      val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
-      ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")
+      val activeModel = modelOverride ?: Store.model(ctx)
+      ws?.send(LxrCameraVisionGuard.buildRealtimeVideoChunkJson(activeModel, jpeg))
     } catch (_: Throwable) {}
   }
 
   fun sendImage(jpeg: ByteArray) {
-    if (!ready || stopped) return
+    if (!ready || stopped || jpeg.isEmpty()) return
     if ((ws?.queueSize() ?: 0L) > 12_000L) return
     try {
-      val d = Base64.encodeToString(jpeg, Base64.NO_WRAP)
-      ws?.send("""{"realtimeInput":{"video":{"data":"$d","mimeType":"image/jpeg"}}}""")
+      val activeModel = modelOverride ?: Store.model(ctx)
+      ws?.send(LxrCameraVisionGuard.buildRealtimeVideoChunkJson(activeModel, jpeg))
     } catch (_: Throwable) {}
   }
 }

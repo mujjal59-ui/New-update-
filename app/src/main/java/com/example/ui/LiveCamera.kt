@@ -36,6 +36,7 @@ fun LiveCamera(modifier: Modifier = Modifier) {
     var analysisRef: ImageAnalysis? = null
     var notifiedOn = false
     var sentFrameCount = 0
+    com.example.service.LxrCameraVisionEngine.setUiPreviewActive(true)
     val future = ProcessCameraProvider.getInstance(ctx)
     future.addListener(
       {
@@ -51,18 +52,16 @@ fun LiveCamera(modifier: Modifier = Modifier) {
               .build()
           analysisRef = analysis
 
-          var lastFaceDetected = false
           analysis.setAnalyzer(exec) { img ->
             var bmp: Bitmap? = null
             var rotBmp: Bitmap? = null
             var scaledBmp: Bitmap? = null
-            var bmp565: Bitmap? = null
             try {
               val now = System.currentTimeMillis()
               val interval =
                 when {
                   !notifiedOn -> 380L
-                  Store.lowNetFastMode(ctx) -> 1300L
+                  Store.lowNetFastMode(ctx) -> 1250L
                   else -> 950L
                 }
               if (now - lastSentMs >= interval) {
@@ -100,46 +99,38 @@ fun LiveCamera(modifier: Modifier = Modifier) {
                       rotated
                     }
 
-                  if (useFrontCamera && !lastFaceDetected) {
-                    runCatching {
-                      val wEven = (finalBmp.width / 2 * 2).coerceAtLeast(64)
-                      val hEven = (finalBmp.height / 2 * 2).coerceAtLeast(64)
-                      val base565 = finalBmp.copy(Bitmap.Config.RGB_565, false)
-                      bmp565 =
-                        if (base565.width == wEven && base565.height == hEven) base565
-                        else Bitmap.createScaledBitmap(base565, wEven, hEven, true).also {
-                          if (it !== base565) base565.recycle()
-                        }
-                      val detector = android.media.FaceDetector(wEven, hEven, 1)
-                      val faces = arrayOfNulls<android.media.FaceDetector.Face>(1)
-                      if (detector.findFaces(bmp565!!, faces) > 0 &&
-                        (faces[0]?.confidence() ?: 0f) >= 0.30f
-                      ) {
-                        lastFaceDetected = true
-                      }
-                    }
-                  }
-
-                  val out = ByteArrayOutputStream()
-                  finalBmp.compress(Bitmap.CompressFormat.JPEG, 55, out)
-                  val jpegBytes = out.toByteArray()
-                  live.sendCameraFrame(jpegBytes)
-                  sentFrameCount++
-                  if (!notifiedOn && (lastFaceDetected || sentFrameCount >= 2)) {
-                    notifiedOn = true
-                    live.notifyCameraActive(
-                      active = true,
+                  val snap =
+                    com.example.service.LxrCameraVisionEngine.analyzeBitmap(
+                      bmp = finalBmp,
                       isFrontCamera = useFrontCamera,
-                      proactiveCuriosity = useFrontCamera,
-                      faceDetected = lastFaceDetected,
+                      quality = 58,
+                      sourceMode = "foreground",
                     )
+                  com.example.service.LxrCameraVisionEngine.onForegroundFrame(snap)
+                  val jpegBytes = snap.jpegBytes
+                  if (jpegBytes != null && jpegBytes.isNotEmpty()) {
+                    live.sendCameraFrame(jpegBytes)
+                    sentFrameCount++
+                    val usable =
+                      com.example.service.LxrCameraVisionGuard.evaluateFrameUsability(snap, nowMs = now)
+                    if (!notifiedOn &&
+                      usable.hasFreshFrame &&
+                      (snap.faceDetected || sentFrameCount >= 2)
+                    ) {
+                      notifiedOn = true
+                      live.notifyCameraActive(
+                        active = true,
+                        isFrontCamera = useFrontCamera,
+                        proactiveCuriosity = useFrontCamera && snap.faceDetected,
+                        faceDetected = snap.faceDetected,
+                      )
+                    }
                   }
                 }
               }
             } catch (_: Throwable) {
             } finally {
               try {
-                bmp565?.recycle()
                 if (scaledBmp != null && scaledBmp !== rotBmp && scaledBmp !== bmp) scaledBmp?.recycle()
                 if (rotBmp != null && rotBmp !== bmp) rotBmp?.recycle()
                 bmp?.recycle()
@@ -160,14 +151,19 @@ fun LiveCamera(modifier: Modifier = Modifier) {
     )
     onDispose {
       try {
-        RiyaState.live?.notifyCameraActive(false, isFrontCamera = useFrontCamera)
-      } catch (_: Throwable) {}
-      try {
         analysisRef?.clearAnalyzer()
       } catch (_: Throwable) {}
       try {
         provider?.unbindAll()
       } catch (_: Throwable) {}
+      com.example.service.LxrCameraVisionEngine.setUiPreviewActive(false)
+      if (RiyaState.visionCameraActive.value && RiyaState.running.value) {
+        com.example.service.RiyaService.syncCameraState(ctx)
+      } else {
+        try {
+          RiyaState.live?.notifyCameraActive(false, isFrontCamera = useFrontCamera)
+        } catch (_: Throwable) {}
+      }
     }
   }
   DisposableEffect(Unit) {

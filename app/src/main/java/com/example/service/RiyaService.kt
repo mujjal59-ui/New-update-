@@ -41,7 +41,24 @@ class RiyaService : Service() {
 
   override fun onBind(i: Intent?): IBinder? = null
 
-  private fun computeForegroundType(): Int {
+  companion object {
+    const val ACTION_SYNC_CAMERA = "com.example.service.SYNC_CAMERA"
+
+    fun syncCameraState(context: Context) {
+      val appCtx = context.applicationContext
+      if (!RiyaState.running.value) {
+        LxrCameraVisionEngine.stopBackgroundCamera()
+        return
+      }
+      LxrCameraVisionEngine.ensureBackgroundCaptureIfActive(appCtx)
+      try {
+        val intent = Intent(appCtx, RiyaService::class.java).setAction(ACTION_SYNC_CAMERA)
+        ContextCompat.startForegroundService(appCtx, intent)
+      } catch (_: Throwable) {}
+    }
+  }
+
+  private fun computeForegroundType(allowCamera: Boolean = true): Int {
     var fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
     val hasFine =
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
@@ -52,23 +69,17 @@ class RiyaService : Service() {
     if (Build.VERSION.SDK_INT >= 29 && (hasFine || hasCoarse)) {
       fgsType = fgsType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
     }
+    if (allowCamera &&
+      Build.VERSION.SDK_INT >= 34 &&
+      RiyaState.visionCameraActive.value &&
+      LxrCameraVisionEngine.hasCameraPermission(this)
+    ) {
+      fgsType = fgsType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+    }
     return fgsType
   }
 
-  override fun onStartCommand(i: Intent?, flags: Int, id: Int): Int {
-    if (i?.action == "STOP") {
-      Store.setUserStoppedService(applicationContext, true)
-      stopSelf()
-      return START_NOT_STICKY
-    }
-    Store.setUserStoppedService(applicationContext, false)
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      getSystemService(NotificationManager::class.java)
-        .createNotificationChannel(
-          NotificationChannel("lxr_live", "LXR--AI Live", NotificationManager.IMPORTANCE_LOW)
-        )
-    }
+  private fun buildLiveNotification(): Notification {
     val stop =
       PendingIntent.getService(
         this,
@@ -83,31 +94,69 @@ class RiyaService : Service() {
         Intent(this, MainActivity::class.java),
         PendingIntent.FLAG_IMMUTABLE,
       )
-    val n =
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Notification.Builder(this, "lxr_live")
-          .setContentTitle("LXR--AI ২৪/৭ সক্রিয়")
-          .setContentText("স্ক্রিন লক/বন্ধ থাকলেও শুনছে ও স্ক্রিন পড়ছে")
-          .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-          .setContentIntent(open)
-          .addAction(0, "Stop", stop)
-          .setOngoing(true)
-          .build()
-      } else {
-        @Suppress("DEPRECATION")
-        Notification.Builder(this)
-          .setContentTitle("LXR--AI ২৪/৭ সক্রিয়")
-          .setContentText("Always listening & Accessibility Guard ON")
-          .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-          .setContentIntent(open)
-          .setOngoing(true)
-          .build()
-      }
-    if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(1, n, computeForegroundType())
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Notification.Builder(this, "lxr_live")
+        .setContentTitle("LXR--AI ২৪/৭ সক্রিয়")
+        .setContentText(
+          if (RiyaState.visionCameraActive.value) "ভিশন ক্যামেরা, মাইক ও স্ক্রিন রিডিং ব্যাকগ্রাউন্ডে চালু"
+          else "স্ক্রিন লক/বন্ধ থাকলেও শুনছে ও স্ক্রিন পড়ছে"
+        )
+        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setContentIntent(open)
+        .addAction(0, "Stop", stop)
+        .setOngoing(true)
+        .build()
     } else {
-      startForeground(1, n)
+      @Suppress("DEPRECATION")
+      Notification.Builder(this)
+        .setContentTitle("LXR--AI ২৪/৭ সক্রিয়")
+        .setContentText("Always listening & Accessibility Guard ON")
+        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setContentIntent(open)
+        .setOngoing(true)
+        .build()
     }
+  }
+
+  private fun promoteForegroundSafely(notification: Notification) {
+    if (Build.VERSION.SDK_INT >= 29) {
+      try {
+        startForeground(1, notification, computeForegroundType(allowCamera = true))
+      } catch (_: SecurityException) {
+        try {
+          startForeground(1, notification, computeForegroundType(allowCamera = false))
+        } catch (_: Throwable) {
+          startForeground(1, notification)
+        }
+      }
+    } else {
+      startForeground(1, notification)
+    }
+  }
+
+  override fun onStartCommand(i: Intent?, flags: Int, id: Int): Int {
+    if (i?.action == "STOP") {
+      Store.setUserStoppedService(applicationContext, true)
+      RiyaState.setVisionCameraActive(false)
+      LxrCameraVisionEngine.stopAll()
+      stopSelf()
+      return START_NOT_STICKY
+    }
+    if (i?.action == ACTION_SYNC_CAMERA) {
+      promoteForegroundSafely(buildLiveNotification())
+      LxrCameraVisionEngine.ensureBackgroundCaptureIfActive(applicationContext)
+      return START_STICKY
+    }
+    Store.setUserStoppedService(applicationContext, false)
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      getSystemService(NotificationManager::class.java)
+        .createNotificationChannel(
+          NotificationChannel("lxr_live", "LXR--AI Live", NotificationManager.IMPORTANCE_LOW)
+        )
+    }
+    promoteForegroundSafely(buildLiveNotification())
+    LxrCameraVisionEngine.ensureBackgroundCaptureIfActive(applicationContext)
 
     LxrCompanionAgent.start(applicationContext)
     AccessibilityStatusMonitor.startListening(this)
@@ -207,6 +256,8 @@ class RiyaService : Service() {
     live = null
     RiyaState.live = null
     RiyaState.running.value = false
+    RiyaState.setVisionCameraActive(false)
+    LxrCameraVisionEngine.stopAll()
     RiyaState.activeWorkLabel.value = null
     RiyaState.status.value = "Tap to speak"
     LxrFloatingOverlayManager.hide(applicationContext)

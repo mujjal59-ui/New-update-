@@ -251,7 +251,7 @@ fun RiyaApp() {
       arMsg = Store.autoReplyMessenger(ctx) && s.messengerAutoReply
     }
   }
-  var camOn by remember { mutableStateOf(false) }
+  val camOn by RiyaState.visionCameraActive.collectAsState()
 
   LaunchedEffect(Unit) {
     RiyaState.homeThemeIndex.value = Store.design(ctx)
@@ -271,11 +271,18 @@ fun RiyaApp() {
     }
   val camPerm =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      if (granted) camOn = true
+      if (granted) {
+        RiyaState.setVisionCameraActive(true)
+        RiyaService.syncCameraState(ctx)
+      }
     }
 
-  LaunchedEffect(running) { if (!running) camOn = false }
-  LaunchedEffect(camOn) { RiyaState.cameraOn = camOn }
+  LaunchedEffect(running) {
+    if (!running) {
+      RiyaState.setVisionCameraActive(false)
+      com.example.service.LxrCameraVisionEngine.stopAll()
+    }
+  }
 
   val requestedPage by RiyaRuntimeBridge.requestedUiPage.collectAsState()
   LaunchedEffect(requestedPage) {
@@ -361,9 +368,12 @@ fun RiyaApp() {
             if (!running) {
               Toast.makeText(ctx, "আগে মাইক অন করে LXR--AI চালু করুন", Toast.LENGTH_SHORT).show()
             } else if (camOn) {
-              camOn = false
+              RiyaState.setVisionCameraActive(false)
+              RiyaService.syncCameraState(ctx)
+              RiyaState.live?.notifyCameraActive(false, isFrontCamera = RiyaState.useFrontCamera.value)
             } else if (hasPerm(ctx, Manifest.permission.CAMERA)) {
-              camOn = true
+              RiyaState.setVisionCameraActive(true)
+              RiyaService.syncCameraState(ctx)
             } else {
               camPerm.launch(Manifest.permission.CAMERA)
             }

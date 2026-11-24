@@ -32,25 +32,54 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
+data class OrbTaskBadgeState(
+  val visible: Boolean = false,
+  val taskLabel: String? = null,
+  val isReadingScreen: Boolean = false,
+  val isSpeaking: Boolean = false,
+  val overlayPermitted: Boolean = false,
+) {
+  val compactBadgeText: String?
+    get() {
+      val cleanTask =
+        taskLabel
+          ?.trim()
+          ?.removePrefix("কাজ করছে:")
+          ?.trim()
+          ?.ifBlank { null }
+      return when {
+        isReadingScreen && cleanTask != null -> "👁️ স্ক্রিন পড়ছে • $cleanTask"
+        isReadingScreen -> "👁️ স্ক্রিন পড়ছে..."
+        cleanTask != null -> "⚙️ $cleanTask"
+        else -> null
+      }
+    }
+}
+
 /**
- * Floating 50%-opacity LXR--AI wake presence orb displayed directly over ANY active screen/app:
+ * Floating LXR--AI presence & live task/screen-reading orb displayed over ANY active screen/app:
  * - Hidden while LXR--AI listens quietly in background
- * - Appears immediately on top of ANY screen when Boss calls "LxR" or taps the Mic button
- * - Renders the inner Earth/planet avatar (`R.drawable.lxr_globe_avatar`) in a strict 1:1 circle
- *   surrounded by 5 glowing orbiting colored satellites at exact 50% opacity (`alpha = 0.50f`)
- * - Disappears automatically once the task & reply complete, while LXR--AI stays active in background
+ * - Appears immediately over any screen when Boss calls "LxR", taps Mic, OR LxR executes a task / reads the screen
+ * - Shows BOTH the active task (`⚙️ ...`) AND live screen-reading indicator (`👁️ স্ক্রিন পড়ছে...`) beneath the rotating 1:1 globe
+ * - Disappears automatically once the task & reply complete, while LXR--AI remains active 24/7 in background
  */
 object LxrFloatingOverlayManager {
   private const val TAG = "LxrFloatingOverlay"
   const val OVERLAY_ALPHA = 0.50f
+  const val ACTIVE_TASK_ALPHA = 0.86f
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private var pendingHideRunnable: Runnable? = null
 
   @Volatile private var windowManager: WindowManager? = null
+  @Volatile private var rootContainer: android.widget.LinearLayout? = null
   @Volatile private var overlayView: LxrPlanetOrbitView? = null
+  @Volatile private var taskBadgeView: android.widget.TextView? = null
   @Volatile private var layoutParams: WindowManager.LayoutParams? = null
   @Volatile private var workBannerView: android.widget.TextView? = null
+
+  val orbBadgeState = kotlinx.coroutines.flow.MutableStateFlow(OrbTaskBadgeState())
+
   @Volatile var isShowing: Boolean = false
     private set
   @Volatile var isSpeakingNow: Boolean = false
@@ -163,7 +192,130 @@ object LxrFloatingOverlayManager {
   fun showForWakeOrMic(context: Context): Boolean {
     cancelPendingHide()
     if (!Store.floatingOrbEnabled(context)) return false
+    val cur = orbBadgeState.value
+    orbBadgeState.value =
+      cur.copy(
+        visible = true,
+        overlayPermitted = Settings.canDrawOverlays(context.applicationContext),
+      )
     return show(context, openPermissionIfMissing = false, forceShow = false)
+  }
+
+  fun showForTask(
+    context: Context,
+    taskLabel: String?,
+    isReadingScreen: Boolean = false,
+  ): Boolean {
+    val appCtx = context.applicationContext
+    cancelPendingHide()
+    val cleanTask = taskLabel?.trim()?.ifBlank { null }
+    com.example.data.RiyaState.activeWorkLabel.value = cleanTask
+    val enabled = Store.floatingOrbEnabled(appCtx)
+    val canOverlay = Settings.canDrawOverlays(appCtx)
+    orbBadgeState.value =
+      orbBadgeState.value.copy(
+        visible = enabled,
+        taskLabel = cleanTask,
+        isReadingScreen = isReadingScreen,
+        isSpeaking = isSpeakingNow,
+        overlayPermitted = canOverlay,
+      )
+    if (!enabled) return false
+    val shown = show(appCtx, openPermissionIfMissing = false, forceShow = false)
+    refreshBadgeUi(appCtx)
+    return shown
+  }
+
+  fun setScreenReading(
+    context: Context,
+    reading: Boolean,
+    taskLabelOverride: String? = null,
+  ) {
+    val appCtx = context.applicationContext
+    val cur = orbBadgeState.value
+    val nextTask = taskLabelOverride?.trim()?.ifBlank { null } ?: cur.taskLabel
+    val enabled = Store.floatingOrbEnabled(appCtx)
+    val canOverlay = Settings.canDrawOverlays(appCtx)
+    orbBadgeState.value =
+      cur.copy(
+        visible = if (reading && enabled) true else cur.visible,
+        taskLabel = nextTask,
+        isReadingScreen = reading,
+        isSpeaking = isSpeakingNow,
+        overlayPermitted = canOverlay,
+      )
+    if (reading && enabled) {
+      cancelPendingHide()
+      if (!isShowing) {
+        show(appCtx, openPermissionIfMissing = false, forceShow = false)
+      }
+    }
+    refreshBadgeUi(appCtx)
+  }
+
+  fun completeTaskAndScheduleHide(
+    context: Context,
+    hideDelayMs: Long = 1200L,
+    keepShowingForWake: Boolean = false,
+  ) {
+    val appCtx = context.applicationContext
+    com.example.data.RiyaState.activeWorkLabel.value = null
+    orbBadgeState.value =
+      orbBadgeState.value.copy(
+        taskLabel = null,
+        isReadingScreen = false,
+        isSpeaking = isSpeakingNow,
+      )
+    refreshBadgeUi(appCtx)
+    if (!keepShowingForWake) {
+      scheduleAutoHide(appCtx, hideDelayMs)
+    }
+  }
+
+  private fun buildBadgeDrawable(density: Float, isReading: Boolean): android.graphics.drawable.GradientDrawable {
+    return android.graphics.drawable.GradientDrawable().apply {
+      shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+      cornerRadius = 12f * density
+      setColor(Color.parseColor("#D908142B"))
+      setStroke(
+        (1.4f * density).toInt().coerceAtLeast(2),
+        if (isReading) Color.parseColor("#00E5FF") else Color.parseColor("#7C4DFF"),
+      )
+    }
+  }
+
+  private fun refreshBadgeUi(appCtx: Context) {
+    mainHandler.post {
+      val state = orbBadgeState.value
+      val badgeText = state.compactBadgeText
+      val orb = overlayView
+      val badge = taskBadgeView
+      val container = rootContainer
+      if (orb != null) {
+        orb.alpha = if (badgeText != null) ACTIVE_TASK_ALPHA else OVERLAY_ALPHA
+        orb.setScreenReadingPulse(state.isReadingScreen)
+      }
+      if (badge != null) {
+        val density = appCtx.resources.displayMetrics.density
+        if (badgeText != null) {
+          badge.text = badgeText
+          badge.setTextColor(
+            if (state.isReadingScreen) Color.parseColor("#00E5FF") else Color.WHITE
+          )
+          badge.background = buildBadgeDrawable(density, state.isReadingScreen)
+          badge.visibility = View.VISIBLE
+        } else {
+          badge.visibility = View.GONE
+        }
+      }
+      val wm = windowManager
+      val params = layoutParams
+      if (wm != null && container != null && container.isAttachedToWindow && params != null) {
+        try {
+          wm.updateViewLayout(container, params)
+        } catch (_: Throwable) {}
+      }
+    }
   }
 
   fun show(
@@ -194,18 +346,21 @@ object LxrFloatingOverlayManager {
     mainHandler.post {
       try {
         if (!forceShow && !Store.floatingOrbEnabled(appCtx)) return@post
-        val existing = overlayView
-        if (existing != null && existing.isAttachedToWindow) {
-          existing.alpha = OVERLAY_ALPHA
-          existing.pulseWake()
+        val existingContainer = rootContainer
+        val existingOrb = overlayView
+        if (existingContainer != null && existingContainer.isAttachedToWindow && existingOrb != null) {
+          existingOrb.alpha =
+            if (orbBadgeState.value.compactBadgeText != null) ACTIVE_TASK_ALPHA else OVERLAY_ALPHA
+          existingOrb.pulseWake()
           isShowing = true
+          refreshBadgeUi(appCtx)
           return@post
         }
 
         val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val dm = appCtx.resources.displayMetrics
-        // Strictly square container so width == height at any screen density
-        val viewSizePx = (82f * dm.density).toInt().coerceAtLeast(164)
+        val orbSizePx = (82f * dm.density).toInt().coerceAtLeast(164)
+        val maxPillWidthPx = (186f * dm.density).toInt().coerceAtLeast(320)
         val type =
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -216,8 +371,8 @@ object LxrFloatingOverlayManager {
 
         val params =
           WindowManager.LayoutParams(
-            viewSizePx,
-            viewSizePx,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
               WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -225,21 +380,69 @@ object LxrFloatingOverlayManager {
             PixelFormat.TRANSLUCENT,
           ).apply {
             gravity = Gravity.TOP or Gravity.END
-            x = (16f * dm.density).toInt()
-            y = (108f * dm.density).toInt()
+            x = (14f * dm.density).toInt()
+            y = (104f * dm.density).toInt()
           }
 
-        val view =
+        val container =
+          android.widget.LinearLayout(appCtx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+          }
+
+        val orb =
           LxrPlanetOrbitView(appCtx).apply {
-            alpha = OVERLAY_ALPHA
-            attachWindowDragListener(wm, params, appCtx)
+            alpha =
+              if (orbBadgeState.value.compactBadgeText != null) ACTIVE_TASK_ALPHA else OVERLAY_ALPHA
+            layoutParams =
+              android.widget.LinearLayout.LayoutParams(orbSizePx, orbSizePx).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+              }
           }
 
-        wm.addView(view, params)
+        val padH = (9f * dm.density).toInt()
+        val padV = (4f * dm.density).toInt()
+        val badgeTopMarginPx = (3f * dm.density).toInt()
+        val badge =
+          android.widget.TextView(appCtx).apply {
+            textSize = 10.5f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            maxWidth = maxPillWidthPx
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(padH, padV, padH, padV)
+            background = buildBadgeDrawable(dm.density, orbBadgeState.value.isReadingScreen)
+            val initText = orbBadgeState.value.compactBadgeText
+            if (initText != null) {
+              text = initText
+              visibility = View.VISIBLE
+            } else {
+              visibility = View.GONE
+            }
+            layoutParams =
+              android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+              ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = badgeTopMarginPx
+              }
+          }
+
+        container.addView(orb)
+        container.addView(badge)
+        orb.attachWindowDragListener(container, wm, params, appCtx)
+
+        wm.addView(container, params)
         windowManager = wm
-        overlayView = view
+        rootContainer = container
+        overlayView = orb
+        taskBadgeView = badge
         layoutParams = params
         isShowing = true
+        refreshBadgeUi(appCtx)
       } catch (t: Throwable) {
         Log.w(TAG, "Unable to attach LxR floating overlay safely", t)
       }
@@ -249,19 +452,25 @@ object LxrFloatingOverlayManager {
 
   fun setSpeakingBoost(speaking: Boolean) {
     isSpeakingNow = speaking
+    orbBadgeState.value = orbBadgeState.value.copy(isSpeaking = speaking)
     mainHandler.post {
       overlayView?.setSpeakingBoost(speaking)
     }
   }
 
   /**
-   * Active task label is rendered exclusively inside the compact in-app status pill (`home_status_pill`)
-   * instead of spawning a persistent WindowManager popup across Android's top bar.
+   * Active task label is rendered inside the compact in-app status pill (`home_status_pill`)
+   * AND on the floating LxR Orb task pill while running tasks over other apps (without spawning a wide top-bar popup).
    */
   fun updateActiveWorkBanner(context: Context, label: String?) {
     val appCtx = context.applicationContext
     val clean = label?.trim()?.ifBlank { null }
     com.example.data.RiyaState.activeWorkLabel.value = clean
+    orbBadgeState.value =
+      orbBadgeState.value.copy(
+        taskLabel = clean,
+        isReadingScreen = if (clean == null) false else orbBadgeState.value.isReadingScreen,
+      )
     mainHandler.post {
       try {
         workBannerView?.let { v ->
@@ -275,29 +484,34 @@ object LxrFloatingOverlayManager {
         workBannerView = null
       }
     }
+    refreshBadgeUi(appCtx)
   }
 
   fun hide(context: Context? = null) {
     cancelPendingHide()
+    orbBadgeState.value = OrbTaskBadgeState(visible = false)
     mainHandler.post {
       try {
+        val container = rootContainer
         val view = overlayView
         val banner = workBannerView
         val wm =
           windowManager
             ?: (context?.applicationContext?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
-        if (view != null) {
-          view.stopAnimation()
-          if (view.isAttachedToWindow) {
-            wm?.removeViewImmediate(view)
-          }
+        view?.stopAnimation()
+        if (container != null && container.isAttachedToWindow) {
+          wm?.removeViewImmediate(container)
+        } else if (view != null && view.isAttachedToWindow) {
+          wm?.removeViewImmediate(view)
         }
         if (banner != null && banner.isAttachedToWindow) {
           wm?.removeViewImmediate(banner)
         }
       } catch (_: Throwable) {
       } finally {
+        rootContainer = null
         overlayView = null
+        taskBadgeView = null
         layoutParams = null
         workBannerView = null
         isShowing = false
@@ -329,6 +543,7 @@ object LxrFloatingOverlayManager {
     private val planetBitmap: Bitmap? = loadSquarePlanetBitmap(context)
     private var phaseDeg = 0f
     private var speakingBoost = false
+    private var screenReadingPulse = false
     private var pulseScale = 1f
     private var animator: ValueAnimator? = null
 
@@ -377,9 +592,16 @@ object LxrFloatingOverlayManager {
       speakingBoost = speaking
     }
 
+    fun setScreenReadingPulse(reading: Boolean) {
+      if (screenReadingPulse != reading) {
+        screenReadingPulse = reading
+        if (reading) pulseWake() else invalidate()
+      }
+    }
+
     override fun onAttachedToWindow() {
       super.onAttachedToWindow()
-      alpha = OVERLAY_ALPHA
+      alpha = if (orbBadgeState.value.compactBadgeText != null) ACTIVE_TASK_ALPHA else OVERLAY_ALPHA
       startAnimation()
     }
 
@@ -396,7 +618,12 @@ object LxrFloatingOverlayManager {
           repeatCount = ValueAnimator.INFINITE
           interpolator = LinearInterpolator()
           addUpdateListener { anim ->
-            val step = if (speakingBoost) 1.55f else 1f
+            val step =
+              when {
+                screenReadingPulse -> 1.95f
+                speakingBoost -> 1.55f
+                else -> 1f
+              }
             phaseDeg = ((anim.animatedValue as Float) * step) % 360f
             if (pulseScale > 1.001f) {
               pulseScale = 1f + (pulseScale - 1f) * 0.88f
@@ -474,14 +701,15 @@ object LxrFloatingOverlayManager {
       }
       canvas.restore()
 
-      ringPaint.color = Color.parseColor("#00E5FF")
-      ringPaint.alpha = 195
-      ringPaint.strokeWidth = 1.6f * density
+      ringPaint.color = Color.parseColor(if (screenReadingPulse) "#00E5FF" else "#00E5FF")
+      ringPaint.alpha = if (screenReadingPulse) 250 else 195
+      ringPaint.strokeWidth = (if (screenReadingPulse) 2.5f else 1.6f) * density
       canvas.drawCircle(cx, cy, planetRadius, ringPaint)
     }
 
     @SuppressLint("ClickableViewAccessibility")
     fun attachWindowDragListener(
+      container: View,
       wm: WindowManager,
       params: WindowManager.LayoutParams,
       appCtx: Context,
@@ -493,7 +721,7 @@ object LxrFloatingOverlayManager {
       var moved = false
       var downAt = 0L
 
-      setOnTouchListener { _, ev ->
+      container.setOnTouchListener { _, ev ->
         when (ev.action) {
           MotionEvent.ACTION_DOWN -> {
             startX = params.x
@@ -512,7 +740,7 @@ object LxrFloatingOverlayManager {
               params.x = (startX - dx.toInt()).coerceAtLeast(0)
               params.y = (startY + dy.toInt()).coerceAtLeast(0)
               try {
-                wm.updateViewLayout(this, params)
+                wm.updateViewLayout(container, params)
               } catch (_: Throwable) {}
             }
             true
