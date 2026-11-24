@@ -81,11 +81,18 @@ class AccessibilityKeepAliveService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
           )
         val alarm = appCtx.getSystemService(ALARM_SERVICE) as? AlarmManager
-        alarm?.set(
-          AlarmManager.ELAPSED_REALTIME_WAKEUP,
-          SystemClock.elapsedRealtime() + delayMs,
-          pi,
-        )
+        val triggerAt = SystemClock.elapsedRealtime() + delayMs
+        if (alarm != null) {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            LxrDeviceAndHardwareEngine.canScheduleExactAlarms(appCtx)
+          ) {
+            alarm.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+          } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+          } else {
+            alarm.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+          }
+        }
       } catch (_: Throwable) {}
     }
 

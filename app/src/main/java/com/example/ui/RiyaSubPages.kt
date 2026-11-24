@@ -257,6 +257,8 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       .isNotificationPolicyAccessGranted
   val writeOk = remember(stamp) { LxrDeviceAndHardwareEngine.isWriteSettingsGranted(ctx) }
   val assistOk = remember(stamp) { LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx) }
+  val devAdminOk = remember(stamp) { LxrDeviceAndHardwareEngine.isDeviceAdminActive(ctx) }
+  val alarmOk = remember(stamp) { LxrDeviceAndHardwareEngine.canScheduleExactAlarms(ctx) }
   val oemOk = prefs.getBoolean("oemDone", false)
   val accGo = { if (!Keep.ensureAccessibility(ctx)) Keep.openAccessibility(ctx) }
   val notifGo = { open(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
@@ -268,6 +270,8 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       open(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
     }
   }
+  val devAdminGo = { LxrDeviceAndHardwareEngine.openDeviceAdminSettings(ctx) }
+  val alarmGo = { LxrDeviceAndHardwareEngine.openExactAlarmSettings(ctx) }
   val batGo = { Keep.openBattery(ctx) }
   val oemGo = {
     prefs.edit().putBoolean("oemDone", true).apply()
@@ -293,6 +297,8 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       SpItem("overlay", overlayOk) { open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)) },
       SpItem("write", writeOk, writeGo),
       SpItem("assist", assistOk, assistGo),
+      SpItem("dev_admin", devAdminOk, devAdminGo),
+      SpItem("alarm", alarmOk, alarmGo),
       SpItem("bat", batOk, batGo),
       SpItem("dnd", dndOk) { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
       SpItem("oem", oemOk, oemGo),
@@ -407,6 +413,29 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         hint = "Android Default digital assistant app তালিকা থেকে LXR--AI নির্বাচন করুন।",
         hintLabel = "Assistant সেটিংস খুলুন",
         hintGo = assistGo,
+      ),
+      PermItem(
+        "Device Admin App",
+        "তাৎক্ষণিক স্ক্রিন লক ও ব্যাকগ্রাউন্ড সুরক্ষা নিশ্চিত করতে",
+        Icons.Filled.VerifiedUser,
+        listOf(CYBER_RED, CYBER_CYAN),
+        devAdminOk,
+        devAdminGo,
+        hint =
+          "'Controlled by Restricted Setting' দেখালে App info → উপরে ডানে ⋮ → Allow restricted settings চালু করে Activate দিন।",
+        hintLabel = "App info খুলুন (Restricted settings)",
+        hintGo = { Keep.openAppInfo(ctx) },
+      ),
+      PermItem(
+        "Alarms & reminders",
+        "সঠিক সময়ে রিমাইন্ডার, অ্যালার্ম ও ২৪/৭ ব্যাকগ্রাউন্ড সচল রাখতে",
+        Icons.Filled.Notifications,
+        listOf(CYBER_AMBER, CYBER_GREEN),
+        alarmOk,
+        alarmGo,
+        hint = "Alarms & reminders তালিকা থেকে LXR--AI এর সুইচ Allow করে দিন।",
+        hintLabel = "Alarms & reminders খুলুন",
+        hintGo = alarmGo,
       ),
       PermItem(
         "Battery optimization OFF",

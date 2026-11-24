@@ -2,8 +2,12 @@ package com.example.service
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
 import android.bluetooth.BluetoothManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -23,6 +27,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.os.SystemClock
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -503,6 +508,24 @@ object LxrDeviceAndHardwareEngine {
         )
       )
     }
+    if (!isDeviceAdminActive(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "device_admin",
+          titleBn = "Device Admin App সক্রিয় নয়",
+          detailBn = "বসের নির্দেশে দ্রুত স্ক্রিন লক ও ২৪/৭ ব্যাকগ্রাউন্ড স্থায়িত্বের জন্য Device Admin চালু রাখা যায় (Controlled by Restricted Setting হলে App info > ⋮ > Allow restricted settings চালু করতে হয়)।",
+        )
+      )
+    }
+    if (!canScheduleExactAlarms(ctx)) {
+      issues.add(
+        SelfHealthIssue(
+          key = "exact_alarm",
+          titleBn = "Alarms & reminders অনুমতি বন্ধ",
+          detailBn = "সঠিক সময়ে রিমাইন্ডার, অ্যালার্ম ও ২৪/৭ Doze রিস্টার্টের জন্য Alarms & reminders চালু থাকা দরকার।",
+        )
+      )
+    }
     if (com.example.data.Store.apiKey(ctx).isBlank()) {
       issues.add(
         SelfHealthIssue(
@@ -514,7 +537,7 @@ object LxrDeviceAndHardwareEngine {
     }
     val summary =
       if (issues.isEmpty()) {
-        "বস, আমি নিজের সম্পূর্ণ সিস্টেম পরীক্ষা করেছি — সব অনুমতি (Accessibility, Notification, Microphone, Camera, Modify System Settings, Location, Battery) ও ইঞ্জিন ১০০% সুস্থ আছে।"
+        "বস, আমি নিজের সম্পূর্ণ সিস্টেম পরীক্ষা করেছি — সব অনুমতি (Accessibility, Notification, Microphone, Camera, Device Admin, Alarms & reminders, Modify System Settings, Location, Battery) ও ইঞ্জিন ১০০% সুস্থ আছে।"
       } else {
         buildString {
           appendLine("বস, আমি নিজের সিস্টেম পরীক্ষা করে ${issues.size}টি সমস্যা পেয়েছি:")
@@ -579,11 +602,107 @@ object LxrDeviceAndHardwareEngine {
       k.contains("loc") || k.contains("gps") -> {
         controlDeviceSetting(ctx, RiyaAccessibilityService.instance, "location", enabled = true)
       }
+      k.contains("admin") -> {
+        openDeviceAdminSettings(ctx)
+        "বস, Device Admin Apps সেটিংস খুলেছি — এখান থেকে LXR--AI Activate করে দাও। 'Controlled by Restricted Setting' দেখালে App info > উপরে ডানে ⋮ > Allow restricted settings চালু করে আবার চেষ্টা করো।"
+      }
+      k.contains("alarm") || k.contains("remind") -> {
+        openExactAlarmSettings(ctx)
+        "বস, Alarms & reminders অনুমতি পেজ খুলেছি — LXR--AI এর সুইচ Allow করে দাও।"
+      }
       k.contains("app_info") -> {
         Keep.openAppInfo(ctx)
         "বস, LXR--AI App info পেজ খুলেছি।"
       }
       else -> diagnoseSelfHealth(ctx).summaryBn
+    }
+  }
+
+  fun isDeviceAdminActive(ctx: Context): Boolean {
+    return try {
+      val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+      dpm?.isAdminActive(ComponentName(ctx, LxrDeviceAdminReceiver::class.java)) == true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun openDeviceAdminSettings(ctx: Context) {
+    val adminComp = ComponentName(ctx, LxrDeviceAdminReceiver::class.java)
+    val addIntent =
+      Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+        .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp)
+        .putExtra(
+          DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+          "LXR--AI-কে তাৎক্ষণিক স্ক্রিন লক ও ২৪/৭ ব্যাকগ্রাউন্ড সুরক্ষা দিতে Activate করুন।",
+        )
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+      ctx.startActivity(addIntent)
+    } catch (_: Throwable) {
+      try {
+        ctx.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      } catch (_: Throwable) {
+        Keep.openAppInfo(ctx)
+      }
+    }
+  }
+
+  fun canScheduleExactAlarms(ctx: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+    return try {
+      val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+      am?.canScheduleExactAlarms() == true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun openExactAlarmSettings(ctx: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      try {
+        ctx.startActivity(
+          Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        return
+      } catch (_: Throwable) {}
+    }
+    Keep.openAppInfo(ctx)
+  }
+
+  fun scheduleExactReminder(ctx: Context, title: String, delaySeconds: Long): String {
+    val cleanTitle = title.trim().ifBlank { "বসের নির্ধারিত কাজ" }
+    val clampedSec = delaySeconds.coerceIn(5L, 86_400L * 7L)
+    val alarm = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+      ?: return "অ্যালার্ম সার্ভিস পাওয়া যায়নি বস।"
+    val triggerAtElapsed = SystemClock.elapsedRealtime() + (clampedSec * 1000L)
+    val reqCode = ((System.currentTimeMillis() / 1000L) % 50_000L).toInt() + 7000
+    val intent =
+      Intent(ctx.applicationContext, LxrReminderReceiver::class.java)
+        .putExtra(LxrReminderReceiver.EXTRA_REMINDER_TEXT, cleanTitle)
+    val pi =
+      PendingIntent.getBroadcast(
+        ctx.applicationContext,
+        reqCode,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+    val isExact = canScheduleExactAlarms(ctx)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      if (isExact) {
+        alarm.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
+      } else {
+        alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
+      }
+    } else {
+      alarm.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
+    }
+    com.example.data.Store.remember(ctx, "[রিমাইন্ডার সেট]: '$cleanTitle' (${clampedSec}s পর)")
+    return if (isExact) {
+      "হয়েছে, বস! '$cleanTitle' রিমাইন্ডারটি সঠিক সময়ে (${clampedSec} সেকেন্ড পর) বাজবে — Alarms & reminders এর মাধ্যমে সেট করেছি ✓"
+    } else {
+      "'$cleanTitle' রিমাইন্ডারটি (${clampedSec} সেকেন্ড পর) সেট করেছি বস, তবে একদম নিখুঁত সময়ের জন্য Permissions > Alarms & reminders চালু করে দাও।"
     }
   }
 

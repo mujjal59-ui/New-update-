@@ -226,7 +226,18 @@ class RiyaService : Service() {
           PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
         )
       val alarm = getSystemService(ALARM_SERVICE) as? AlarmManager
-      alarm?.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + delayMs, pi)
+      val triggerAt = SystemClock.elapsedRealtime() + delayMs
+      if (alarm != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+          LxrDeviceAndHardwareEngine.canScheduleExactAlarms(applicationContext)
+        ) {
+          alarm.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+          alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+        } else {
+          alarm.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+        }
+      }
     } catch (_: Exception) {}
   }
 

@@ -215,7 +215,18 @@ object MessageAgent {
     val pm = ctx.packageManager
     val li = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     val allowedPkgs = (listOf(app.pkg) + app.fallbackPkgs).map { it.lowercase() }.toSet()
-    val activities = pm.queryIntentActivities(li, 0)
+    val activities =
+      runCatching {
+        if (Build.VERSION.SDK_INT >= 33) {
+          pm.queryIntentActivities(
+            li,
+            android.content.pm.PackageManager.ResolveInfoFlags.of(android.content.pm.PackageManager.MATCH_ALL.toLong()),
+          )
+        } else {
+          @Suppress("DEPRECATION")
+          pm.queryIntentActivities(li, android.content.pm.PackageManager.MATCH_ALL)
+        }
+      }.getOrElse { pm.queryIntentActivities(li, 0) }
     val byPkg = activities.firstOrNull { it.activityInfo.packageName.lowercase() in allowedPkgs }
     val hit =
       byPkg

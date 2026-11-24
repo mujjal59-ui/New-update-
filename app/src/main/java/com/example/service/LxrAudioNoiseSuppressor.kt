@@ -182,27 +182,36 @@ class LxrAudioNoiseSuppressor(
 
     val desiredGain =
       if (!isSpeechActive) {
-        if (rejectedTonalHorn || rms < noiseFloorRms * 1.25) 0.0 else 0.04
+        when {
+          rejectedTonalHorn || looksLikeChirpOrHiss || looksLikeBtChirpOrHiss -> 0.06
+          rms < noiseFloorRms * 1.35 -> 0.18
+          else -> 0.45
+        }
       } else {
         val subtractRatio =
-          ((rms - 0.55 * noiseFloorRms) / max(rms, 1.0)).coerceIn(0.45, 1.0)
+          ((rms - 0.35 * noiseFloorRms) / max(rms, 1.0)).coerceIn(0.75, 1.0)
         val speechBoost =
-          if (!whisperBoostOn) 1.08
+          if (!whisperBoostOn) 1.02
           else {
-            val btWhisperFactor = if (bluetoothMode) 1.26 else 1.15
+            val btWhisperFactor = if (bluetoothMode) 1.14 else 1.06
             when {
-              rms < 120.0 -> 3.3 * btWhisperFactor
-              rms < 280.0 -> 2.6 * btWhisperFactor
-              rms < 650.0 -> 1.85 * btWhisperFactor
-              rms < 1400.0 -> 1.35 * btWhisperFactor
+              rms < 120.0 -> 1.65 * btWhisperFactor
+              rms < 280.0 -> 1.40 * btWhisperFactor
+              rms < 650.0 -> 1.18 * btWhisperFactor
               else -> 1.0
             }
           }
-        (subtractRatio * speechBoost).coerceIn(0.45, 4.2)
+        (subtractRatio * speechBoost).coerceIn(0.75, 1.95)
       }
 
-    val attackReleaseAlpha = if (desiredGain > currentGain) 0.58 else 0.30
-    val startGain = currentGain
+    val attackReleaseAlpha =
+      when {
+        isSpeechActive && desiredGain > currentGain -> 0.88
+        desiredGain > currentGain -> 0.62
+        else -> 0.30
+      }
+    val startGain =
+      if (isSpeechActive && currentGain < 0.55) 0.55 else currentGain
     val endGain = startGain * (1.0 - attackReleaseAlpha) + desiredGain * attackReleaseAlpha
     currentGain = endGain
 

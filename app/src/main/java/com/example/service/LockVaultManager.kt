@@ -800,6 +800,19 @@ object LockVaultManager {
   }
 
   fun relockScreen(acc: RiyaAccessibilityService?): Boolean {
+    return relockScreen(acc?.applicationContext, acc)
+  }
+
+  fun relockScreen(ctx: Context?, acc: RiyaAccessibilityService?): Boolean {
+    if (ctx != null && LxrDeviceAndHardwareEngine.isDeviceAdminActive(ctx)) {
+      try {
+        val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+        if (dpm != null) {
+          dpm.lockNow()
+          return true
+        }
+      } catch (_: Throwable) {}
+    }
     return try {
       acc?.global("lock") == "সম্পন্ন"
     } catch (t: Throwable) {

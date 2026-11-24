@@ -21,4 +21,5 @@
     <string name="video_creator_status_note">পূর্ণাঙ্গ ভিডিও স্টুডিও, অডিও ও ডাউনলোড এক্সপোর্ট প্রস্তুত।</string>
     <string name="seo_studio_status_note">ভিডিওর বিষয় লিখে Google Search, DuckDuckGo ও Wikipedia রিসার্চসহ পূর্ণাঙ্গ YouTube SEO প্যাকেজ তৈরি করুন ও Download/LxR/YouTube_SEO ফোল্ডারে সেভ করুন।</string>
     <string name="back_to_home_label">হোম স্ক্রিনে ফিরুন</string>
+    <string name="device_admin_desc">বসের নির্দেশে দ্রুত স্ক্রিন লক নিয়ন্ত্রণ এবং ২৪/৭ ব্যাকগ্রাউন্ড সিস্টেম স্থায়িত্ব রক্ষার জন্য।</string>
 </resources>
