@@ -86,15 +86,15 @@ object LiveVadConfig {
 
   fun effectiveEndOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
     when (delayOption) {
-      ReplyDelayOption.INSTANT -> 40L
-      ReplyDelayOption.FAST -> 180L
+      ReplyDelayOption.INSTANT -> 110L
+      ReplyDelayOption.FAST -> 220L
       ReplyDelayOption.NORMAL -> 320L
     }
 
   fun effectiveHangoverMs(delayOption: ReplyDelayOption): Long =
     when (delayOption) {
-      ReplyDelayOption.INSTANT -> 40L
-      ReplyDelayOption.FAST -> 160L
+      ReplyDelayOption.INSTANT -> 220L
+      ReplyDelayOption.FAST -> 250L
       ReplyDelayOption.NORMAL -> MIC_HANGOVER_MS
     }
 
@@ -204,8 +204,6 @@ object LxrSpeechInterruptGuard {
       "দাঁড়া",
       "স্টপ",
       "বাই",
-      "রুখো",
-      "হয়েছে",
       "stop",
       "wait",
       "listen",
@@ -582,21 +580,10 @@ class GeminiLive(private val ctx: Context) {
           if (btOut != null) {
             am.setCommunicationDevice(btOut)
           }
-          if (btOut?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || btInput?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
-            @Suppress("DEPRECATION")
-            runCatching {
-              am.startBluetoothSco()
-              am.isBluetoothScoOn = true
-            }
-          }
         } else {
           am.clearCommunicationDevice()
-          @Suppress("DEPRECATION")
-          runCatching {
-            am.stopBluetoothSco()
-            am.isBluetoothScoOn = false
-          }
           am.mode = AudioManager.MODE_NORMAL
+          @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = true }
         }
         val activeName = btLabel ?: btOut?.productName?.toString()?.takeIf { it.isNotBlank() }
         RiyaState.isBluetoothMicActive.value = btConnected
@@ -1621,22 +1608,8 @@ class GeminiLive(private val ctx: Context) {
           proactiveCountInStretch = 0
           uText.append(it)
           val snippet = uText.toString().takeLast(64)
-          val activeT = track
-          val headNow =
-            if (activeT != null && activeT.state == AudioTrack.STATE_INITIALIZED) {
-              runCatching { activeT.playbackHeadPosition.toLong() and 0xFFFFFFFFL }.getOrDefault(totalSpeakerFramesWritten)
-            } else totalSpeakerFramesWritten
-          val trackStillHasTail =
-            activeT != null &&
-              activeT.state == AudioTrack.STATE_INITIALIZED &&
-              activeT.playState == AudioTrack.PLAYSTATE_PLAYING &&
-              totalSpeakerFramesWritten > headNow
           val lxrSpeakingNow =
-            activeTurnHasStartedOutput ||
-              isAiSpeakingRecently() ||
-              RiyaVoiceManager.isActivelySpeaking() ||
-              trackStillHasTail ||
-              (System.currentTimeMillis() - lastSpeakerWriteMs) < 2200L
+            activeTurnHasStartedOutput || isAiSpeakingRecently() || RiyaVoiceManager.isActivelySpeaking()
           if (
             lxrSpeakingNow &&
               (LxrSpeechInterruptGuard.containsInterruptCommand(it) ||
@@ -3163,7 +3136,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 2, 8_192))
+        .setBufferSizeInBytes(maxOf(minAudioBuf * 4, 32_768))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -3378,32 +3351,24 @@ class GeminiLive(private val ctx: Context) {
               }
 
               val directThreshold =
-                when {
-                  usingBtAudio -> maxOf(1050.0, lastSpeakerOutputRms * 1.15)
-                  hasHwAec -> maxOf(1550.0, lastSpeakerOutputRms * 1.30)
-                  else -> maxOf(3100.0, lastSpeakerOutputRms * 1.50)
-                }
-              val directRatioNow =
-                when {
-                  usingBtAudio -> 1.15
-                  hasHwAec -> 1.30
-                  else -> 1.50
-                }
-              val requiredLoudChunks = 2
+                if (usingBtAudio) maxOf(2200.0, lastSpeakerOutputRms * 1.45)
+                else maxOf(7200.0, lastSpeakerOutputRms * 1.85)
+              val directRatioNow = if (usingBtAudio) 1.45 else 1.85
+              val requiredLoudChunks = if (usingBtAudio) 3 else 4
               if ((speakerSpeakingGuardNow || ttsSpeakingNow) && rawRms >= directThreshold) {
                 consecutiveLoudMicChunks++
               } else {
                 consecutiveLoudMicChunks = 0
               }
 
-              // Fast Voice Match barge-in check (80ms Boss speech) so "শোনো / থামো / স্টপ / বাই" breaks through immediately
+              // Fast Voice Match barge-in check so Boss's true voice interrupts cleanly while speaker echo cannot
               var voiceMatchBargeInNow = false
               if (
                 (speakerSpeakingGuardNow || ttsSpeakingNow) &&
                   voiceMatchActive &&
                   vmProfile != null &&
                   vmProfile.isComplete &&
-                  rawRms >= maxOf(950.0, lastSpeakerOutputRms * 1.05)
+                  rawRms >= maxOf(1600.0, lastSpeakerOutputRms * 1.15)
               ) {
                 bargeVerifyStream.write(buf, 0, n)
                 if (bargeVerifyStream.size() >= 2560) {
@@ -3436,7 +3401,7 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
                   consecutiveLoudChunks = if (directLoudBargeIn) consecutiveLoudMicChunks else 0,
-                  phoneTailHoldMs = 110L,
+                  phoneTailHoldMs = 180L,
                   minDirectBargeInRms = directThreshold,
                   directRatio = directRatioNow,
                 )
@@ -3448,7 +3413,7 @@ class GeminiLive(private val ctx: Context) {
               ) {
                 // Genuine Boss interruption mid-speech: flush playback cleanly so LxR listens immediately
                 sentSpeechChunksThisTurn = 0
-                suppressStaleUntilMs = now + 2600L
+                suppressStaleUntilMs = now + 2200L
                 activeTurnHasStartedOutput = false
                 pendingVoiceDelayUntilMs = 0L
                 interruptSpeakerForBoss()
@@ -3492,16 +3457,17 @@ class GeminiLive(private val ctx: Context) {
               val delayOpt = ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value)
               val currentFlushMs = LiveVadConfig.effectiveEndOfTurnFlushMs(delayOpt)
               val currentHangoverMs = LiveVadConfig.effectiveHangoverMs(delayOpt)
+              val turnSilenceWindowMs = maxOf(currentHangoverMs + 140L, currentFlushMs)
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= currentHangoverMs
               val withinEndOfTurnSilence =
-                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= currentFlushMs
+                !isSoftMuted && bossActiveSpeechThisTurn && !withinHangover && lastVoiceMs > 0L && (now - lastVoiceMs) <= turnSilenceWindowMs
               val withinVmPauseGrace =
                 voiceMatchActive && gateState == 1 && !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= 650L
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
 
-              // Wait until Boss finishes full phrase (currentFlushMs) before flushing turn
+              // Wait until Boss finishes full phrase + silence tail before flushing turn (prevents chopping mid-word!)
               val justEndedTurn =
-                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > currentFlushMs
+                !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > turnSilenceWindowMs
 
               val activeProfile = vmProfile
               if (!voiceMatchActive || activeProfile == null || !activeProfile.isComplete) {

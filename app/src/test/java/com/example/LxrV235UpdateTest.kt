@@ -140,14 +140,14 @@ class LxrV235UpdateTest {
     assertFalse(LxrSpeechInterruptGuard.containsInterruptCommand("আজ আবহাওয়া কেমন"))
     assertFalse(LxrSpeechInterruptGuard.containsInterruptCommand("তোমাকে একটা গান শোনাও"))
 
-    assertEquals(40L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
-    assertEquals(40L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
+    assertEquals(110L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
+    assertEquals(220L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
     assertTrue(
       LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT) <
         LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.FAST),
     )
 
-    // Bluetooth mid-speech barge-in MUST unmute on 2 loud chunks OR VoiceMatch
+    // Bluetooth mid-speech barge-in MUST unmute when Boss speaks clearly above downlink bleed OR VoiceMatch
     assertFalse(
       AudioEchoGuard.shouldMuteMicWithBargeIn(
         usingBtAudio = true,
@@ -156,12 +156,12 @@ class LxrV235UpdateTest {
         isSpeakerAudiblyPlayingNow = true,
         ttsIsSpeaking = false,
         lastAudibleStopMs = 10_000L,
-        rawRms = 1200.0,
-        lastSpeakerOutputRms = 900.0,
+        rawRms = 2400.0,
+        lastSpeakerOutputRms = 1100.0,
         voiceMatchBargeIn = false,
-        consecutiveLoudChunks = 2,
-        minDirectBargeInRms = 1050.0,
-        directRatio = 1.15,
+        consecutiveLoudChunks = 3,
+        minDirectBargeInRms = 2200.0,
+        directRatio = 1.45,
       ),
     )
     assertFalse(

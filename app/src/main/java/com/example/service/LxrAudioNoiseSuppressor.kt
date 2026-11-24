@@ -116,11 +116,11 @@ class LxrAudioNoiseSuppressor(
     }
     val rejectedTonalHorn = consecutiveTonalFrames >= 2
 
-    // 2. Sharp bird chirp / shrill whistle / dog bark transient detector:
-    // Very high ZCR (> 0.44, e.g. >3500 Hz chirps/squeaks) or explosive impulsive bark spike (crest > 6.8 without sustained formants)
-    val looksLikeChirpOrHiss = zcrRate > 0.44 && !bluetoothMode
-    val looksLikeBtChirpOrHiss = zcrRate > 0.48 && bluetoothMode
-    val looksLikeSuddenBarkOrClap = crestFactor > 6.8 && zcrRate > 0.28 && consecutiveSpeechCandidates == 0
+    // 2. Sharp bird chirp / shrill pure whistle / dog bark transient detector:
+    // Narrowband high-freq whistles/chirps have high ZCR + low crest factor (<2.2); wideband human fricatives (শ, স, থ, ছ) have higher crest/roughness or accompany active speech.
+    val looksLikeChirpOrHiss = zcrRate > 0.44 && crestFactor < 2.2 && speechHangFrames == 0 && !bluetoothMode
+    val looksLikeBtChirpOrHiss = zcrRate > 0.48 && crestFactor < 2.2 && speechHangFrames == 0 && bluetoothMode
+    val looksLikeSuddenBarkOrClap = crestFactor > 7.4 && zcrRate > 0.30 && consecutiveSpeechCandidates == 0 && speechHangFrames == 0
 
     // Speech thresholds: ultra-sensitive for soft Bluetooth whispers when whisperBoostOn is active
     val baseMinSpeech =
@@ -139,18 +139,18 @@ class LxrAudioNoiseSuppressor(
     val snrThreshold = max(baseMinSpeech, noiseFloorRms * requiredSnr)
 
     val speechBandOk =
-      if (bluetoothMode) zcrRate in 0.014..0.46 else zcrRate in 0.015..0.43
+      if (bluetoothMode) zcrRate in 0.012..0.58 else zcrRate in 0.012..0.58
     val acousticNotNonHuman =
       !rejectedTonalHorn &&
         !looksLikeChirpOrHiss &&
         !looksLikeBtChirpOrHiss &&
         !looksLikeSuddenBarkOrClap &&
-        spectralRoughness in 0.04..1.85
+        spectralRoughness in 0.03..1.92
 
     val candidate = rms >= snrThreshold && speechBandOk && acousticNotNonHuman
     val strongSpeech =
-      rms >= snrThreshold * 1.40 &&
-        (speechBandOk || (rms > snrThreshold * 2.2 && zcrRate <= 0.46)) &&
+      rms >= snrThreshold * 1.35 &&
+        (speechBandOk || (rms > snrThreshold * 2.0 && zcrRate <= 0.60)) &&
         acousticNotNonHuman
 
     if (candidate) {
@@ -163,8 +163,10 @@ class LxrAudioNoiseSuppressor(
       strongSpeech ||
         (candidate && (speechHangFrames > 0 || consecutiveSpeechCandidates >= 2))
 
-    if (rawSpeechDetected) {
-      speechHangFrames = 1
+    if (rejectedTonalHorn || looksLikeChirpOrHiss || looksLikeBtChirpOrHiss) {
+      speechHangFrames = 0
+    } else if (rawSpeechDetected) {
+      speechHangFrames = 3
     } else if (speechHangFrames > 0) {
       speechHangFrames--
     }
