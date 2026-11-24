@@ -554,6 +554,9 @@ fun RiyaHomeScreen(
       if (isCharacterTheme) maxOf(oy + 0.128f * dh, statusTopDp + 4f)
       else maxOf(oy + 0.168f * dh, statusTopDp + 10f)
 
+    val shownStatusText = activeWorkLabel?.takeIf { it.isNotBlank() } ?: status
+    val isDoingWorkNow = !activeWorkLabel.isNullOrBlank()
+
     Column(
       modifier =
         Modifier
@@ -571,17 +574,21 @@ fun RiyaHomeScreen(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
-            text = status,
+            text = shownStatusText,
             fontSize = 10.5.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White,
+            color = if (isDoingWorkNow) CYBER_CYAN else Color.White,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier =
               Modifier
                 .testTag("home_status_pill")
-                .background(Color(0xD0050B1E), RoundedCornerShape(16.dp))
-                .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
+                .background(if (isDoingWorkNow) Color(0xE806142E) else Color(0xD0050B1E), RoundedCornerShape(16.dp))
+                .border(
+                  if (isDoingWorkNow) 1.2.dp else 1.dp,
+                  CYBER_CYAN.copy(alpha = if (isDoingWorkNow) 0.95f else 0.65f),
+                  RoundedCornerShape(16.dp),
+                )
                 .padding(horizontal = 9.dp, vertical = 2.dp),
           )
           Text(
@@ -604,17 +611,21 @@ fun RiyaHomeScreen(
         }
       } else {
         Text(
-          text = status,
+          text = shownStatusText,
           fontSize = if (isCharacterTheme) 11.sp else 12.sp,
           fontWeight = FontWeight.SemiBold,
-          color = Color.White,
+          color = if (isDoingWorkNow) CYBER_CYAN else Color.White,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           modifier =
             Modifier
               .testTag("home_status_pill")
-              .background(Color(0xCC050B1E), RoundedCornerShape(20.dp))
-              .border(1.dp, CYBER_CYAN.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+              .background(if (isDoingWorkNow) Color(0xE806142E) else Color(0xCC050B1E), RoundedCornerShape(20.dp))
+              .border(
+                if (isDoingWorkNow) 1.2.dp else 1.dp,
+                CYBER_CYAN.copy(alpha = if (isDoingWorkNow) 0.95f else 0.65f),
+                RoundedCornerShape(20.dp),
+              )
               .padding(horizontal = 12.dp, vertical = if (isCharacterTheme) 2.dp else 3.dp),
         )
 
@@ -637,28 +648,6 @@ fun RiyaHomeScreen(
                   RoundedCornerShape(14.dp),
                 )
                 .padding(horizontal = 9.dp, vertical = 2.dp),
-          )
-        }
-      }
-
-      if (!activeWorkLabel.isNullOrBlank()) {
-        Row(
-          modifier =
-            Modifier
-              .testTag("active_work_banner")
-              .clip(RoundedCornerShape(16.dp))
-              .background(Color(0xE806142E))
-              .border(1.2.dp, CYBER_CYAN, RoundedCornerShape(16.dp))
-              .padding(horizontal = 10.dp, vertical = 3.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = activeWorkLabel.orEmpty(),
-            fontSize = if (isCharacterTheme) 9.5.sp else 10.sp,
-            fontWeight = FontWeight.Bold,
-            color = CYBER_CYAN,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
           )
         }
       }

@@ -254,72 +254,25 @@ object LxrFloatingOverlayManager {
     }
   }
 
+  /**
+   * Active task label is rendered exclusively inside the compact in-app status pill (`home_status_pill`)
+   * instead of spawning a persistent WindowManager popup across Android's top bar.
+   */
   fun updateActiveWorkBanner(context: Context, label: String?) {
     val appCtx = context.applicationContext
-    val clean = label?.trim().orEmpty()
+    val clean = label?.trim()?.ifBlank { null }
+    com.example.data.RiyaState.activeWorkLabel.value = clean
     mainHandler.post {
       try {
-        val wm =
-          windowManager
-            ?: (appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
-        if (clean.isEmpty() || !Settings.canDrawOverlays(appCtx)) {
-          workBannerView?.let { v ->
-            if (v.isAttachedToWindow) wm?.removeViewImmediate(v)
-          }
-          workBannerView = null
-          return@post
+        workBannerView?.let { v ->
+          val wm =
+            windowManager
+              ?: (appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+          if (v.isAttachedToWindow) wm?.removeViewImmediate(v)
         }
-        val existing = workBannerView
-        if (existing != null && existing.isAttachedToWindow) {
-          existing.text = clean
-          return@post
-        }
-        val dm = appCtx.resources.displayMetrics
-        val type =
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-          } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-          }
-        val params =
-          WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-              WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT,
-          ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = (38f * dm.density).toInt()
-          }
-        val tv =
-          android.widget.TextView(appCtx).apply {
-            text = clean
-            setTextColor(Color.WHITE)
-            textSize = 11.5f
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            maxWidth = (dm.widthPixels * 0.86f).toInt()
-            val padH = (14f * dm.density).toInt()
-            val padV = (7f * dm.density).toInt()
-            setPadding(padH, padV, padH, padV)
-            background =
-              android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                cornerRadius = 22f * dm.density
-                setColor(Color.argb(228, 8, 16, 40))
-                setStroke((1.5f * dm.density).toInt().coerceAtLeast(2), Color.parseColor("#00E5FF"))
-              }
-            elevation = 8f * dm.density
-          }
-        wm?.addView(tv, params)
-        windowManager = wm
-        workBannerView = tv
-      } catch (t: Throwable) {
-        Log.w(TAG, "Unable to show active work banner", t)
+      } catch (_: Throwable) {
+      } finally {
+        workBannerView = null
       }
     }
   }

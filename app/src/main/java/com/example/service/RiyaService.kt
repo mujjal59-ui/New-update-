@@ -207,6 +207,7 @@ class RiyaService : Service() {
     live = null
     RiyaState.live = null
     RiyaState.running.value = false
+    RiyaState.activeWorkLabel.value = null
     RiyaState.status.value = "Tap to speak"
     LxrFloatingOverlayManager.hide(applicationContext)
     if (shouldStayAlive) {

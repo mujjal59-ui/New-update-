@@ -467,6 +467,24 @@ object LxrDeviceAndHardwareEngine {
         )
       )
     }
+    if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+      issues.add(
+        SelfHealthIssue(
+          key = "microphone",
+          titleBn = "Microphone (মাইক্রোফোন) অনুমতি বন্ধ",
+          detailBn = "তোমার কথা ও কমান্ড শোনার জন্য মাইক্রোফোন অনুমতি চালু থাকা জরুরি।",
+        )
+      )
+    }
+    if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+      issues.add(
+        SelfHealthIssue(
+          key = "camera",
+          titleBn = "Camera (ক্যামেরা) অনুমতি বন্ধ",
+          detailBn = "ফ্রন্ট ক্যামেরায় তোমাকে চিনতে ও লাইভ দৃশ্য দেখতে ক্যামেরা অনুমতি দরকার।",
+        )
+      )
+    }
     if (!isDefaultAssistant(ctx)) {
       issues.add(
         SelfHealthIssue(
@@ -496,14 +514,14 @@ object LxrDeviceAndHardwareEngine {
     }
     val summary =
       if (issues.isEmpty()) {
-        "বস, আমি নিজের সম্পূর্ণ সিস্টেম পরীক্ষা করেছি — সব অনুমতি (Accessibility, Notification, Modify System Settings, Location, Battery) ও ইঞ্জিন ১০০% সুস্থ আছে।"
+        "বস, আমি নিজের সম্পূর্ণ সিস্টেম পরীক্ষা করেছি — সব অনুমতি (Accessibility, Notification, Microphone, Camera, Modify System Settings, Location, Battery) ও ইঞ্জিন ১০০% সুস্থ আছে।"
       } else {
         buildString {
           appendLine("বস, আমি নিজের সিস্টেম পরীক্ষা করে ${issues.size}টি সমস্যা পেয়েছি:")
           issues.forEachIndexed { i, iss ->
             appendLine("${i + 1}. ${iss.titleBn} (key=${iss.key}) — ${iss.detailBn}")
           }
-          append("বস অনুমতি দিলে আমি এখনই যেকোনো সমস্যার সেটিংস খুলে ঠিক করে নিতে পারি।")
+          append("বস, তোমার অনুমতি পেলে আমি এখনই এই সমস্যার সেটিংস খুলে ঠিক করে দিতে পারি।")
         }.trim()
       }
     return SelfDiagnosisReport(isHealthy = issues.isEmpty(), summaryBn = summary, issues = issues)
@@ -513,15 +531,19 @@ object LxrDeviceAndHardwareEngine {
     val k = issueKey.trim().lowercase()
     return when {
       k.contains("access") -> {
-        if (Keep.ensureAccessibility(ctx)) "হয়েছে বস! Accessibility স্বয়ংক্রিয়ভাবে চালু করেছি ✓"
+        if (Keep.ensureAccessibility(ctx)) "হয়েছে বস! তোমার অনুমতি নিয়ে Accessibility স্বয়ংক্রিয়ভাবে চালু করেছি ✓"
         else {
           Keep.openAccessibility(ctx)
-          "বস, Accessibility সেটিংস খুলেছি — অনুগ্রহ করে LXR--AI অন করে দিন।"
+          "বস, তোমার অনুমতি নিয়ে Accessibility সেটিংস খুলেছি — দয়া করে LXR--AI অন করে দাও।"
         }
       }
       k.contains("notif") -> {
         Keep.openNotificationAccess(ctx)
-        "বস, Notification Access সেটিংস খুলেছি।"
+        "বস, তোমার অনুমতি নিয়ে Notification Access সেটিংস খুলেছি।"
+      }
+      k.contains("mic") || k.contains("cam") -> {
+        Keep.openAppInfo(ctx)
+        "বস, তোমার অনুমতি নিয়ে App Permissions পেজ খুলেছি — এখান থেকে Microphone ও Camera অনুমতি Allow করে দাও।"
       }
       k.contains("overlay") -> {
         ctx.startActivity(
@@ -536,10 +558,10 @@ object LxrDeviceAndHardwareEngine {
             Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}"))
               .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
           )
-          "বস, Modify System Settings খুলেছি। সুইচ ধূসর থাকলে App info > উপরে ডানে ⋮ মেনু থেকে Allow restricted settings চালু করে দিলে এটি অন হয়ে যাবে।"
+          "বস, Modify System Settings খুলেছি। সুইচ ধূসর থাকলে App info > উপরে ডানে ⋮ মেনু থেকে Allow restricted settings চালু করে দাও।"
         } catch (_: Throwable) {
           Keep.openAppInfo(ctx)
-          "বস, App info খুলেছি — সেখান থেকে Restricted settings অনুমতি দিন।"
+          "বস, App info খুলেছি — সেখান থেকে Restricted settings অনুমতি দাও।"
         }
       }
       k.contains("assist") -> {
@@ -548,7 +570,7 @@ object LxrDeviceAndHardwareEngine {
         } catch (_: Throwable) {
           ctx.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
-        "বস, Default digital assistant সেটিংস খুলেছি — এখান থেকে LXR--AI নির্বাচন করে দিন।"
+        "বস, Default digital assistant সেটিংস খুলেছি — এখান থেকে LXR--AI নির্বাচন করে দাও।"
       }
       k.contains("bat") -> {
         Keep.openBattery(ctx)

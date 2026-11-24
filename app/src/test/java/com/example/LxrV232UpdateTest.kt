@@ -75,7 +75,7 @@ class LxrV232UpdateTest {
         "control_device_setting",
         JSONObject().put("setting_name", "location"),
       )
-    assertTrue(gpsLabel.contains("LXR--AI এখন কাজ করছে"))
+    assertTrue(gpsLabel.contains("কাজ করছে:"))
     assertTrue(gpsLabel.contains("GPS / Location"))
 
     val waLabel =
@@ -83,7 +83,7 @@ class LxrV232UpdateTest {
         "open_app",
         JSONObject().put("app_name", "WhatsApp"),
       )
-    assertTrue(waLabel.contains("LXR--AI এখন কাজ করছে"))
+    assertTrue(waLabel.contains("কাজ করছে:"))
     assertTrue(waLabel.contains("WhatsApp"))
 
     val homeLabel =
@@ -112,7 +112,7 @@ class LxrV232UpdateTest {
         }
       }
       composeTestRule.waitForIdle()
-      composeTestRule.onNodeWithTag("active_work_banner").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("home_status_pill").assertIsDisplayed()
       composeTestRule.onNodeWithText(gpsLabel, substring = true).assertIsDisplayed()
     } finally {
       RiyaState.activeWorkLabel.value = null
@@ -160,7 +160,7 @@ class LxrV232UpdateTest {
     assertTrue(RiyaPersona.TEXT.contains("v2.32.0"))
     assertTrue(RiyaPersona.TEXT.contains("v2.31.0"))
     assertTrue(RiyaPersona.TEXT.contains("v2.30.0"))
-    assertTrue(RiyaPersona.TEXT.contains("LXR--AI এখন কাজ করছে"))
+    assertTrue(RiyaPersona.TEXT.contains("home_status_pill"))
     assertTrue(RiyaPersona.TEXT.contains("Slide again to unlock"))
   }
 }
