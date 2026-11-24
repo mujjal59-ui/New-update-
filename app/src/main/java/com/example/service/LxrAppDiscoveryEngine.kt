@@ -1,9 +1,14 @@
 package com.example.service
 
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.ContactsContract
+import android.provider.MediaStore
+import android.provider.Settings
+import java.text.Normalizer
 
 data class InstalledAppEntry(
   val label: String,
@@ -13,20 +18,23 @@ data class InstalledAppEntry(
 
 /**
  * Exhaustive, package-visibility-aware App Discovery & Launch Resolver (Android 7..16).
- * Resolves Bengali + English + OEM (Infinix/Transsion) app names without falsely reporting
- * installed apps as missing.
+ * Resolves Bengali (NFC/NFD) + English + OEM (Infinix/Transsion) app names and system category
+ * intents without falsely reporting installed apps as missing, and launches safely past Android 14-16 BAL.
  */
 object LxrAppDiscoveryEngine {
   private val ALIAS_TO_KEYWORDS: Map<String, List<String>> =
     mapOf(
       "whatsapp" to listOf("whatsapp", "wa business", "whatsapp business", "w4b"),
       "হোয়াটসঅ্যাপ" to listOf("whatsapp"),
-      "হোয়াটসঅ্যাপ" to listOf("whatsapp"),
+      "ওয়াটসঅ্যাপ" to listOf("whatsapp"),
+      "হোয়াটস্যাপ" to listOf("whatsapp"),
       "imo" to listOf("imo", "imoim", "imo hd", "imo lite"),
       "ইমো" to listOf("imo", "imoim"),
       "ইমু" to listOf("imo", "imoim"),
       "messenger" to listOf("messenger", "orca", "mlite"),
       "মেসেঞ্জার" to listOf("messenger", "orca"),
+      "মেসেনজার" to listOf("messenger", "orca"),
+      "ম্যাসেঞ্জার" to listOf("messenger", "orca"),
       "facebook" to listOf("facebook", "katana", "fb lite", "facebook lite"),
       "ফেসবুক" to listOf("facebook", "katana"),
       "fb" to listOf("facebook", "katana"),
@@ -45,24 +53,30 @@ object LxrAppDiscoveryEngine {
       "ছবি" to listOf("gallery", "photos", "ai gallery"),
       "photos" to listOf("photos", "gallery", "ai gallery"),
       "calculator" to listOf("calculator", "calc"),
-      "ক্যালকুলেটর" to listOf("calculator"),
+      "ক্যালকুলেটর" to listOf("calculator", "calc"),
       "settings" to listOf("settings", "setting"),
       "সেটিংস" to listOf("settings"),
       "সেটিং" to listOf("settings"),
-      "contacts" to listOf("contacts", "contact"),
-      "কন্টাক্ট" to listOf("contacts"),
-      "phone" to listOf("phone", "dialer", "caller", "smart.caller"),
-      "ডায়ালার" to listOf("phone", "dialer", "caller"),
-      "ডায়ালার" to listOf("phone", "dialer", "caller"),
-      "ফোন" to listOf("phone", "dialer", "caller"),
-      "messages" to listOf("messages", "messaging", "sms"),
-      "মেসেজ" to listOf("messages", "messaging"),
+      "contacts" to listOf("contacts", "contact", "people", "phonebook"),
+      "কন্টাক্ট" to listOf("contacts", "contact"),
+      "কনট্যাক্ট" to listOf("contacts", "contact"),
+      "কন্টাক্টস" to listOf("contacts", "contact"),
+      "ফোনবুক" to listOf("contacts", "contact"),
+      "phone" to listOf("phone", "dialer", "caller", "smart.caller", "telecom"),
+      "dialer" to listOf("phone", "dialer", "caller", "smart.caller", "telecom"),
+      "ডায়ালার" to listOf("phone", "dialer", "caller", "smart.caller"),
+      "ফোন" to listOf("phone", "dialer", "caller", "smart.caller"),
+      "কল" to listOf("phone", "dialer", "caller"),
+      "messages" to listOf("messages", "messaging", "sms", "mms"),
+      "মেসেজ" to listOf("messages", "messaging", "sms"),
+      "মেসেজেস" to listOf("messages", "messaging", "sms"),
+      "এসএমএস" to listOf("messages", "messaging", "sms"),
       "clock" to listOf("clock", "deskclock", "alarm"),
       "ঘড়ি" to listOf("clock", "deskclock"),
       "অ্যালার্ম" to listOf("clock", "deskclock"),
       "calendar" to listOf("calendar"),
       "ক্যালেন্ডার" to listOf("calendar"),
-      "files" to listOf("files", "file manager", "filemanager", "my files"),
+      "files" to listOf("files", "file manager", "filemanager", "my files", "nbu.files"),
       "ফাইল" to listOf("files", "file manager", "filemanager"),
       "gmail" to listOf("gmail", "gm"),
       "জিমেইল" to listOf("gmail"),
@@ -100,10 +114,20 @@ object LxrAppDiscoveryEngine {
       "মিউজিক" to listOf("music"),
     )
 
+  fun normalizeUnicode(raw: String): String =
+    Normalizer.normalize(raw, Normalizer.Form.NFC)
+      .replace("\u200B", "")
+      .replace("\u200C", "")
+      .replace("\u200D", "")
+      .replace("\uFEFF", "")
+
   fun normalizeQuery(raw: String): String =
-    raw
+    normalizeUnicode(raw)
       .lowercase()
-      .replace(Regex("(অ্যাপটি|অ্যাপস|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|ওপেন|করো|দাও|\\bapp\\b|\\bopen\\b|\\blaunch\\b)"), " ")
+      .replace(
+        Regex("(?:^|[\\s,।!?])(?:অ্যাপস|অ্যাপ্স|অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|খুলে|ওপেন|করো|চালু|দাও|apps|app|open|launch)(?=[\\s,।!?]|$)"),
+        " ",
+      )
       .replace(Regex("\\s+"), " ")
       .trim()
 
@@ -114,11 +138,125 @@ object LxrAppDiscoveryEngine {
     val words = clean.split(Regex("[\\s.,:/\\-_]+")).filter { it.isNotBlank() }
     out.addAll(words)
     ALIAS_TO_KEYWORDS.forEach { (key, targets) ->
-      if (clean == key || words.any { it == key } || (key.length >= 3 && clean.contains(key))) {
+      val normKey = normalizeUnicode(key).lowercase()
+      if (clean == normKey || words.any { it == normKey } || (normKey.length >= 2 && clean.contains(normKey))) {
         out.addAll(targets)
       }
     }
     return out.toList()
+  }
+
+  /**
+   * Resolves core system app intents (Dialer, Contacts, Messages, Camera, Gallery, Calculator, Calendar, Settings)
+   * directly via Android PackageManager so OEM package differences never fail.
+   */
+  fun resolveSystemCategoryIntent(ctx: Context, rawQuery: String): Pair<String, Intent>? {
+    val terms = expandSearchTerms(rawQuery)
+    if (terms.isEmpty()) return null
+    val pm = ctx.packageManager
+
+    fun pickResolved(intent: Intent): Intent? {
+      val resolved =
+        runCatching {
+          if (Build.VERSION.SDK_INT >= 33) {
+            pm.queryIntentActivities(
+              intent,
+              PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()),
+            )
+          } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+          }
+        }.getOrDefault(emptyList())
+      val candidate = resolved.firstOrNull { it.activityInfo != null && it.activityInfo.packageName != ctx.packageName }
+      if (candidate != null) {
+        val pkg = candidate.activityInfo.packageName
+        pm.getLaunchIntentForPackage(pkg)?.let {
+          return it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        }
+        return Intent(intent)
+          .setClassName(pkg, candidate.activityInfo.name)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+      }
+      return null
+    }
+
+    val checks =
+      listOf(
+        Triple(listOf("phone", "dialer", "caller", "smart.caller", "ডায়ালার", "ফোন", "কল"), "Phone") {
+          Intent(Intent.ACTION_DIAL)
+        },
+        Triple(listOf("contacts", "contact", "people", "phonebook", "কন্টাক্ট", "কনট্যাক্ট", "কন্টাক্টস", "ফোনবুক"), "Contacts") {
+          Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+        },
+        Triple(listOf("messages", "messaging", "sms", "mms", "মেসেজ", "মেসেজেস", "এসএমএস"), "Messages") {
+          Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MESSAGING)
+        },
+        Triple(listOf("camera", "ক্যামেরা"), "Camera") {
+          Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+        },
+        Triple(listOf("gallery", "photos", "ai gallery", "গ্যালারি", "ছবি"), "Gallery") {
+          Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY)
+        },
+        Triple(listOf("calculator", "calc", "ক্যালকুলেটর"), "Calculator") {
+          Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALCULATOR)
+        },
+        Triple(listOf("calendar", "ক্যালেন্ডার"), "Calendar") {
+          Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
+        },
+        Triple(listOf("settings", "সেটিংস", "সেটিং"), "Settings") {
+          Intent(Settings.ACTION_SETTINGS)
+        },
+      )
+
+    for ((keys, label, intentFactory) in checks) {
+      if (terms.any { t -> t in keys }) {
+        val intent = intentFactory()
+        pickResolved(intent)?.let { return label to it }
+        if (label == "Contacts") {
+          val catIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CONTACTS)
+          pickResolved(catIntent)?.let { return label to it }
+        }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Launches an Activity safely from background Service context even under Android 14/15/16 BAL rules,
+   * prioritizing AccessibilityService context and ActivityOptions BAL opt-in before standard fallback.
+   */
+  fun launchActivitySafely(
+    ctx: Context,
+    acc: RiyaAccessibilityService?,
+    intent: Intent,
+  ): Boolean {
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (acc != null) {
+      val accOk =
+        runCatching {
+          acc.startActivity(intent)
+          true
+        }.getOrDefault(false)
+      if (accOk) return true
+    }
+    if (Build.VERSION.SDK_INT >= 34) {
+      val balOk =
+        runCatching {
+          val opts =
+            ActivityOptions.makeBasic()
+              .setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+              )
+          ctx.startActivity(intent, opts.toBundle())
+          true
+        }.getOrDefault(false)
+      if (balOk) return true
+    }
+    return runCatching {
+      ctx.startActivity(intent)
+      true
+    }.getOrDefault(false)
   }
 
   fun queryAllLaunchableApps(ctx: Context): List<InstalledAppEntry> {
@@ -147,11 +285,43 @@ object LxrAppDiscoveryEngine {
       val act = ri.activityInfo?.name
       val dedupKey = "$pkg/$act"
       if (!seen.add(dedupKey)) continue
-      val label = runCatching { ri.loadLabel(pm).toString().trim() }.getOrDefault(pkg).ifBlank { pkg }
+      val label = normalizeUnicode(runCatching { ri.loadLabel(pm).toString().trim() }.getOrDefault(pkg)).ifBlank { pkg }
       entries.add(InstalledAppEntry(label = label, packageName = pkg, activityName = act))
     }
 
-    // Fallback: include any installed launchable apps returned by getInstalledApplications
+    // Fallback 1: query core system category intents so OEM Dialer / Contacts / SMS / Gallery are always included
+    val categoryIntents =
+      listOf(
+        Intent(Intent.ACTION_DIAL),
+        Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI),
+        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CONTACTS),
+        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MESSAGING),
+        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY),
+        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALCULATOR),
+        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR),
+      )
+    for (ci in categoryIntents) {
+      val resolved =
+        runCatching {
+          if (Build.VERSION.SDK_INT >= 33) {
+            pm.queryIntentActivities(ci, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
+          } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(ci, PackageManager.MATCH_ALL)
+          }
+        }.getOrDefault(emptyList())
+      for (ri in resolved) {
+        val pkg = ri.activityInfo?.packageName ?: continue
+        val act = ri.activityInfo?.name
+        if (pkg == ctx.packageName) continue
+        val dedupKey = "$pkg/$act"
+        if (!seen.add(dedupKey)) continue
+        val label = normalizeUnicode(runCatching { ri.loadLabel(pm).toString().trim() }.getOrDefault(pkg)).ifBlank { pkg }
+        entries.add(InstalledAppEntry(label = label, packageName = pkg, activityName = act))
+      }
+    }
+
+    // Fallback 2: include any installed launchable apps returned by getInstalledApplications
     val installedApps =
       runCatching {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -167,7 +337,7 @@ object LxrAppDiscoveryEngine {
       val pkg = ai.packageName ?: continue
       if (pkg in existingPkgs) continue
       val li = runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull() ?: continue
-      val label = runCatching { pm.getApplicationLabel(ai).toString().trim() }.getOrDefault(pkg).ifBlank { pkg }
+      val label = normalizeUnicode(runCatching { pm.getApplicationLabel(ai).toString().trim() }.getOrDefault(pkg)).ifBlank { pkg }
       entries.add(InstalledAppEntry(label = label, packageName = pkg, activityName = li.component?.className))
     }
 
@@ -182,7 +352,7 @@ object LxrAppDiscoveryEngine {
     if (terms.isEmpty() || installed.isEmpty()) return null
     val cleanQuery = normalizeQuery(rawQuery)
 
-    fun compact(s: String) = s.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
+    fun compact(s: String) = normalizeUnicode(s).lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
 
     // Strict guard against Messenger <-> Facebook or Messages mixups
     val wantsMessenger = "messenger" in terms || "মেসেঞ্জার" in terms
@@ -190,7 +360,7 @@ object LxrAppDiscoveryEngine {
 
     fun isBlockedCrossMatch(entry: InstalledAppEntry): Boolean {
       val p = entry.packageName.lowercase()
-      val l = entry.label.lowercase()
+      val l = normalizeUnicode(entry.label).lowercase()
       if (wantsMessenger && (p == "com.facebook.katana" || p == "com.facebook.lite")) return true
       if (wantsFacebook && (p.contains("orca") || p.contains("mlite") || l == "messenger")) return true
       return false
@@ -200,14 +370,14 @@ object LxrAppDiscoveryEngine {
     var bestScore = 0
     for (entry in installed) {
       if (isBlockedCrossMatch(entry)) continue
-      val lblLow = entry.label.lowercase().trim()
+      val lblLow = normalizeUnicode(entry.label).lowercase().trim()
       val lblComp = compact(lblLow)
       val pkgLow = entry.packageName.lowercase()
       var score = 0
 
       if (lblLow == cleanQuery || lblComp == compact(cleanQuery)) score = maxOf(score, 120)
       for (t in terms) {
-        val tLow = t.lowercase().trim()
+        val tLow = normalizeUnicode(t).lowercase().trim()
         val tComp = compact(tLow)
         if (tLow.isBlank()) continue
         when {
@@ -228,7 +398,7 @@ object LxrAppDiscoveryEngine {
 
   fun buildLaunchIntent(ctx: Context, entry: InstalledAppEntry): Intent? {
     val pm = ctx.packageManager
-    val direct = pm.getLaunchIntentForPackage(entry.packageName)
+    val direct = runCatching { pm.getLaunchIntentForPackage(entry.packageName) }.getOrNull()
     if (direct != null) {
       return direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     }
@@ -266,16 +436,43 @@ object LxrAppDiscoveryEngine {
     }
     return buildString {
       appendLine("📱 এই ফোনে মোট ${all.size}টি লঞ্চযোগ্য অ্যাপ ইনস্টল করা আছে:")
-      all.take(45).forEach { appendLine("• ${it.label} (${it.packageName})") }
-      if (all.size > 45) appendLine("...এবং আরও ${all.size - 45}টি অ্যাপ রয়েছে।")
+      all.take(60).forEach { appendLine("• ${it.label} (${it.packageName})") }
+      if (all.size > 60) appendLine("...এবং আরও ${all.size - 60}টি অ্যাপ রয়েছে।")
     }.trim()
   }
 
-  fun buildInstalledAppsSummaryForPrompt(ctx: Context, maxNames: Int = 32): String {
+  fun buildInstalledAppsSummaryForPrompt(ctx: Context, maxNames: Int = 72): String {
     val all = queryAllLaunchableApps(ctx)
     if (all.isEmpty()) return "Check with open_app / list_installed_apps"
-    val labels = all.map { it.label }.distinct()
+    val coreHints =
+      listOf(
+        "whatsapp",
+        "imo",
+        "messenger",
+        "facebook",
+        "phone",
+        "dialer",
+        "contacts",
+        "messages",
+        "youtube",
+        "chrome",
+        "camera",
+        "gallery",
+        "settings",
+        "bkash",
+        "nagad",
+        "notes",
+        "calculator",
+        "gmail",
+        "maps",
+      )
+    val prioritized =
+      all.sortedByDescending { entry ->
+        val hay = "${entry.label} ${entry.packageName}".lowercase()
+        if (coreHints.any { hay.contains(it) }) 1 else 0
+      }
+    val labels = prioritized.map { it.label }.distinct()
     val shown = labels.take(maxNames).joinToString(", ")
-    return "Total ${labels.size} apps installed (e.g. $shown)"
+    return "Total ${labels.size} apps installed (key & installed: $shown)"
   }
 }

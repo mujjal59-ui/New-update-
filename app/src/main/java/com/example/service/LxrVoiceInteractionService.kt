@@ -135,7 +135,6 @@ class LxrVoiceInteractionSession(private val ctx: Context) : VoiceInteractionSes
   override fun onShow(args: Bundle?, showFlags: Int) {
     super.onShow(args, showFlags)
     try {
-      LxrFloatingOverlayManager.showForWakeOrMic(ctx)
       if (!RiyaState.running.value && Store.apiKey(ctx).isNotBlank()) {
         val svcIntent = Intent(ctx, RiyaService::class.java)
         if (Build.VERSION.SDK_INT >= 26) {

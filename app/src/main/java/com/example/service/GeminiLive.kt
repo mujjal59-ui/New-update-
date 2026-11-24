@@ -524,6 +524,7 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var lastProactiveCheckInAtMs = 0L
   @Volatile private var proactiveCountInStretch = 0
   private val audioPlaybackEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+  private val pendingAudioChunks = java.util.concurrent.atomic.AtomicInteger(0)
   private val micNoiseSuppressor = LxrAudioNoiseSuppressor(16000)
 
   private fun isSuppressingStaleAudio(): Boolean = System.currentTimeMillis() < suppressStaleUntilMs
@@ -744,13 +745,13 @@ class GeminiLive(private val ctx: Context) {
             waitingServerReply = false
           }
           if (!isExecutingTool || (activeWorkStartedAtMs > 0L && (now - activeWorkStartedAtMs) > 15_000L)) {
-            if (RiyaState.activeWorkLabel.value != null || LxrFloatingOverlayManager.orbBadgeState.value.taskLabel != null) {
+            if (RiyaState.activeWorkLabel.value != null || LxrFloatingOverlayManager.orbBadgeState.value.taskLabel != null || LxrFloatingOverlayManager.orbBadgeState.value.isReadingScreen) {
               activeWorkStartedAtMs = 0L
               RiyaState.activeWorkLabel.value = null
               LxrFloatingOverlayManager.completeTaskAndScheduleHide(
                 ctx,
-                hideDelayMs = 800L,
-                keepShowingForWake = waitingServerReply || activeTurnHasStartedOutput,
+                hideDelayMs = 650L,
+                keepShowingForWake = false,
               )
             }
           }
@@ -1314,7 +1315,7 @@ class GeminiLive(private val ctx: Context) {
     } catch (_: Throwable) {}
     LxrFloatingOverlayManager.onInterruptSpeakRequest = null
     LxrFloatingOverlayManager.setSpeakingBoost(false)
-    LxrFloatingOverlayManager.updateActiveWorkBanner(ctx, null)
+    LxrFloatingOverlayManager.hide(ctx)
     RiyaState.activeWorkLabel.value = null
     RiyaState.voiceMatchLiveLabel.value = ""
   }
@@ -1443,6 +1444,9 @@ class GeminiLive(private val ctx: Context) {
     ready = false
     waitingServerReply = false
     activeTurnHasStartedOutput = false
+    if (LxrFloatingOverlayManager.isShowing || LxrFloatingOverlayManager.orbBadgeState.value.visible) {
+      LxrFloatingOverlayManager.completeTaskAndScheduleHide(ctx, hideDelayMs = 450L, keepShowingForWake = false)
+    }
     if (stopped) return
     lastErr = msg
     failCount++
@@ -1501,7 +1505,7 @@ class GeminiLive(private val ctx: Context) {
     val assistStatus = if (LxrDeviceAndHardwareEngine.isDefaultAssistant(ctx)) "DEFAULT" else "NOT_DEFAULT"
     val deviceAdminStatus = if (LxrDeviceAndHardwareEngine.isDeviceAdminActive(ctx)) "ACTIVE" else "OFF"
     val exactAlarmStatus = if (LxrDeviceAndHardwareEngine.canScheduleExactAlarms(ctx)) "GRANTED" else "OFF"
-    val installedSummary = LxrAppDiscoveryEngine.buildInstalledAppsSummaryForPrompt(ctx, maxNames = 36)
+    val installedSummary = LxrAppDiscoveryEngine.buildInstalledAppsSummaryForPrompt(ctx, maxNames = 72)
     val extraModel = Store.extraCriticalModel(ctx)
 
     val delayOpt = Store.replyDelayOption(ctx)
@@ -1515,7 +1519,7 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.35.0, evolved from v2.34.0, v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.36.0, evolved from v2.35.0, v2.34.0, v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
@@ -1603,7 +1607,6 @@ class GeminiLive(private val ctx: Context) {
           interruptSpeakerForBoss()
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
-          LxrFloatingOverlayManager.cancelPendingHide()
           lastBossSpeechDetectedMs = System.currentTimeMillis()
           proactiveCountInStretch = 0
           uText.append(it)
@@ -1622,25 +1625,10 @@ class GeminiLive(private val ctx: Context) {
             interruptSpeakerForBoss()
             RiyaVoiceManager.stopSpeaking()
           }
-          if (
-            LxrFloatingOverlayManager.containsWakeWord(it) ||
-              LxrFloatingOverlayManager.containsWakeWord(snippet)
-          ) {
-            lastWakeOrMicPopupMs = System.currentTimeMillis()
-            LxrFloatingOverlayManager.showForWakeOrMic(ctx)
-          }
         }
         sc.optJSONObject("outputTranscription")?.optString("text")?.let {
           if (!isSuppressingStaleAudio()) {
             pText.append(it)
-            val replySnippet = pText.toString().takeLast(80)
-            if (
-              LxrFloatingOverlayManager.isAiWakeGreeting(it) ||
-                LxrFloatingOverlayManager.isAiWakeGreeting(replySnippet)
-            ) {
-              lastWakeOrMicPopupMs = System.currentTimeMillis()
-              LxrFloatingOverlayManager.showForWakeOrMic(ctx)
-            }
           }
         }
         sc.optJSONObject("modelTurn")?.optJSONArray("parts")?.let { ps ->
@@ -1667,43 +1655,52 @@ class GeminiLive(private val ctx: Context) {
                   val pcmRms = computeRms16Bit(pcm, pcm.size)
                   RiyaState.status.value = "LXR--AI কথা বলছে..."
                   LxrFloatingOverlayManager.setSpeakingBoost(true)
-                  LxrFloatingOverlayManager.cancelPendingHide()
+                  if (LxrFloatingOverlayManager.isShowing) {
+                    LxrFloatingOverlayManager.cancelPendingHide()
+                  }
                   val applyDelay = i == 0 && holdUntilMs > 0L
                   try {
                     if (!playExec.isShutdown) {
+                      pendingAudioChunks.incrementAndGet()
                       playExec.execute {
-                        if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
-                        if (applyDelay) {
-                          val remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
-                          if (remain > 0L) {
+                        try {
+                          if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                          if (applyDelay) {
+                            val remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
+                            if (remain > 0L) {
+                              try {
+                                Thread.sleep(remain)
+                              } catch (_: Throwable) {}
+                            }
+                            if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                          }
+                          val t = track
+                          if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
                             try {
-                              Thread.sleep(remain)
+                              if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                t.play()
+                              }
+                              lastSpeakerWriteMs = System.currentTimeMillis()
+                              var wrote = t.write(pcm, 0, pcm.size)
+                              if (wrote <= 0 && !stopped && turnEpoch == audioPlaybackEpoch.get()) {
+                                runCatching { t.play() }
+                                wrote = t.write(pcm, 0, pcm.size)
+                              }
+                              if (wrote > 0 && turnEpoch == audioPlaybackEpoch.get()) {
+                                val afterWriteMs = System.currentTimeMillis()
+                                lastSpeakerWriteMs = afterWriteMs
+                                val frames = (wrote / 2).toLong()
+                                totalSpeakerFramesWritten += frames
+                                if (pcmRms >= 28.0) {
+                                  lastAudibleEndFrame = maxOf(lastAudibleEndFrame, totalSpeakerFramesWritten + 4800L)
+                                  lastSpeakerOutputRms = pcmRms
+                                  lastSpeakerSoundingMs = afterWriteMs
+                                }
+                              }
                             } catch (_: Throwable) {}
                           }
-                          if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
-                        }
-                        val t = track
-                        if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
-                          try {
-                            if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                              t.play()
-                            }
-                            lastSpeakerWriteMs = System.currentTimeMillis()
-                            var wrote = t.write(pcm, 0, pcm.size)
-                            if (wrote <= 0 && !stopped && turnEpoch == audioPlaybackEpoch.get()) {
-                              runCatching { t.play() }
-                              wrote = t.write(pcm, 0, pcm.size)
-                            }
-                            if (wrote > 0 && turnEpoch == audioPlaybackEpoch.get()) {
-                              val frames = (wrote / 2).toLong()
-                              totalSpeakerFramesWritten += frames
-                              if (pcmRms >= 75.0) {
-                                lastAudibleEndFrame = totalSpeakerFramesWritten
-                                lastSpeakerOutputRms = pcmRms
-                                lastSpeakerSoundingMs = lastSpeakerWriteMs
-                              }
-                            }
-                          } catch (_: Throwable) {}
+                        } finally {
+                          pendingAudioChunks.decrementAndGet()
                         }
                       }
                     }
@@ -1721,10 +1718,6 @@ class GeminiLive(private val ctx: Context) {
           val p = pText.toString().trim()
           val pureWake = u.isNotEmpty() && LxrFloatingOverlayManager.isPureWakeCall(u) && !hadCommandOrToolThisTurn
           if (u.isNotEmpty()) {
-            if (LxrFloatingOverlayManager.containsWakeWord(u)) {
-              lastWakeOrMicPopupMs = System.currentTimeMillis()
-              LxrFloatingOverlayManager.showForWakeOrMic(ctx)
-            }
             Store.remember(ctx, "Boss: $u")
             RiyaState.addLog("বস: $u")
           }
@@ -1771,29 +1764,15 @@ class GeminiLive(private val ctx: Context) {
             )
           }
 
-          val waitingNextCommand =
-            pureWake ||
-              summonedOrbToolOnly ||
-              (u.isEmpty() && !hadCommandOrToolThisTurn && LxrFloatingOverlayManager.isShowing &&
-                (System.currentTimeMillis() - lastWakeOrMicPopupMs) < 12_000L)
-          if (pureWake && p.isEmpty() && LxrFloatingOverlayManager.canTriggerWakeGreetingNow()) {
-            RiyaVoiceManager.speakUrgent(ctx, Store.WAKE_CALL_GREETING_BN)
-          }
           if (LxrFloatingOverlayManager.isShowing || LxrFloatingOverlayManager.orbBadgeState.value.visible) {
-            if (waitingNextCommand) {
-              LxrFloatingOverlayManager.completeTaskAndScheduleHide(
-                ctx,
-                hideDelayMs = 18_000L,
-                keepShowingForWake = true,
-              )
-            } else {
-              val hideDelay = (remainingAudioMs + 1150L).coerceIn(1100L, 5200L)
-              LxrFloatingOverlayManager.completeTaskAndScheduleHide(
-                ctx,
-                hideDelayMs = hideDelay,
-                keepShowingForWake = false,
-              )
-            }
+            val hideDelay =
+              if (summonedOrbToolOnly) 4000L
+              else (remainingAudioMs + 950L).coerceIn(850L, 4600L)
+            LxrFloatingOverlayManager.completeTaskAndScheduleHide(
+              ctx,
+              hideDelayMs = hideDelay,
+              keepShowingForWake = false,
+            )
           }
 
           waitingServerReply = false
@@ -1866,6 +1845,9 @@ class GeminiLive(private val ctx: Context) {
             activeWorkStartedAtMs = 0L
             RiyaState.activeWorkLabel.value = null
             LxrFloatingOverlayManager.setScreenReading(ctx, false, taskLabelOverride = null)
+            if (!stopped && !summonedOrbToolOnly) {
+              LxrFloatingOverlayManager.scheduleIdleFailsafeHide(ctx, delayMs = 4500L)
+            }
             if (!stopped && ready && !activeTurnHasStartedOutput) {
               RiyaState.status.value = "শুনছি বস..."
             }
@@ -2330,7 +2312,7 @@ class GeminiLive(private val ctx: Context) {
       val fallbackIntent =
         Intent(homeIntent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
       acc?.resolveHomeLauncherPackages()?.firstOrNull()?.let { fallbackIntent.`package` = it }
-      ctx.startActivity(fallbackIntent)
+      LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, fallbackIntent)
       Thread.sleep(320)
     } catch (_: Throwable) {}
   }
@@ -2382,9 +2364,12 @@ class GeminiLive(private val ctx: Context) {
       return spec.label to (listOf(spec.pkg) + spec.fallbackPkgs)
     }
     val cleaned =
-      rawName
+      LxrAppDiscoveryEngine.normalizeUnicode(rawName)
         .lowercase()
-        .replace(Regex("(অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|ওপেন|করো|\\bapp\\b|\\bopen\\b)"), " ")
+        .replace(
+          Regex("(অ্যাপস|অ্যাপ্স|অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|খুলে|ওপেন|করো|চালু|দাও|\\bapps\\b|\\bapp\\b|\\bopen\\b)"),
+          " ",
+        )
         .replace(Regex("\\s+"), " ")
         .trim()
     val tokens = cleaned.split(Regex("[\\s.,:/\\-_]+")).filter { it.isNotEmpty() }
@@ -2395,13 +2380,47 @@ class GeminiLive(private val ctx: Context) {
         Triple("Facebook", listOf("facebook", "ফেসবুক", "fb"), listOf("com.facebook.katana", "com.facebook.lite")),
         Triple("Chrome", listOf("chrome", "ক্রোম"), listOf("com.android.chrome")),
         Triple("Play Store", listOf("play store", "playstore", "প্লে স্টোর"), listOf("com.android.vending")),
-        Triple("Contacts", listOf("contacts", "contact", "কন্টাক্ট", "কনট্যাক্ট"), listOf("com.google.android.contacts", "com.android.contacts")),
-        Triple("Phone", listOf("phone", "dialer", "ডায়ালার", "কল"), listOf("com.google.android.dialer", "com.android.dialer", "com.sh.smart.caller")),
-        Triple("Camera", listOf("camera", "ক্যামেরা"), listOf("com.transsion.camera", "com.android.camera", "com.google.android.GoogleCamera")),
+        Triple(
+          "Contacts",
+          listOf("contacts", "contact", "কন্টাক্ট", "কনট্যাক্ট", "কন্টাক্টস", "ফোনবুক"),
+          listOf("com.google.android.contacts", "com.transsion.contacts", "com.infinix.contacts", "com.android.contacts"),
+        ),
+        Triple(
+          "Phone",
+          listOf("phone", "dialer", "ডায়ালার", "ফোন", "কল"),
+          listOf("com.google.android.dialer", "com.transsion.dialer", "com.sh.smart.caller", "com.android.dialer"),
+        ),
+        Triple(
+          "Messages",
+          listOf("messages", "messaging", "sms", "মেসেজ", "মেসেজেস", "এসএমএস"),
+          listOf("com.google.android.apps.messaging", "com.android.mms"),
+        ),
+        Triple(
+          "Camera",
+          listOf("camera", "ক্যামেরা"),
+          listOf("com.transsion.camera", "com.android.camera", "com.google.android.GoogleCamera"),
+        ),
+        Triple(
+          "Gallery",
+          listOf("gallery", "photos", "গ্যালারি", "ছবি"),
+          listOf("com.transsion.camera.gallery", "com.transsion.gallery", "com.google.android.apps.photos"),
+        ),
+        Triple(
+          "Calculator",
+          listOf("calculator", "calc", "ক্যালকুলেটর"),
+          listOf("com.transsion.calculator", "com.google.android.calculator", "com.android.calculator2"),
+        ),
+        Triple(
+          "Notes",
+          listOf("notes", "notepad", "keep", "নোট", "নোটস"),
+          listOf("com.transsion.notepad", "com.google.android.keep"),
+        ),
+        Triple("bKash", listOf("bkash", "বিকাশ"), listOf("com.bKash.customerapp")),
+        Triple("Nagad", listOf("nagad", "নগদ"), listOf("com.konasl.nagad")),
         Triple("TikTok", listOf("tiktok", "টিকটক"), listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill")),
       )
     known.firstOrNull { (_, aliases, _) ->
-      aliases.any { al -> cleaned == al || al in tokens || (al.length >= 4 && cleaned.contains(al)) }
+      aliases.any { al -> cleaned == al || al in tokens || (al.length >= 2 && cleaned.contains(al)) }
     }?.let { (label, _, pkgs) ->
       return label to pkgs
     }
@@ -2410,7 +2429,7 @@ class GeminiLive(private val ctx: Context) {
 
   private fun openApp(n: String): String {
     val acc = RiyaAccessibilityService.instance
-    val query = n.trim()
+    val query = LxrAppDiscoveryEngine.normalizeUnicode(n).trim()
     if (query.isBlank()) return "কোন অ্যাপ খুলবো বলোনি বস।"
     val pm = ctx.packageManager
     val li = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -2430,14 +2449,20 @@ class GeminiLive(private val ctx: Context) {
       targetLabel = known.first
       targetPkgs = known.second
       launchIntent =
-        targetPkgs.firstNotNullOfOrNull { pkg -> pm.getLaunchIntentForPackage(pkg) }
+        targetPkgs.firstNotNullOfOrNull { pkg -> runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull() }
           ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
       if (launchIntent == null) {
         val allowedSet = targetPkgs.map { it.lowercase() }.toSet()
-        val matchAct =
-          pm.queryIntentActivities(li, PackageManager.MATCH_ALL).firstOrNull {
-            it.activityInfo.packageName.lowercase() in allowedSet
-          }
+        val queriedActs =
+          runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+              pm.queryIntentActivities(li, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
+            } else {
+              @Suppress("DEPRECATION")
+              pm.queryIntentActivities(li, PackageManager.MATCH_ALL)
+            }
+          }.getOrDefault(emptyList())
+        val matchAct = queriedActs.firstOrNull { it.activityInfo.packageName.lowercase() in allowedSet }
         if (matchAct != null) {
           launchIntent =
             Intent(li)
@@ -2447,7 +2472,7 @@ class GeminiLive(private val ctx: Context) {
       }
     }
 
-    // 2. Full-device PackageManager discovery (runs EVEN if known != null had OEM package difference, e.g. Transsion/Infinix Camera/Gallery/Notes!)
+    // 2. Full-device PackageManager discovery (runs EVEN if known != null had OEM package difference, e.g. Transsion/Infinix!)
     if (launchIntent == null) {
       val allInstalled = LxrAppDiscoveryEngine.queryAllLaunchableApps(ctx)
       val matchedEntry = LxrAppDiscoveryEngine.matchInstalledEntry(query, allInstalled)
@@ -2458,12 +2483,21 @@ class GeminiLive(private val ctx: Context) {
       }
     }
 
+    // 2.5 Standard Android System Category Intent resolver (Dialer / Contacts / Messages / Gallery / Calculator / Calendar)
+    if (launchIntent == null) {
+      LxrAppDiscoveryEngine.resolveSystemCategoryIntent(ctx, query)?.let { (sysLabel, sysIntent) ->
+        targetLabel = sysLabel
+        targetPkgs = listOfNotNull(sysIntent.`package` ?: sysIntent.component?.packageName)
+        launchIntent = sysIntent
+      }
+    }
+
     if (launchIntent != null) {
       val curBefore = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
-      val alreadyOpen = curBefore in targetPkgs
+      val alreadyOpen = curBefore.isNotBlank() && curBefore in targetPkgs
       if (!alreadyOpen) {
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        ctx.startActivity(launchIntent)
+        LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, launchIntent)
         val deadline = System.currentTimeMillis() + 4500L
         while (System.currentTimeMillis() < deadline) {
           Thread.sleep(200)
@@ -2557,13 +2591,15 @@ class GeminiLive(private val ctx: Context) {
 
   private fun bringRiyaBack() {
     try {
-      ctx.startActivity(
+      LxrAppDiscoveryEngine.launchActivitySafely(
+        ctx,
+        RiyaAccessibilityService.instance,
         Intent(ctx, MainActivity::class.java)
           .addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
               Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
               Intent.FLAG_ACTIVITY_SINGLE_TOP
-          )
+          ),
       )
     } catch (_: Exception) {}
   }
@@ -2656,9 +2692,11 @@ class GeminiLive(private val ctx: Context) {
       return ContactFirstWordMatcher.buildReadBackConfirmationPrompt(clean, matches, "কল")
     }
     val chosen = matches.first()
-    ctx.startActivity(
+    LxrAppDiscoveryEngine.launchActivitySafely(
+      ctx,
+      RiyaAccessibilityService.instance,
       Intent(Intent.ACTION_CALL, Uri.parse("tel:${chosen.phoneNumber}"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
     )
     RiyaState.markTaskCompleted(
       "${chosen.displayName} (${chosen.phoneNumber}) কে কল লাগানো হয়েছে।",
@@ -2775,9 +2813,11 @@ class GeminiLive(private val ctx: Context) {
       val m = mode.lowercase()
       val wantSilent = m == "silent" || m == "সাইলেন্ট"
       if (wantSilent && !nm.isNotificationPolicyAccessGranted) {
-        ctx.startActivity(
+        LxrAppDiscoveryEngine.launchActivitySafely(
+          ctx,
+          RiyaAccessibilityService.instance,
           Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
         return "সাইলেন্ট করতে Do Not Disturb অ্যাক্সেস লাগবে। সেটিংস খুলেছি বস, LXR--AI কে অনুমতি দিয়ে আবার বলো।"
       }
@@ -2796,9 +2836,11 @@ class GeminiLive(private val ctx: Context) {
         }
       }
     } catch (_: SecurityException) {
-      ctx.startActivity(
+      LxrAppDiscoveryEngine.launchActivitySafely(
+        ctx,
+        RiyaAccessibilityService.instance,
         Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
       )
       "সাউন্ড বদলাতে Do Not Disturb অ্যাক্সেস লাগবে বস, সেটিংস খুলেছি।"
     } catch (e: Exception) {
@@ -2855,7 +2897,11 @@ class GeminiLive(private val ctx: Context) {
       }
 
       // 2. Fallback: open full Wi-Fi Settings screen and toggle the exact Wi-Fi switch
-      ctx.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      LxrAppDiscoveryEngine.launchActivitySafely(
+        ctx,
+        acc,
+        Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+      )
       waitForSettingsPackage(acc)
       val res =
         acc?.setSwitch(
@@ -2907,8 +2953,10 @@ class GeminiLive(private val ctx: Context) {
       }
 
       // 2. Fallback: open full Bluetooth Settings screen and toggle Bluetooth switch
-      ctx.startActivity(
-        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      LxrAppDiscoveryEngine.launchActivitySafely(
+        ctx,
+        acc,
+        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
       )
       waitForSettingsPackage(acc)
       val res =
@@ -3066,15 +3114,16 @@ class GeminiLive(private val ctx: Context) {
         .setPackage("com.google.android.youtube")
         .putExtra("query", q)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-      ctx.startActivity(i)
-    } catch (_: Exception) {
-      ctx.startActivity(
+    val launchedNative = LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, i)
+    if (!launchedNative) {
+      LxrAppDiscoveryEngine.launchActivitySafely(
+        ctx,
+        acc,
         Intent(
             Intent.ACTION_VIEW,
             Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(q)),
           )
-          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
       )
     }
     Thread.sleep(900)
@@ -3136,7 +3185,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 4, 32_768))
+        .setBufferSizeInBytes(maxOf(minAudioBuf * 6, 49_152))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -3148,6 +3197,7 @@ class GeminiLive(private val ctx: Context) {
     synchronized(trackLock) {
       totalSpeakerFramesWritten = 0L
       speakerHeadBaseFrames = 0L
+      lastAudibleEndFrame = 0L
       track = t
     }
   }
@@ -3237,7 +3287,7 @@ class GeminiLive(private val ctx: Context) {
           var consecutiveLoudMicChunks = 0
           var bossActiveSpeechThisTurn = false
           var sentSpeechChunksThisTurn = 0
-          val preRollRing = ArrayDeque<ByteArray>(4)
+          val preRollRing = ArrayDeque<ByteArray>(5)
           val bargeVerifyStream = java.io.ByteArrayOutputStream()
 
           // Voice Match 3-step speaker gate state: 0=IDLE, 1=COLLECTING_ONSET, 2=ALLOWED_BOSS, 3=REJECTED_OTHER
@@ -3264,11 +3314,11 @@ class GeminiLive(private val ctx: Context) {
             ws?.send("""{"realtimeInput":{"audio":{"data":"$d","mimeType":"audio/pcm;rate=16000"}}}""")
           }
 
-          fun sendAudioStreamEndFlush() {
-            val d = ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value).voiceDelayMs
+          // Like Riya-AI v1.0.0: never fire mid-session audioStreamEnd:true on pauses; let native server VAD keep continuous turn timing smooth
+          fun markSmoothTurnBoundary(delayOpt: ReplyDelayOption) {
+            val d = delayOpt.voiceDelayMs
             pendingVoiceDelayUntilMs = if (d > 0L) System.currentTimeMillis() + d else 0L
             suppressStaleUntilMs = 0L
-            ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
           }
 
           var recReadFailures = 0
@@ -3342,7 +3392,7 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerWriteMs = lastSpeakerWriteMs,
                   nowMs = now,
                   activeTurnHasStartedOutput = activeTurnHasStartedOutput,
-                )
+                ) || pendingAudioChunks.get() > 0
               val ttsSpeakingNow = RiyaVoiceManager.isActivelySpeaking()
               if (speakerSpeakingGuardNow || ttsSpeakingNow) {
                 lastAudibleStopMs = now
@@ -3351,10 +3401,10 @@ class GeminiLive(private val ctx: Context) {
               }
 
               val directThreshold =
-                if (usingBtAudio) maxOf(2200.0, lastSpeakerOutputRms * 1.45)
-                else maxOf(7200.0, lastSpeakerOutputRms * 1.85)
-              val directRatioNow = if (usingBtAudio) 1.45 else 1.85
-              val requiredLoudChunks = if (usingBtAudio) 3 else 4
+                if (usingBtAudio) maxOf(4200.0, lastSpeakerOutputRms * 1.85)
+                else maxOf(7800.0, lastSpeakerOutputRms * 1.95)
+              val directRatioNow = if (usingBtAudio) 1.85 else 1.95
+              val requiredLoudChunks = if (usingBtAudio) 5 else 4
               if ((speakerSpeakingGuardNow || ttsSpeakingNow) && rawRms >= directThreshold) {
                 consecutiveLoudMicChunks++
               } else {
@@ -3401,7 +3451,7 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
                   consecutiveLoudChunks = if (directLoudBargeIn) consecutiveLoudMicChunks else 0,
-                  phoneTailHoldMs = 180L,
+                  phoneTailHoldMs = 360L,
                   minDirectBargeInRms = directThreshold,
                   directRatio = directRatioNow,
                 )
@@ -3450,7 +3500,7 @@ class GeminiLive(private val ctx: Context) {
                 lastBossSpeechDetectedMs = now
                 proactiveCountInStretch = 0
               } else if (!isSoftMuted && !bossActiveSpeechThisTurn) {
-                if (preRollRing.size >= 4) preRollRing.removeFirst()
+                if (preRollRing.size >= 5) preRollRing.removeFirst()
                 preRollRing.addLast(buf.copyOf(n))
               }
 
@@ -3464,8 +3514,9 @@ class GeminiLive(private val ctx: Context) {
               val withinVmPauseGrace =
                 voiceMatchActive && gateState == 1 && !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= 650L
               silentFrameCounter = if (isSoftMuted || !withinHangover) (silentFrameCounter + 1) else 0
+              val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
 
-              // Wait until Boss finishes full phrase + silence tail before flushing turn (prevents chopping mid-word!)
+              // Smooth continuous 40ms PCM streaming like Riya-AI v1.0.0 (never drops clock or kills VAD with audioStreamEnd:true)
               val justEndedTurn =
                 !isSoftMuted && bossActiveSpeechThisTurn && lastVoiceMs > 0L && (now - lastVoiceMs) > turnSilenceWindowMs
 
@@ -3476,22 +3527,20 @@ class GeminiLive(private val ctx: Context) {
                   silentFrameCounter = 1
                   lastTurnSpeechChunks = sentSpeechChunksThisTurn
                   if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
-                    sendAudioStreamEndFlush()
+                    markSmoothTurnBoundary(delayOpt)
                     waitingServerReply = true
                     lastBossTurnAtMs = now
                   }
                   sentSpeechChunksThisTurn = 0
+                  sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                 } else if (withinHangover) {
                   if (isTurnOnset && preRollRing.isNotEmpty()) {
                     for (pre in preRollRing) sendAudioPcm(pre, pre.size, countAsSpeech = true)
                     preRollRing.clear()
                   }
                   sendAudioPcm(buf, n, countAsSpeech = true)
-                } else if (withinEndOfTurnSilence) {
-                  // Stream 100% continuous silence frames during VAD window (never skip frames) so server clock advances at 1.0x
-                  sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
-                } else if (silentFrameCounter % 50 == 0) {
-                  // Minimal 2s idle keepalive so WebSocket queue stays 0 bytes
+                } else if (!lowNet || withinEndOfTurnSilence || silentFrameCounter % 3 == 0) {
+                  // Stream continuous silence frames like Riya-AI v1.0.0 so server VAD clock advances smoothly at 1.0x
                   sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                 }
               } else {
@@ -3509,11 +3558,12 @@ class GeminiLive(private val ctx: Context) {
                   silentFrameCounter = 1
                   lastTurnSpeechChunks = sentSpeechChunksThisTurn
                   if (!NetworkStabilityGuard.shouldIgnoreEmptyTurnFlush(sentSpeechChunksThisTurn)) {
-                    sendAudioStreamEndFlush()
+                    markSmoothTurnBoundary(delayOpt)
                     waitingServerReply = true
                     lastBossTurnAtMs = now
                   }
                   sentSpeechChunksThisTurn = 0
+                  sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   if (gateState != 0) {
                     gateState = 0
                     onsetChunks.clear()
@@ -3542,14 +3592,12 @@ class GeminiLive(private val ctx: Context) {
                     rejectedSpeechChunks = 0
                     RiyaState.voiceMatchLiveLabel.value = "🔒 শুধু বসের কণ্ঠ শুনছে"
                   }
-                  if (withinEndOfTurnSilence) {
-                    sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
-                  } else if (silentFrameCounter % 50 == 0) {
+                  if (!lowNet || withinEndOfTurnSilence || silentFrameCounter % 3 == 0) {
                     sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
                 } else if (!withinHangover && withinVmPauseGrace) {
                   // Keep gateState == 1 intact across short intra-word pauses so slow speech isn't dropped
-                  if (silentFrameCounter % 4 == 0) {
+                  if (!lowNet || silentFrameCounter % 2 == 0) {
                     sendAudioPcm(zeroSilence, n.coerceAtMost(zeroSilence.size))
                   }
                 } else {

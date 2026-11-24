@@ -28,6 +28,13 @@ object LxrSocialAndBrowserAgent {
 
   private val BENGALI_APP_ALIASES =
     mapOf(
+      "হোয়াটসঅ্যাপ" to "whatsapp",
+      "ওয়াটসঅ্যাপ" to "whatsapp",
+      "ইমো" to "imo",
+      "ইমু" to "imo",
+      "মেসেঞ্জার" to "messenger",
+      "মেসেনজার" to "messenger",
+      "ম্যাসেঞ্জার" to "messenger",
       "ইনস্টাগ্রাম" to "instagram",
       "ফেসবুক" to "facebook",
       "ক্রোম" to "chrome",
@@ -41,12 +48,27 @@ object LxrSocialAndBrowserAgent {
       "গ্যালারি" to "gallery",
       "ক্যালকুলেটর" to "calculator",
       "সেটিংস" to "settings",
+      "কন্টাক্টস" to "contacts",
+      "কন্টাক্ট" to "contacts",
+      "কনট্যাক্ট" to "contacts",
+      "ডায়ালার" to "phone",
+      "ফোন" to "phone",
+      "মেসেজ" to "messages",
+      "নোটস" to "notes",
+      "ফাইল" to "files",
+      "ঘড়ি" to "clock",
+      "ক্যালেন্ডার" to "calendar",
+      "টারমাক্স" to "termux",
     )
 
   private fun normalizeAppQuery(raw: String): String {
     var s =
-      raw.lowercase()
-        .replace(Regex("(অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|ওপেন|করো|\\bapp\\b|\\bopen\\b)"), " ")
+      LxrAppDiscoveryEngine.normalizeUnicode(raw)
+        .lowercase()
+        .replace(
+          Regex("(?:^|[\\s,।!?])(?:অ্যাপস|অ্যাপ্স|অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|খুলে|ওপেন|করো|দাও|চালু|apps|app|open)(?=[\\s,।!?]|$)"),
+          " ",
+        )
         .replace(Regex("\\s+"), " ")
         .trim()
     BENGALI_APP_ALIASES.forEach { (bn, en) ->
@@ -101,19 +123,28 @@ object LxrSocialAndBrowserAgent {
     val cleanQuery = normalizeAppQuery(rawQuery).ifBlank { rawQuery.trim() }
     val pm = ctx.packageManager
     val li = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    val labeled =
+    val resolveAll =
       runCatching {
-        pm.queryIntentActivities(li, 0).map { it.loadLabel(pm).toString() to it }
-      }.getOrDefault(emptyList())
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+          pm.queryIntentActivities(
+            li,
+            android.content.pm.PackageManager.ResolveInfoFlags.of(android.content.pm.PackageManager.MATCH_ALL.toLong()),
+          )
+        } else {
+          @Suppress("DEPRECATION")
+          pm.queryIntentActivities(li, android.content.pm.PackageManager.MATCH_ALL)
+        }
+      }.getOrElse { pm.queryIntentActivities(li, 0) }
+    val labeled = resolveAll.map { it.loadLabel(pm).toString() to it }
 
     findMatchingLauncherActivity(cleanQuery, labeled)?.let { match ->
       val pkg = match.activityInfo.packageName
       val label = match.loadLabel(pm).toString()
       val launch =
-        Intent(li)
-          .setClassName(pkg, match.activityInfo.name)
+        (pm.getLaunchIntentForPackage(pkg)
+          ?: Intent(li).setClassName(pkg, match.activityInfo.name))
           .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-      ctx.startActivity(launch)
+      LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, launch)
       Thread.sleep(550L)
       if (LockVaultManager.isAppLockScreenShowing(acc)) {
         LockVaultManager.unlockAppLockIfPresent(ctx, acc)
@@ -122,6 +153,18 @@ object LxrSocialAndBrowserAgent {
       val screen = acc?.readScreen().orEmpty()
       RiyaState.markTaskCompleted("$label অ্যাপ খোলা হয়েছে।", "")
       return "$label ($pkg) অ্যাপটি সঠিকভাবে ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${screen.take(2000)}"
+    }
+
+    LxrAppDiscoveryEngine.resolveSystemCategoryIntent(ctx, rawQuery)?.let { (sysLabel, sysIntent) ->
+      LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, sysIntent)
+      Thread.sleep(550L)
+      if (LockVaultManager.isAppLockScreenShowing(acc)) {
+        LockVaultManager.unlockAppLockIfPresent(ctx, acc)
+        Thread.sleep(360L)
+      }
+      val screen = acc?.readScreen().orEmpty()
+      RiyaState.markTaskCompleted("$sysLabel অ্যাপ খোলা হয়েছে।", "")
+      return "$sysLabel অ্যাপটি সঠিকভাবে ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${screen.take(2000)}"
     }
 
     if (acc == null) {
@@ -361,7 +404,9 @@ object LxrSocialAndBrowserAgent {
       packages.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }
         ?: return false
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-    ctx.startActivity(intent)
+    if (!LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, intent)) {
+      return false
+    }
     val deadline = System.currentTimeMillis() + 4500L
     while (System.currentTimeMillis() < deadline) {
       Thread.sleep(220L)

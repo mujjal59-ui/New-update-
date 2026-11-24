@@ -70,6 +70,9 @@ object LxrFloatingOverlayManager {
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private var pendingHideRunnable: Runnable? = null
+  private var idleFailsafeRunnable: Runnable? = null
+  private val attachedContainers = LinkedHashSet<View>()
+  @Volatile private var overlayGeneration: Long = 0L
 
   @Volatile private var windowManager: WindowManager? = null
   @Volatile private var rootContainer: android.widget.LinearLayout? = null
@@ -84,6 +87,7 @@ object LxrFloatingOverlayManager {
     private set
   @Volatile var isSpeakingNow: Boolean = false
     private set
+  internal fun activeAttachedViewCount(): Int = attachedContainers.size
   @Volatile var onInterruptSpeakRequest: (() -> Unit)? = null
 
   @Volatile private var lastWakeGreetAtMs: Long = 0L
@@ -176,9 +180,11 @@ object LxrFloatingOverlayManager {
   fun cancelPendingHide() {
     pendingHideRunnable?.let { mainHandler.removeCallbacks(it) }
     pendingHideRunnable = null
+    idleFailsafeRunnable?.let { mainHandler.removeCallbacks(it) }
+    idleFailsafeRunnable = null
   }
 
-  fun scheduleAutoHide(context: Context, delayMs: Long = 1300L) {
+  fun scheduleAutoHide(context: Context, delayMs: Long = 1200L) {
     val appCtx = context.applicationContext
     cancelPendingHide()
     val r = Runnable {
@@ -186,7 +192,21 @@ object LxrFloatingOverlayManager {
       hide(appCtx)
     }
     pendingHideRunnable = r
-    mainHandler.postDelayed(r, delayMs.coerceAtLeast(400L))
+    mainHandler.postDelayed(r, delayMs.coerceAtLeast(350L))
+  }
+
+  fun scheduleIdleFailsafeHide(context: Context, delayMs: Long = 4500L) {
+    val appCtx = context.applicationContext
+    idleFailsafeRunnable?.let { mainHandler.removeCallbacks(it) }
+    val r = Runnable {
+      idleFailsafeRunnable = null
+      val cur = orbBadgeState.value
+      if (!cur.isReadingScreen && !cur.isSpeaking) {
+        completeTaskAndScheduleHide(appCtx, hideDelayMs = 450L, keepShowingForWake = false)
+      }
+    }
+    idleFailsafeRunnable = r
+    mainHandler.postDelayed(r, delayMs.coerceAtLeast(1200L))
   }
 
   fun showForWakeOrMic(context: Context): Boolean {
@@ -198,7 +218,11 @@ object LxrFloatingOverlayManager {
         visible = true,
         overlayPermitted = Settings.canDrawOverlays(context.applicationContext),
       )
-    return show(context, openPermissionIfMissing = false, forceShow = false)
+    val shown = show(context, openPermissionIfMissing = false, forceShow = false)
+    if (shown && cur.taskLabel == null && !cur.isReadingScreen) {
+      scheduleIdleFailsafeHide(context, delayMs = 4200L)
+    }
+    return shown
   }
 
   fun showForTask(
@@ -255,7 +279,7 @@ object LxrFloatingOverlayManager {
 
   fun completeTaskAndScheduleHide(
     context: Context,
-    hideDelayMs: Long = 1200L,
+    hideDelayMs: Long = 1000L,
     keepShowingForWake: Boolean = false,
   ) {
     val appCtx = context.applicationContext
@@ -267,9 +291,8 @@ object LxrFloatingOverlayManager {
         isSpeaking = isSpeakingNow,
       )
     refreshBadgeUi(appCtx)
-    if (!keepShowingForWake) {
-      scheduleAutoHide(appCtx, hideDelayMs)
-    }
+    val targetDelay = if (keepShowingForWake) maxOf(hideDelayMs, 4000L) else hideDelayMs
+    scheduleAutoHide(appCtx, targetDelay)
   }
 
   private fun buildBadgeDrawable(density: Float, isReading: Boolean): android.graphics.drawable.GradientDrawable {
@@ -343,12 +366,26 @@ object LxrFloatingOverlayManager {
       return false
     }
 
+    val reqGen = ++overlayGeneration
     mainHandler.post {
       try {
+        if (reqGen != overlayGeneration) return@post
         if (!forceShow && !Store.floatingOrbEnabled(appCtx)) return@post
+        val wm = windowManager ?: (appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
         val existingContainer = rootContainer
         val existingOrb = overlayView
-        if (existingContainer != null && existingContainer.isAttachedToWindow && existingOrb != null) {
+
+        // Remove any orphaned duplicate containers if present
+        if (attachedContainers.isNotEmpty()) {
+          val stale = attachedContainers.filter { it !== existingContainer }
+          for (orphan in stale) {
+            runCatching { wm.removeViewImmediate(orphan) }
+            attachedContainers.remove(orphan)
+          }
+        }
+
+        // Reuse existing single container EVEN if WindowManager hasn't completed attach traversal yet!
+        if (existingContainer != null && existingOrb != null) {
           existingOrb.alpha =
             if (orbBadgeState.value.compactBadgeText != null) ACTIVE_TASK_ALPHA else OVERLAY_ALPHA
           existingOrb.pulseWake()
@@ -357,7 +394,6 @@ object LxrFloatingOverlayManager {
           return@post
         }
 
-        val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val dm = appCtx.resources.displayMetrics
         val orbSizePx = (82f * dm.density).toInt().coerceAtLeast(164)
         val maxPillWidthPx = (186f * dm.density).toInt().coerceAtLeast(320)
@@ -436,6 +472,7 @@ object LxrFloatingOverlayManager {
         orb.attachWindowDragListener(container, wm, params, appCtx)
 
         wm.addView(container, params)
+        attachedContainers.add(container)
         windowManager = wm
         rootContainer = container
         overlayView = orb
@@ -488,7 +525,10 @@ object LxrFloatingOverlayManager {
   }
 
   fun hide(context: Context? = null) {
+    overlayGeneration++
     cancelPendingHide()
+    isShowing = false
+    com.example.data.RiyaState.activeWorkLabel.value = null
     orbBadgeState.value = OrbTaskBadgeState(visible = false)
     mainHandler.post {
       try {
@@ -499,16 +539,21 @@ object LxrFloatingOverlayManager {
           windowManager
             ?: (context?.applicationContext?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
         view?.stopAnimation()
-        if (container != null && container.isAttachedToWindow) {
-          wm?.removeViewImmediate(container)
-        } else if (view != null && view.isAttachedToWindow) {
-          wm?.removeViewImmediate(view)
+        val toRemove = LinkedHashSet<View>(attachedContainers)
+        if (container != null) toRemove.add(container)
+        for (v in toRemove) {
+          runCatching { wm?.removeViewImmediate(v) }
+        }
+        attachedContainers.clear()
+        if (container == null && view != null && view.isAttachedToWindow) {
+          runCatching { wm?.removeViewImmediate(view) }
         }
         if (banner != null && banner.isAttachedToWindow) {
-          wm?.removeViewImmediate(banner)
+          runCatching { wm?.removeViewImmediate(banner) }
         }
       } catch (_: Throwable) {
       } finally {
+        attachedContainers.clear()
         rootContainer = null
         overlayView = null
         taskBadgeView = null

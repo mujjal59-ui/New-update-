@@ -110,11 +110,14 @@ object MessageAgent {
     )
 
   fun find(name: String): AppSpec? {
-    val raw = name.lowercase().trim()
+    val raw = LxrAppDiscoveryEngine.normalizeUnicode(name).lowercase().trim()
     if (raw.isEmpty()) return null
     val cleaned =
       raw
-        .replace(Regex("(অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|টা|তে|এ|খোলো|ওপেন|করো|\\bapp\\b|\\bopen\\b)"), " ")
+        .replace(
+          Regex("(?:^|[\\s,।!?])(?:অ্যাপস|অ্যাপ্স|অ্যাপটি|অ্যাপ|সফটওয়্যার|সফ্টওয়্যার|খোলো|খুলে|ওপেন|করো|দাও|চালু|apps|app|open)(?=[\\s,।!?]|$)"),
+          " ",
+        )
         .replace(Regex("\\s+"), " ")
         .trim()
     val candidates = listOf(raw, cleaned).filter { it.isNotEmpty() }.distinct()
@@ -256,7 +259,7 @@ object MessageAgent {
     }
 
     val intent = launchIntentFor(ctx, app) ?: return false
-    ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, intent)
     val deadline = System.currentTimeMillis() + 5500
     while (System.currentTimeMillis() < deadline) {
       Thread.sleep(200)

@@ -81,12 +81,47 @@
         <package android:name="com.lemon.lvoverseas" />
         <package android:name="com.mxtech.videoplayer.ad" />
         <package android:name="com.spotify.music" />
+        <package android:name="com.transsion.dialer" />
+        <package android:name="com.transsion.contacts" />
+        <package android:name="com.infinix.contacts" />
+        <package android:name="com.android.mms" />
+        <package android:name="com.transsion.notepad" />
+        <package android:name="com.transsion.soundrecorder" />
+        <package android:name="com.google.android.apps.nbu.files" />
+        <package android:name="com.google.android.keep" />
+        <package android:name="com.google.android.calculator" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
         <intent>
             <action android:name="android.intent.action.MAIN" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CONTACTS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MESSAGING" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_GALLERY" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CALCULATOR" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CALENDAR" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />

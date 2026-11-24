@@ -211,7 +211,6 @@ private fun startRiya(c: Context) {
     Toast.makeText(c, "প্রথমে Menu > Gemini API Key দিন (অথবা Chat বাটন ব্যবহার করুন)", Toast.LENGTH_LONG).show()
     return
   }
-  LxrFloatingOverlayManager.showForWakeOrMic(c)
   ContextCompat.startForegroundService(c, Intent(c, RiyaService::class.java))
 }
 
