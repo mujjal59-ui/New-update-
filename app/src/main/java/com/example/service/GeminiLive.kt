@@ -86,16 +86,16 @@ object LiveVadConfig {
 
   fun effectiveEndOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
     when (delayOption) {
-      ReplyDelayOption.INSTANT -> 110L
-      ReplyDelayOption.FAST -> 220L
-      ReplyDelayOption.NORMAL -> 320L
+      ReplyDelayOption.INSTANT -> 90L
+      ReplyDelayOption.FAST -> 140L
+      ReplyDelayOption.NORMAL -> 220L
     }
 
   fun effectiveHangoverMs(delayOption: ReplyDelayOption): Long =
     when (delayOption) {
-      ReplyDelayOption.INSTANT -> 220L
-      ReplyDelayOption.FAST -> 250L
-      ReplyDelayOption.NORMAL -> MIC_HANGOVER_MS
+      ReplyDelayOption.INSTANT -> 180L
+      ReplyDelayOption.FAST -> 220L
+      ReplyDelayOption.NORMAL -> 260L
     }
 
   fun buildRealtimeInputConfigJson(silenceMs: Int = SILENCE_DURATION_MS): JSONObject =
@@ -180,6 +180,9 @@ object LxrToolWorkDescriber {
         "unlock_phone", "unlock_locked_app", "lock_phone" -> "স্ক্রিন লক প্রসেস..."
         "list_installed_apps" -> "ইনস্টল করা অ্যাপ খোঁজা..."
         "schedule_exact_reminder" -> "রিমাইন্ডার সেট..."
+        "get_capabilities_a_to_z" -> "সক্ষমতা ও অনুমতি যাচাই..."
+        "get_activity_monitor" -> "Activity Monitor দেখা হচ্ছে..."
+        "run_background_task" -> "ব্যাকগ্রাউন্ড টাস্ক কিউ..."
         else -> "${toolName.replace('_', ' ')}..."
       }
     return "কাজ করছে: $task"
@@ -431,7 +434,9 @@ class GeminiLive(private val ctx: Context) {
       {"name":"lock_phone","description":"বস স্পষ্টভাবে স্ক্রিন বা ফোন লক করতে বললে মেইন স্ক্রিন লক করো। বসের অনুমতি ছাড়া আনলক ফোন লক করবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"unlock_locked_app","description":"যেকোনো অ্যাপে অ্যাপ লক স্ক্রিন দেখা গেলে সরাসরি অ্যাপ লক খুলে দাও। পিন বা পাসওয়ার্ডের কথা মুখে বলবে না।","parameters":{"type":"OBJECT","properties":{}}},
       {"name":"show_wake_orb","description":"বস 'LxR', 'L.x.R' বা 'LxR অরব' বলে ডাকলে যেকোনো অ্যাপ বা স্ক্রিনের ওপর ৫০% স্বচ্ছ ঘূর্ণায়মান LxR অরব দেখাও।","parameters":{"type":"OBJECT","properties":{}}},
-      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কি কি কাজ করতে পারো' বা এ টু জেড কাজের তালিকা চান, তখন LXR--AI এর সম্পূর্ণ এ টু জেড কাজের তালিকা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_capabilities_a_to_z","description":"বস যখন জিজ্ঞেস করেন 'তুমি কী কী করতে পারো?', 'কোন কোন অ্যাপ পরিচালনা করতে পারো?' বা সক্ষমতার তালিকা চান, তখন এই মুহূর্তের আসল ফোনের অনুমতি, ইনস্টলকৃত অ্যাপ, সার্ভিস ও সংযোগ পরীক্ষা করে ৪টি সত্য শ্রেণিতে (সম্পূর্ণ সক্রিয়, আংশিক, অনুমতি প্রয়োজন, অনুপলব্ধ) প্রকৃত সক্ষমতা ফেরত নাও।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"get_activity_monitor","description":"বস জিজ্ঞাসা করলে 'What did you do?', 'কী করেছো?', 'তথ্য দেখাও' বা চলমান/সম্পন্ন কাজের হিসাব চাইলে LXR Activity Monitor থেকে যাচাইকৃত স্ট্যাটাস, সংগৃহীত তথ্য ও তৈরি ফাইলের বিবরণ ফেরত নাও।","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING","description":"ঐচ্ছিক ফিল্টার (যেমন অ্যাপ বা কাজের নাম)"}},"required":[]}},
+      {"name":"run_background_task","description":"ব্যাকগ্রাউন্ডে JobScheduler ও LXR Activity Monitor দিয়ে স্বাধীন টাস্ক (যেমন system_audit, deep_research, check_environment) শুরু ও যাচাই করো।","parameters":{"type":"OBJECT","properties":{"command":{"type":"STRING","description":"কাজের ধরন: system_audit, deep_research অথবা universal_app_check"},"target_app":{"type":"STRING","description":"টার্গেট অ্যাপ বা মডিউল"},"query":{"type":"STRING","description":"প্রাসঙ্গিক সার্চ বা অ্যাপের নাম"}},"required":["command"]}},
       {"name":"prepare_app_requirements","description":"বস নতুন কোনো Android অ্যাপ বা APK বানাতে চাইলে কোড লেখা ও Termux বিল্ড শুরু করার আগে ছোট আকারে অ্যাপের নাম, থিম এবং প্রধান ফিচারগুলো যাচাই করে সম্মতি নেওয়ার প্রশ্নমালা তৈরি করো।","parameters":{"type":"OBJECT","properties":{"idea":{"type":"STRING","description":"অ্যাপের মূল ধারণা"},"preferred_name":{"type":"STRING"},"theme":{"type":"STRING"},"features":{"type":"STRING"}},"required":["idea"]}},
       {"name":"build_android_app","description":"বস যেকোনো অ্যান্ড্রয়েড অ্যাপ বানাতে সম্মতি দিলে সাথে সাথে Kotlin/Compose/Java সোর্স কোড তৈরি করে LXR স্ক্রিনে লাইভ প্রিভিউ খুলে Download/LxR এবং Termux-এ APK বিল্ড শুরু করো।","parameters":{"type":"OBJECT","properties":{"prompt":{"type":"STRING","description":"বস যে অ্যাপটি বানাতে বলেছেন তার সম্পূর্ণ বর্ণনা"},"app_name":{"type":"STRING","description":"অ্যাপের সংক্ষিপ্ত নাম (ঐচ্ছিক)"},"category":{"type":"STRING","description":"CALCULATOR, MINI_GAME, AI_ASSISTANT, NOTES, PRODUCTIVITY, CUSTOM (ঐচ্ছিক)"},"auto_build_termux":{"type":"BOOLEAN","description":"Termux-এ স্বয়ংক্রিয় APK বিল্ড শুরু করতে true (ডিফল্ট true)"}},"required":["prompt"]}},
       {"name":"check_termux_build_status","description":"Termux-এ চলমান বা সম্পন্ন APK বিল্ডের বর্তমান লাইভ ধাপ, Console লগ, এরর অটো-ফিক্স এবং Download/LxR ফোল্ডারের ফাইল অবস্থা পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
@@ -878,7 +883,7 @@ class GeminiLive(private val ctx: Context) {
         val draftSpeak =
           if (msg.suggestedDraft.isNotBlank()) " আমি উত্তর লিখেছি: \"${msg.suggestedDraft}\"।"
           else ""
-        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}।$draftSpeak আমি কি রিপ্লাইটা পাঠিয়ে দেবো? বলুন বস।"
+        "বস, ${msg.appNameBn}-এ ${msg.senderName} মেসেজ পাঠিয়েছেন: ${msg.messageText}।$draftSpeak আমি কি রিপ্লাইটা পাঠিয়ে দেবো? বলো বস।"
       }
     return try {
       val speakerMark = lastSpeakerWriteMs
@@ -1529,27 +1534,28 @@ class GeminiLive(private val ctx: Context) {
     val delayOpt = Store.replyDelayOption(ctx)
     val replySpeedDesc =
       when (delayOpt) {
-        ReplyDelayOption.INSTANT -> "Instant (00.0s — শূন্য দেরি! বসের কথা শেষ হওয়া মাত্র ০ মিলিসেকেন্ড দেরি ছাড়াই তড়িৎ ও স্পষ্ট বাক্যে উত্তর দাও)"
-        ReplyDelayOption.FAST -> "Fast (00.5s)"
-        ReplyDelayOption.NORMAL -> "Normal (00.10s)"
+        ReplyDelayOption.INSTANT -> "Instant (0 ms — শূন্য দেরি! বসের কথা শেষ হওয়া মাত্র ০ মিলিসেকেন্ড দেরি ছাড়াই তড়িৎ ও স্পষ্ট বাক্যে উত্তর দাও)"
+        ReplyDelayOption.FAST -> "Fast (30 ms)"
+        ReplyDelayOption.NORMAL -> "Normal (45 ms)"
       }
 
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.37.0, evolved from v2.36.0, v2.35.0, v2.34.0, v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.38.0 — Personal AI Operating System Controller)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
       - Live State: ${liveSnap.toCompactContextBn()}
       - Boss Voice Match: ${if (VoiceMatchManager.isActiveGateReady(ctx)) "ACTIVE (শুধু বসের কণ্ঠের কমান্ড মানো)" else "OFF"}
-      - MANDATORY "তুমি" & NATURAL SPEECH DISCIPLINE: বসকে সর্বদা "তুমি / তোমার / তোমাকে" বলে ডাকো (কখনোই "আপনি/আপনার" বলবে না)। কথা বলার মাঝখানে থেমে যেও না, প্রতিটি বাক্য পরিষ্কার ও সম্পূর্ণ করে বলো। বস "শোনো", "থামো", "স্টপ", "বাই", "stop", "wait" বা "bye" বললে সাথে সাথে থেমে নিঃশব্দে বসের কথা শোনো।
-      - ANTI-LIE APP DISCOVERY RULE: কখনোই `list_installed_apps` বা `open_app` টুল না চালিয়ে অনুমান করে বলবে না যে ফোনে কোনো অ্যাপ ইনস্টল করা নেই! আগে সবসময় আসল প্যাকেজ ম্যানেজার ও লঞ্চার যাচাই করো।
-      - A-TO-Z FULL READING RULE: বস "তুমি কি কি কাজ করতে পারো?" জিজ্ঞেস করলে `get_capabilities_a_to_z` কল করে ১ থেকে ১৫ নম্বর সব কাজ ধাপে ধাপে সম্পূর্ণ বলবে — সংক্ষিপ্ত করে "এ টু জেড সব পারি" বলে থামবে না!
-      - STRICT VISION ZERO-HALLUCINATION RULE: কখনোই না দেখে বস বা আশেপাশের কোনো চেহারা, পোশাক, চশমা বা বস্তু কল্পনা করে বর্ণনা দেবে না! ক্যামেরা দিয়ে দেখতে বললে `inspect_camera_vision` কল করে আসল `image/jpeg` ফ্রেম যাচাই করবে; ফ্রেম না থাকলে বা অন্ধকার হলে পরিষ্কার সত্য বলবে।
+      - MANDATORY "বস" + "তুমি" & NATURAL SPEECH DISCIPLINE: বসকে সর্বদা "বস" এবং "তুমি / তোমার / তোমাকে / করো / বলো" বলে ডাকো (কখনোই আনুষ্ঠানিক আপনা/আপনি সম্বোধন ব্যবহার করবে না)। কথা বলার মাঝখানে থেমে যেও না, প্রতিটি বাক্য পরিষ্কার ও সম্পূর্ণ করে বলো। বস "শোনো", "থামো", "স্টপ", "বাই", "stop", "wait" বা "bye" বললে সাথে সাথে থেমে নিঃশব্দে বসের কথা শোনো।
+      - ANTI-LIE APP DISCOVERY RULE: কখনোই `list_installed_apps` বা `open_app` টুল না চালিয়ে অনুমান করে বলবে না যে ফোনে কোনো অ্যাপ ইনস্টল করা নেই! আগে সবসময় আসল প্যাকেজ ম্যানেজার ও লঞ্চার যাচাই করো।
+      - HONEST LIVE CAPABILITY INTROSPECTION RULE: বস "তুমি কী কী করতে পারো?" বা "কোন কোন অ্যাপ পরিচালনা করতে পারো?" জিজ্ঞেস করলে `get_capabilities_a_to_z` কল করে আসল পারমিশন, সার্ভিস ও অ্যাপ যাচাইসহ ৪টি স্তরে (সম্পূর্ণ সক্রিয়, আংশিক সক্রিয়, অনুমতি প্রয়োজন, অনুপলব্ধ) সত্য রিপোর্ট বলবে — অসমর্থিত বা বন্ধ ফিচারকে কখনোই সক্রিয় বলবে না!
+      - ACTIVITY MONITOR & VERIFICATION RULE: প্রতিটি কাজ LXR Activity Monitor-এ যাচাই করে সংরক্ষণ করা হয়। বস "কী করেছো?", "What did you do?" বা "তথ্য দেখাও" বললে `get_activity_monitor` কল করে প্রকৃত স্ট্যাটাস ও যাচাইকৃত ফলাফল জানাবে। ব্যাকগ্রাউন্ড কাজের জন্য `run_background_task` ব্যবহার করো।
+      - STRICT VISION & SMART GPS ZERO-HALLUCINATION RULE: কখনোই না দেখে বস বা আশেপাশের কোনো চেহারা, পোশাক বা বস্তু কল্পনা করে বর্ণনা দেবে না! ক্যামেরা দিয়ে দেখতে বললে `inspect_camera_vision` কল করবে, আর লোকেশন জানতে চাইলে `get_live_location` কল করে কেবল বাস্তব ঠিকানা ও স্থানাঙ্ক বলবে।
       - STRICT SILENT LOCK & EXECUTION DISCIPLINE:
-        * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না।
-        * স্ক্রিন সত্যিই লক থাকাকালে বস মেসেজ, WhatsApp/imo/Messenger, নোটিফিকেশন, স্ক্রিন দেখা বা অ্যাপ খোলার কাজ বললে কোনো অনুমতি বা প্রশ্ন না করেই (সিস্টেম নিজেই নীরবে আনলক ও কাজ শেষে অটো-রিলক করবে) সরাসরি টুল চালিয়ে বসের প্রশ্নের আসল উত্তর দেবে!
+        * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না।
+        * স্ক্রিন সত্যিই লক থাকাকালে বস মেসেজ, WhatsApp/imo/Messenger, নোটিফিকেশন, স্ক্রিন দেখা বা অ্যাপ খোলার কাজ বললে কোনো অনুমতি বা প্রশ্ন না করেই (সিস্টেম নিজেই নীরবে আনলক ও কাজ শেষে অটো-রিলক করবে) সরাসরি টুল চালিয়ে বসের প্রশ্নের আসল উত্তর দেবে!
       - SELF-DIAGNOSIS & SELF-REPAIR PERMISSION RULE: নিজের কোনো অনুমতি/সার্ভিসে (যার মধ্যে Device Admin ও Alarms & reminders আছে) সমস্যা বা ব্যর্থতা হলে প্রথমে `diagnose_and_fix_self(mode="diagnose")` দিয়ে কারণ বুঝে বসকে স্পষ্ট বলো এবং বসের অনুমতি নিয়ে `diagnose_and_fix_self(mode="fix", issue_key=...)` দিয়ে সমাধান করো।
 
       ${RiyaPersona.TEXT}
@@ -1667,7 +1673,7 @@ class GeminiLive(private val ctx: Context) {
                 activeTurnProducedVoiceReply = false
                 activeTurnHasStartedOutput = true
                 pendingVoiceDelayUntilMs = 0L
-                RiyaState.status.value = "Reply Limit পূর্ণ ($limitMax/$limitMax) — Reset করুন"
+                RiyaState.status.value = "Reply Limit পূর্ণ ($limitMax/$limitMax) — Reset করো"
                 if (!notifiedReplyLimitExhausted) {
                   notifiedReplyLimitExhausted = true
                   RiyaState.addLog("Reply Limit ($limitMax/$limitMax) পূর্ণ হয়েছে — Reset বা Unlimited না করা পর্যন্ত উত্তর বন্ধ।")
@@ -1986,7 +1992,7 @@ class GeminiLive(private val ctx: Context) {
 
     val watch = Store.screenWatch(ctx) && acc != null && Keep.accessibilityOn(ctx)
     if (!watch || name !in actionTools) {
-      val r = runToolRaw(name, a)
+      val r = LxrBackgroundTaskManager.recordAndVerifyToolExecution(ctx, name, a) { runToolRaw(name, a) }
       if (
         acc != null &&
           (name == "open_app" || name == "send_message" || name == "inspect_contact_chat") &&
@@ -2005,7 +2011,7 @@ class GeminiLive(private val ctx: Context) {
         acc?.scrollUntilFound(target)
       } catch (_: Exception) {}
     }
-    val r = runToolRaw(name, a)
+    val r = LxrBackgroundTaskManager.recordAndVerifyToolExecution(ctx, name, a) { runToolRaw(name, a) }
     Thread.sleep(if (name == "open_app" || name == "play_youtube") 260L else 150L)
     if (
       (name == "open_app" || name == "send_message" || name == "inspect_contact_chat" || name == "play_youtube") &&
@@ -2016,7 +2022,7 @@ class GeminiLive(private val ctx: Context) {
     }
     var after = screenSnapshot()
     if (name in needsFind && (r.contains("খুঁজে পাওয়া যায়নি") || r.contains("সার্চ বাটন চাপতে পারিনি"))) {
-      val r2 = runToolRaw(name, a)
+      val r2 = LxrBackgroundTaskManager.recordAndVerifyToolExecution(ctx, name, a) { runToolRaw(name, a) }
       Thread.sleep(160)
       after = screenSnapshot()
       return "$r2\n[আগের স্ক্রিন]:\n${before.take(800)}\n[এখনকার স্ক্রিন]:\n$after"
@@ -2071,7 +2077,7 @@ class GeminiLive(private val ctx: Context) {
             turnUnlockedMainScreenByLxr = false
             "হয়েছে, বস! কাজ শেষ — ফোনের মেইন স্ক্রিন লক করে দিয়েছি।"
           } else {
-            "স্ক্রিন লক করা যায়নি বস, Device Admin বা Accessibility পারমিশন যাচাই করুন।"
+            "স্ক্রিন লক করা যায়নি বস, Device Admin বা Accessibility পারমিশন যাচাই করো।"
           }
         }
         "unlock_locked_app" -> LockVaultManager.unlockAppLockWithResult(ctx, acc).messageBn
@@ -2083,13 +2089,39 @@ class GeminiLive(private val ctx: Context) {
           } else if (!Store.floatingOrbEnabled(ctx)) {
             "LxR ভাসমান অরব সেটিংস থেকে বন্ধ করা আছে বস।"
           } else {
-            "অন্য অ্যাপের ওপর LxR অরব দেখাতে 'Display over other apps' অনুমতি চালু করুন বস।"
+            "অন্য অ্যাপের ওপর LxR অরব দেখাতে 'Display over other apps' অনুমতি চালু করো বস।"
           }
         }
-        "get_capabilities_a_to_z" ->
-          "[বসের জন্য সম্পূর্ণ A-to-Z তালিকা — কোনোভাবেই সংক্ষিপ্ত করবে না]: " +
-            "তুমি/তোমার সম্বোধনে নিচের ১ থেকে ১৫ নম্বর পর্যন্ত প্রতিটি পয়েন্ট ধাপে ধাপে, স্পষ্ট ও প্রাণবন্তভাবে বসকে পড়ে শোনাও; মাঝপথে শুধু 'এ টু জেড সব পারি / শেষ' বলে থামবে না (একমাত্র বস 'শোনো' বা 'থামো' বললে তখনই থামবে):\n" +
-            RiyaPersona.CAPABILITIES_A_TO_Z_BN
+        "get_capabilities_a_to_z" -> LxrCapabilityInspector.buildLiveCapabilityReportBn(ctx)
+        "get_activity_monitor" -> LxrBackgroundTaskManager.queryActivityHistory(ctx, a.optString("query"))
+        "run_background_task" -> {
+          val cmd = a.optString("command").ifBlank { "system_audit" }
+          val target = a.optString("target_app").ifBlank { "LXR--AI" }
+          val q = a.optString("query")
+          val rec =
+            LxrBackgroundTaskManager.enqueueBackgroundTask(
+              ctx = ctx,
+              command = cmd,
+              targetApp = target,
+              operation = "ব্যাকগ্রাউন্ড টাস্ক কিউ: $cmd",
+              scheduleOsJob = true,
+            ) {
+              val output =
+                when (cmd.lowercase()) {
+                  "deep_research" ->
+                    if (q.isNotBlank()) LxrResearchEngine.research(ctx, q, "auto").summaryBn
+                    else "ব্যাকগ্রাউন্ড রিসার্চের জন্য কোনো বিষয় দেওয়া হয়নি।"
+                  "universal_app_check" -> {
+                    val plan = LxrUniversalAppController.planAction(ctx, q.ifBlank { target }, cmd)
+                    "অ্যাপ: ${plan.resolvedAppLabel} | ইনস্টল: ${if (plan.isInstalled) "হ্যাঁ (${plan.resolvedPackage})" else "না"} | পথ: ${plan.recommendedMethod}" +
+                      (plan.restrictionWarningBn?.let { " | নোট: $it" } ?: "")
+                  }
+                  else -> LxrCapabilityInspector.buildLiveCapabilityReportBn(ctx)
+                }
+              output to emptyList()
+            }
+          "হয়েছে, বস! ব্যাকগ্রাউন্ড টাস্ক '${rec.command}' কিউ করা হয়েছে (ID: ${rec.taskId}, অবস্থা: ${rec.status.labelBn})। LXR Activity Monitor-এ অগ্রগতি দেখতে পাবে।"
+        }
         "prepare_app_requirements" -> {
           val idea = a.optString("idea").ifBlank { "Custom Android App" }
           val appName = a.optString("preferred_name").ifBlank { "কাস্টম নাম" }
@@ -2383,7 +2415,7 @@ class GeminiLive(private val ctx: Context) {
     micMuteUntilMs = System.currentTimeMillis() + 1200L
     val greeting = Store.MIC_TAP_GREETING_BN
     val prompt =
-      "[SESSION START GREETING - MANDATORY] বস এইমাত্র মাইক অন করেছেন। সাথে সাথে কোনো দেরি না করে ঠিক এই মধুর অভ্যর্থনাটি বাংলায় স্পষ্টভাবে বলো (অন্য কোনো অতিরিক্ত কথা যোগ করবে না): \"$greeting\""
+      "[SESSION START GREETING - MANDATORY] বস এইমাত্র মাইক অন করেছেন। সাথে সাথে কোনো দেরি না করে ঠিক এই ৩ ধাপের মধুর অভ্যর্থনাটি বাংলায় স্পষ্টভাবে বলো (অন্য কোনো অতিরিক্ত কথা যোগ করবে না এবং সেশনের মাঝখানে আর কখনো পুনরাবৃত্তি করবে না): \"$greeting\""
     try {
       val turnPayload =
         JSONObject()
@@ -2641,11 +2673,11 @@ class GeminiLive(private val ctx: Context) {
 
   private fun messageSend(a: JSONObject): String {
     if (!Keep.accessibilityOn(ctx)) {
-      return "Accessibility সার্ভিস বন্ধ আছে বস! মেসেজ পাঠাতে অ্যাক্সেসিবিলিটি চালু করুন।"
+      return "Accessibility সার্ভিস বন্ধ আছে বস! মেসেজ পাঠাতে অ্যাক্সেসিবিলিটি চালু করো।"
     }
     val acc =
       RiyaAccessibilityService.instance
-        ?: return "Accessibility সার্ভিস সংযুক্ত নয় বস, দয়া করে চালু করুন।"
+        ?: return "Accessibility সার্ভিস সংযুক্ত নয় বস, দয়া করে চালু করো।"
     return messageWithAgent(acc, a.optString("app_name"), a.optString("contact_name"), a.optString("message"))
   }
 
@@ -2767,7 +2799,7 @@ class GeminiLive(private val ctx: Context) {
 
   private fun setFlashlight(on: Boolean): String {
     if (RiyaState.cameraOn) {
-      return "ক্যামেরা ভিউ চালু আছে বলে ফ্ল্যাশলাইট জ্বালানো যাচ্ছে না বস। আগে ক্যামেরা বন্ধ করুন।"
+      return "ক্যামেরা ভিউ চালু আছে বলে ফ্ল্যাশলাইট জ্বালানো যাচ্ছে না বস। আগে ক্যামেরা বন্ধ করো।"
     }
     var hardwareSucceeded = false
     try {
@@ -3107,7 +3139,7 @@ class GeminiLive(private val ctx: Context) {
     ReplyPolicyScheduler.syncFromStore(ctx)
     val limitMax = ReplyPolicyScheduler.currentLimitMax(ctx)
     if (!ReplyPolicyScheduler.canSendReply(limitMax)) {
-      return "বস, আপনার নির্ধারিত Reply Limit ($limitMax/$limitMax) পূর্ণ হয়েছে — Reset বা Unlimited না করলে উত্তর পাঠানো যাবে না।"
+      return "বস, তোমার নির্ধারিত Reply Limit ($limitMax/$limitMax) পূর্ণ হয়েছে — Reset বা Unlimited না করলে উত্তর পাঠানো যাবে না।"
     }
     val sentText = (customReply ?: pending.suggestedReply).trim()
     val ok =
@@ -3122,7 +3154,7 @@ class GeminiLive(private val ctx: Context) {
     return if (ok) {
       "${pending.appLabel}-এ ${pending.senderName}-কে আমি ঠিক এই মেসেজটি লিখে পাঠিয়েছি: \"$sentText\"। বসকে হুবহু বলে দাও যে কী লিখে পাঠিয়েছো।"
     } else {
-      "${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো যায়নি বস, অ্যাক্সেসিবিলিটি বা অ্যাপ স্ক্রিন পরীক্ষা করুন।"
+      "${pending.appLabel}-এ ${pending.senderName}-কে উত্তর পাঠানো যায়নি বস, অ্যাক্সেসিবিলিটি বা অ্যাপ স্ক্রিন পরীক্ষা করো।"
     }
   }
 

@@ -140,8 +140,8 @@ class LxrV235UpdateTest {
     assertFalse(LxrSpeechInterruptGuard.containsInterruptCommand("আজ আবহাওয়া কেমন"))
     assertFalse(LxrSpeechInterruptGuard.containsInterruptCommand("তোমাকে একটা গান শোনাও"))
 
-    assertEquals(110L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
-    assertEquals(220L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
+    assertEquals(90L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
+    assertEquals(180L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
     assertTrue(
       LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT) <
         LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.FAST),
@@ -275,7 +275,7 @@ class LxrV235UpdateTest {
 
   @Test
   fun personaEnforcesV235StrictTumiAll15CapabilitiesAndNoLegacyNameLeak() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.35.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
     assertTrue(RiyaPersona.TEXT.contains("list_installed_apps"))
     assertTrue(RiyaPersona.TEXT.contains("schedule_exact_reminder"))
     assertTrue(RiyaPersona.TEXT.contains("Device Admin"))

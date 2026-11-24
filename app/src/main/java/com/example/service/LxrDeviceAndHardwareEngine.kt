@@ -771,12 +771,12 @@ object LxrDeviceAndHardwareEngine {
   @Suppress("MissingPermission", "DEPRECATION")
   fun getLiveLocationReport(ctx: Context): String {
     if (!hasLocationPermission(ctx)) {
-      return "বস, ফোনের লাইভ লোকেশন দেখতে Location (ACCESS_FINE_LOCATION) পারমিশন প্রয়োজন। Menu > Permissions থেকে Location চালু করে দিন, অথবা অনুমতি পপ-আপে Allow দিন।"
+      return "বস, ফোনের লাইভ লোকেশন দেখতে Location (ACCESS_FINE_LOCATION) পারমিশন প্রয়োজন। Menu > Permissions থেকে Location চালু করে দাও, অথবা অনুমতি পপ-আপে Allow দাও।"
     }
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     val locEnabled = if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled else lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
     if (!locEnabled) {
-      return "ফোনের GPS / Location সুইচ বন্ধ আছে বস! বললে আমি এখনই Location চালু করে বর্তমান ঠিকানা বের করে দিচ্ছি।"
+      return "ফোনের GPS / Location সুইচ বন্ধ আছে বস! বললে আমি এখনই Location চালু করে তোমার বর্তমান ঠিকানা বের করে দিচ্ছি।"
     }
 
     var best: Location? = null
@@ -788,24 +788,54 @@ object LxrDeviceAndHardwareEngine {
     }
 
     if (best == null) {
-      return "GPS সংযোগ নিচ্ছে বস — খোলা জায়গা বা জানালায় কয়েক সেকেন্ড ধরে থাকলে আপনার সঠিক লাইভ লোকেশন পাওয়া যাবে (Google Maps দিয়েও চেক করতে পারেন)।"
+      return "GPS সংযোগ নিচ্ছে বস — খোলা জায়গা বা জানালার পাশে কয়েক সেকেন্ড ধরে থাকলে তোমার সঠিক লাইভ লোকেশন পাওয়া যাবে (Google Maps দিয়েও চেক করতে পারো)।"
     }
 
-    val addressLine = reverseGeocodeAddress(ctx, best.latitude, best.longitude)
+    val addr = reverseGeocodeAddressObject(ctx, best.latitude, best.longitude)
+    val addressLine = addr?.let { formatAddress(it) }
+    val areaDistrict =
+      addr?.let { a ->
+        listOfNotNull(
+          a.subLocality?.takeIf { it.isNotBlank() },
+          a.locality?.takeIf { it.isNotBlank() },
+          a.subAdminArea?.takeIf { it.isNotBlank() },
+          a.adminArea?.takeIf { it.isNotBlank() },
+        ).distinct().joinToString(", ").ifBlank { null }
+      }
+    val country = addr?.countryName?.takeIf { it.isNotBlank() }
+    val streetPlace =
+      addr?.let { a ->
+        listOfNotNull(
+          a.featureName?.takeIf { it.isNotBlank() && it != a.locality },
+          a.thoroughfare?.takeIf { it.isNotBlank() },
+        ).distinct().joinToString(", ").ifBlank { null }
+      }
+    val capturedAt =
+      SimpleDateFormat("dd MMM yyyy, hh:mm:ss a", Locale("bn", "BD")).format(Date(best.time.takeIf { it > 0L } ?: System.currentTimeMillis()))
     val mapsUrl = String.format(Locale.US, "https://maps.google.com/?q=%.6f,%.6f", best.latitude, best.longitude)
     val accM = best.accuracy.roundToInt()
     return buildString {
-      appendLine("📍 আপনার বর্তমান লাইভ লোকেশন:")
+      appendLine("📍 তোমার বর্তমান লাইভ লোকেশন:")
       if (!addressLine.isNullOrBlank()) {
-        appendLine("• ঠিকানা: $addressLine")
+        appendLine("• পূর্ণ ঠিকানা: $addressLine")
+      }
+      if (!streetPlace.isNullOrBlank()) {
+        appendLine("• স্থান ও সড়ক: $streetPlace")
+      }
+      if (!areaDistrict.isNullOrBlank()) {
+        appendLine("• এলাকা / জেলা: $areaDistrict")
+      }
+      if (!country.isNullOrBlank()) {
+        appendLine("• দেশ: $country")
       }
       appendLine(String.format(Locale.US, "• স্থানাঙ্ক: %.6f, %.6f (নির্ভুলতা ~%d মিটার)", best.latitude, best.longitude, accM))
+      appendLine("• লোকেশন সময়: $capturedAt")
       appendLine("• ম্যাপ লিংক: $mapsUrl")
     }.trim()
   }
 
   @Suppress("DEPRECATION")
-  private fun reverseGeocodeAddress(ctx: Context, lat: Double, lon: Double): String? {
+  private fun reverseGeocodeAddressObject(ctx: Context, lat: Double, lon: Double): Address? {
     if (!Geocoder.isPresent()) return null
     val geocoder = Geocoder(ctx, Locale("bn", "BD"))
     return runCatching {
@@ -817,9 +847,9 @@ object LxrDeviceAndHardwareEngine {
           latch.countDown()
         }
         latch.await(2200L, TimeUnit.MILLISECONDS)
-        result?.firstOrNull()?.let { formatAddress(it) }
+        result?.firstOrNull()
       } else {
-        geocoder.getFromLocation(lat, lon, 1)?.firstOrNull()?.let { formatAddress(it) }
+        geocoder.getFromLocation(lat, lon, 1)?.firstOrNull()
       }
     }.getOrNull()
   }
@@ -827,7 +857,7 @@ object LxrDeviceAndHardwareEngine {
   private fun formatAddress(a: Address): String {
     val line0 = a.getAddressLine(0)
     if (!line0.isNullOrBlank()) return line0
-    return listOfNotNull(a.subLocality, a.locality, a.subAdminArea, a.adminArea, a.countryName)
+    return listOfNotNull(a.featureName, a.thoroughfare, a.subLocality, a.locality, a.subAdminArea, a.adminArea, a.countryName)
       .distinct()
       .joinToString(", ")
   }

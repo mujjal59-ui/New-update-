@@ -118,8 +118,9 @@ object LxrFloatingOverlayManager {
   fun isAiWakeGreeting(reply: String): Boolean {
     val clean = reply.trim()
     if (clean.isEmpty()) return false
-    return clean.contains("কেনো ডেকেছেন") ||
-      clean.contains("কেন ডেকেছেন") ||
+    return clean.contains("কেন ডেকেছো") ||
+      clean.contains("কী করতে হবে") ||
+      clean.contains("কেনো ডেকেছেন") ||
       (clean.contains("বস") && clean.contains("কি করতে হবে"))
   }
 
@@ -805,7 +806,7 @@ object LxrFloatingOverlayManager {
                 pulseWake()
                 Toast.makeText(
                   appCtx,
-                  "শুনছি বস, বলুন...",
+                  "শুনছি বস, বলো...",
                   Toast.LENGTH_SHORT,
                 ).show()
               } else {

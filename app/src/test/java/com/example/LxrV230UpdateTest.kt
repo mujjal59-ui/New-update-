@@ -152,14 +152,14 @@ class LxrV230UpdateTest {
 
   @Test
   fun personaIncludesHumanEmotionalTraitsSelfDiagnosisAndV230Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.30.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
     assertTrue(RiyaPersona.TEXT.contains("diagnose_and_fix_self"))
     assertTrue(RiyaPersona.TEXT.contains("critical_task_solve"))
     assertTrue(RiyaPersona.TEXT.contains("switch_camera_lens"))
     assertTrue(RiyaPersona.TEXT.contains("মাথা নত"))
-    assertTrue(RiyaPersona.TEXT.contains("ভালোবাসা"))
-    assertTrue(RiyaPersona.TEXT.contains("অভিমান"))
-    assertTrue(RiyaPersona.TEXT.contains("দুষ্টুমি"))
+    assertTrue(RiyaPersona.TEXT.contains("মিষ্টি দুষ্টুমি"))
+    assertTrue(RiyaPersona.TEXT.contains("empathy"))
+    assertTrue(RiyaPersona.TEXT.contains("warm laughter"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Self-Diagnosis"))
   }
 

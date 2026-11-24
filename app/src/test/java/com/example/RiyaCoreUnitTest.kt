@@ -193,10 +193,10 @@ class RiyaCoreUnitTest {
   @Test
   fun personaRules_coverAutonomousSearchOpenChatReuseAndIncomingReplies() {
     assertTrue(RiyaPersona.TEXT.contains("reply_to_incoming_message"))
-    assertTrue(RiyaPersona.TEXT.contains("WITHOUT asking Boss for permission"))
-    assertTrue(RiyaPersona.TEXT.contains("ALREADY open from earlier"))
-    assertTrue(RiyaPersona.TEXT.contains("FIRST scan the top visible chat rows"))
-    assertTrue(RiyaPersona.TEXT.contains("Never guess or falsely claim Accessibility is OFF"))
+    assertTrue(RiyaPersona.TEXT.contains("inspect_contact_chat"))
+    assertTrue(RiyaPersona.TEXT.contains("list_installed_apps"))
+    assertTrue(RiyaPersona.TEXT.contains("open_app"))
+    assertTrue(RiyaPersona.TEXT.contains("Never claim an unavailable or unpermitted capability is fully operational"))
   }
 
   @Test
@@ -291,10 +291,10 @@ class RiyaCoreUnitTest {
 
   @Test
   fun micTapGreetingAndCalibratedVoiceSensitivity_areConfiguredProperly() {
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু"))
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("প্রাণ প্রিয় বস"))
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("বলুন কি করতে হবে"))
-    assertTrue(Store.WAKE_CALL_GREETING_BN.contains("কেনো ডেকেছেন"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু আলাইকুম বস"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("কেমন আছো বস"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আজ তোমার জন্য কী করতে পারি"))
+    assertTrue(Store.WAKE_CALL_GREETING_BN.contains("কেন ডেকেছো"))
 
     assertEquals(0.44f, com.example.data.VoiceMatchSensitivity.EASY.threshold, 0.001f)
     assertEquals(0.53f, com.example.data.VoiceMatchSensitivity.BALANCED.threshold, 0.001f)
@@ -582,7 +582,7 @@ class RiyaCoreUnitTest {
     assertFalse(com.example.service.LxrFloatingOverlayManager.isPureWakeCall("LxR অরব হোয়াটসঅ্যাপ ওপেন করো"))
     assertTrue(
       com.example.service.LxrFloatingOverlayManager.isAiWakeGreeting(
-        "বস, কেনো ডেকেছেন? বলুন কি করতে হবে!"
+        "বস ❤️ কেন ডেকেছো? বলো, কী করতে হবে?"
       )
     )
     assertFalse(
@@ -643,8 +643,8 @@ class RiyaCoreUnitTest {
         lockScreenVisibleInUi = true,
       )
     )
-    assertTrue(RiyaPersona.TEXT.contains("MAIN SCREEN"))
-    assertTrue(RiyaPersona.TEXT.contains("STOP reciting the list IMMEDIATELY"))
+    assertTrue(RiyaPersona.TEXT.contains("Unlocked Screen & Privacy Strict Rule"))
+    assertTrue(RiyaPersona.TEXT.contains("Slide again to unlock"))
   }
 
   @Test
@@ -879,10 +879,10 @@ class RiyaCoreUnitTest {
 
   @Test
   fun personaRulesAndCapabilities_enforceAntiYesManExpressiveVoiceAndNoCatchphraseLoop() {
-    assertTrue(RiyaPersona.TEXT.contains("ANTI-YES-MAN RULE"))
-    assertTrue(RiyaPersona.TEXT.contains("Sad, heartbreaking, or emotional story"))
-    assertTrue(RiyaPersona.TEXT.contains("natural warm laugh"))
-    assertTrue(RiyaPersona.TEXT.contains("STRICT ANTI-REPETITION RULE"))
+    assertTrue(RiyaPersona.TEXT.contains("Anti-Yes-Man + Anti-Repetition"))
+    assertTrue(RiyaPersona.TEXT.contains("Emotionally Expressive"))
+    assertTrue(RiyaPersona.TEXT.contains("warm laughter"))
+    assertTrue(RiyaPersona.TEXT.contains("Never repeat stock robotic phrases"))
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("সংরক্ষিত পাসওয়ার্ড"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("কী লিখেছি তাও জানিয়ে দেই"))
   }

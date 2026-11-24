@@ -6,8 +6,11 @@ import androidx.room.PrimaryKey
 enum class TaskExecutionStatus {
   PENDING,
   RUNNING,
+  WAITING_FOR_SYSTEM,
   COMPLETED,
   FAILED,
+  PARTIALLY_COMPLETED,
+  VERIFICATION_REQUIRED,
 }
 
 @Entity(tableName = "riya_tasks")

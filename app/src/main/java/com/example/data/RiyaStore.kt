@@ -120,9 +120,9 @@ enum class ReplyDelayOption(
   val selectedLabel: String,
   val voiceDelayMs: Long,
 ) {
-  INSTANT(0, "Instant — 00.0 sec (Default)", "Selected: Instant (00.0 sec)", 0L),
-  FAST(5, "Fast — 00.5 sec", "Selected: Fast (00.5 sec)", 500L),
-  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)", 100L),
+  INSTANT(0, "Instant — 0 ms (Default)", "Selected: Instant (0 ms)", 0L),
+  FAST(5, "Fast — 30 ms", "Selected: Fast (30 ms)", 30L),
+  NORMAL(10, "Normal — 45 ms", "Selected: Normal (45 ms)", 45L),
   ;
 
   companion object {
@@ -219,8 +219,8 @@ object Store {
   const val MIN_VOICE_SPEED = 0.75f
   const val MAX_VOICE_SPEED = 1.35f
   const val MIC_TAP_GREETING_BN =
-    "আসসালামু ওয়ালাইকুম... কেমন আছেন আমার প্রাণ প্রিয় বস, বলুন কি করতে হবে।"
-  const val WAKE_CALL_GREETING_BN = "বস ❤️ কেনো ডেকেছেন বলুন কি করতে হবে"
+    "আসসালামু আলাইকুম বস। কেমন আছো বস? আশা করি ভালো আছো। বলো বস, আজ তোমার জন্য কী করতে পারি? কোন কাজটি করতে হবে?"
+  const val WAKE_CALL_GREETING_BN = "বস ❤️ কেন ডেকেছো? বলো, কী করতে হবে?"
 
   val VOICE_OPTIONS =
     listOf(

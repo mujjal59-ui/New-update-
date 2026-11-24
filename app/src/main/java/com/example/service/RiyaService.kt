@@ -164,6 +164,7 @@ class RiyaService : Service() {
     LxrCameraVisionEngine.ensureBackgroundCaptureIfActive(applicationContext)
 
     LxrCompanionAgent.start(applicationContext)
+    LxrBackgroundTaskManager.recoverInterruptedTasks(applicationContext)
     AccessibilityStatusMonitor.startListening(this)
     try {
       Keep.ensureAccessibility(this)

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -67,6 +68,8 @@ import com.example.data.Store
 import com.example.service.ImoSendPrecisionEngine
 import com.example.service.InfinixDevicePlaybook
 import com.example.service.Keep
+import com.example.service.LxrBackgroundTaskManager
+import com.example.service.LxrBackgroundTaskStatus
 import com.example.service.ReplyPolicyScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -89,6 +92,8 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val snapshot by RiyaRuntimeBridge.latestScreenSnapshot.collectAsState()
   val lastCompleted by RiyaState.lastCompletedTask.collectAsState()
   val motivation by RiyaState.motivationalBanner.collectAsState()
+  val activityRecords by LxrBackgroundTaskManager.activities.collectAsState()
+  LaunchedEffect(Unit) { LxrBackgroundTaskManager.recoverInterruptedTasks(ctx) }
   var query by remember { mutableStateOf("") }
   var busy by remember { mutableStateOf(false) }
   var nextSuggestions by remember {
@@ -246,6 +251,124 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         PremiumIconBadge(Icons.Filled.AutoAwesome, item, listOf(CYBER_AMBER, CYBER_RED), 30)
         Spacer(Modifier.width(10.dp))
         Text(item, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+      }
+    }
+
+    // LXR Activity Monitor — Real-Time Verified Background & Tool Operations
+    Column(
+      Modifier
+        .fillMaxWidth()
+        .testTag("lxr_activity_monitor_card")
+        .background(CYBER_CARD, RoundedCornerShape(16.dp))
+        .border(1.dp, CYBER_PURPLE.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+        .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          PremiumIconBadge(Icons.Filled.Bolt, "Activity Monitor", listOf(CYBER_PURPLE, CYBER_CYAN), 30)
+          Spacer(Modifier.width(8.dp))
+          Text(
+            "LXR Activity Monitor",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+          )
+        }
+        Text(
+          "${activityRecords.size} টি রেকর্ড",
+          color = CYBER_CYAN,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+      if (activityRecords.isEmpty()) {
+        Text(
+          "এখনো কোনো ব্যাকগ্রাউন্ড বা অটোমেশন কাজ রেকর্ড হয়নি। যেকোনো কাজ চালালে এখান থেকে লাইভ ধাপ ও যাচাইকৃত ফলাফল দেখা যাবে।",
+          color = Color.LightGray,
+          fontSize = 12.sp,
+        )
+      } else {
+        activityRecords.take(8).forEach { rec ->
+          val statusColor =
+            when (rec.status) {
+              LxrBackgroundTaskStatus.COMPLETED -> CYBER_GREEN
+              LxrBackgroundTaskStatus.RUNNING -> CYBER_CYAN
+              LxrBackgroundTaskStatus.WAITING_FOR_SYSTEM -> CYBER_AMBER
+              LxrBackgroundTaskStatus.PARTIALLY_COMPLETED -> CYBER_AMBER
+              LxrBackgroundTaskStatus.VERIFICATION_REQUIRED -> Color(0xFFF59E0B)
+              LxrBackgroundTaskStatus.FAILED -> CYBER_RED
+              LxrBackgroundTaskStatus.PENDING -> Color.LightGray
+            }
+          Column(
+            Modifier
+              .fillMaxWidth()
+              .background(Color(0xFF0A1428), RoundedCornerShape(12.dp))
+              .border(1.dp, statusColor.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+              .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                "${rec.targetApp} • ${rec.command}",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+              )
+              Text(
+                "${rec.status.labelBn} (${rec.progressPercent}%)",
+                color = statusColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.5.sp,
+              )
+            }
+            LinearProgressIndicator(
+              progress = { (rec.progressPercent / 100f).coerceIn(0f, 1f) },
+              modifier = Modifier.fillMaxWidth(),
+              color = statusColor,
+              trackColor = Color(0xFF1F2B47),
+            )
+            if (rec.currentOperation.isNotBlank()) {
+              Text(rec.currentOperation, color = CYBER_CYAN, fontSize = 11.5.sp)
+            }
+            if (rec.retrievedInfo.isNotBlank()) {
+              Text(
+                "তথ্য: ${rec.retrievedInfo.replace('\n', ' ').take(130)}",
+                color = Color.LightGray,
+                fontSize = 11.5.sp,
+              )
+            }
+            if (rec.generatedFiles.isNotEmpty()) {
+              Text(
+                "ফাইল: ${rec.generatedFiles.joinToString(", ")}",
+                color = CYBER_GREEN,
+                fontSize = 11.sp,
+              )
+            }
+            if (rec.verificationNote.isNotBlank()) {
+              Text(
+                "যাচাই: ${rec.verificationNote}",
+                color = Color(0xFF93A5C0),
+                fontSize = 11.sp,
+              )
+            }
+            if (!rec.errorDetails.isNullOrBlank()) {
+              Text(
+                "ত্রুটি: ${rec.errorDetails}",
+                color = CYBER_RED,
+                fontSize = 11.sp,
+              )
+            }
+          }
+        }
       }
     }
   }

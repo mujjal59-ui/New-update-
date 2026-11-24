@@ -37,8 +37,8 @@ class LxrV231UpdateTest {
   @Test
   fun replyDelayOptionsAndVadProfilesMatchInstantFastNormalSpeeds() {
     assertEquals(0L, ReplyDelayOption.INSTANT.voiceDelayMs)
-    assertEquals(500L, ReplyDelayOption.FAST.voiceDelayMs)
-    assertEquals(100L, ReplyDelayOption.NORMAL.voiceDelayMs)
+    assertEquals(30L, ReplyDelayOption.FAST.voiceDelayMs)
+    assertEquals(45L, ReplyDelayOption.NORMAL.voiceDelayMs)
 
     assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
     assertEquals(540, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.FAST))
@@ -143,13 +143,13 @@ class LxrV231UpdateTest {
 
   @Test
   fun personaReflectsV231PersonalityAndCapabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.31.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
     assertTrue(RiyaPersona.TEXT.contains("শোনো"))
     assertTrue(RiyaPersona.TEXT.contains("থামো"))
-    assertTrue(RiyaPersona.TEXT.contains("কথার ভঙ্গি ও স্টাইল বোঝা"))
-    assertTrue(RiyaPersona.TEXT.contains("গান গেয়ে"))
-    assertTrue(RiyaPersona.TEXT.contains("অনুমতি চেয়ে নিজের কথা"))
+    assertTrue(RiyaPersona.TEXT.contains("Singing & Personal Sharing"))
+    assertTrue(RiyaPersona.TEXT.contains("sing sweetly"))
+    assertTrue(RiyaPersona.TEXT.contains("তোমার অনুমতি হলে"))
     assertTrue(RiyaPersona.TEXT.contains("মাথা নত"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.30.0"))
+    assertTrue(RiyaPersona.TEXT.contains("Anti-Yes-Man"))
   }
 }

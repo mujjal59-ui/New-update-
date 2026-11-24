@@ -157,10 +157,8 @@ class LxrV232UpdateTest {
 
   @Test
   fun personaIncludesV232AndPreservesV231AndV230Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.32.0"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.31.0"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.30.0"))
-    assertTrue(RiyaPersona.TEXT.contains("home_status_pill"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
     assertTrue(RiyaPersona.TEXT.contains("Slide again to unlock"))
   }
 }

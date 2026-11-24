@@ -193,9 +193,9 @@ class LxrV223UpdateTest {
 
     composeTestRule.onNodeWithTag("reply_delay_limit_card").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Reply Delay and Reply Limit").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Instant — 00.0 sec (Default)").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Fast — 00.5 sec").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Normal — 00.10 sec").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Instant — 0 ms (Default)").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Fast — 30 ms").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Normal — 45 ms").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Unlimited — Default").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("20 Replies").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("50 Replies").performScrollTo().assertIsDisplayed()
@@ -205,7 +205,7 @@ class LxrV223UpdateTest {
       .assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("reply_delay_option_5").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (00.5 sec)")
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (30 ms)")
     assertEquals(5, Store.replyDelaySeconds(ctx))
 
     composeTestRule.onNodeWithTag("reply_limit_option_20").performScrollTo().performClick()
@@ -213,7 +213,7 @@ class LxrV223UpdateTest {
     assertEquals(20, Store.replyLimitMax(ctx))
 
     composeTestRule.onNodeWithTag("reply_delay_option_10").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Normal (00.10 sec)")
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Normal (45 ms)")
     composeTestRule.onNodeWithTag("reply_limit_option_50").performScrollTo().performClick()
     assertEquals(10, Store.replyDelaySeconds(ctx))
     assertEquals(50, Store.replyLimitMax(ctx))

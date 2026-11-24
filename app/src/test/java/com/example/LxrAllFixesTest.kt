@@ -403,8 +403,8 @@ class LxrAllFixesTest {
   fun lxrPersonaAndZeroDelayVad_enforceNameLaxZeroExcuseAndStudioCapabilities() {
     assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
     assertTrue(RiyaPersona.TEXT.contains("LAX"))
-    assertTrue(RiyaPersona.TEXT.contains("ZERO-EXCUSE"))
-    assertTrue(RiyaPersona.TEXT.contains("3D Cartoon Animation, Movie & Episodic Series Studio"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
     assertTrue("End-of-turn flush window must stay balanced to avoid clipping", LiveVadConfig.END_OF_TURN_FLUSH_MS in 200L..600L)
     assertTrue("Prefix padding must stay tight", LiveVadConfig.PREFIX_PADDING_MS <= 30)

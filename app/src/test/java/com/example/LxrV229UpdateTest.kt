@@ -185,10 +185,10 @@ class LxrV229UpdateTest {
 
     assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
     assertTrue(RiyaPersona.TEXT.contains("LAX"))
-    assertTrue(RiyaPersona.TEXT.contains("ZERO-EXCUSE"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
     assertTrue(RiyaPersona.TEXT.contains("১৮০ দিন"))
     assertTrue(RiyaPersona.TEXT.contains("delete_memory_entry"))
-    assertTrue(RiyaPersona.TEXT.contains("3D Cartoon Animation, Movie & Episodic Series Studio"))
+    assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
   }
 

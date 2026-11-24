@@ -630,6 +630,7 @@ fun RiyaChatDialog(close: () -> Unit) {
             accessibilityActive = accOk,
             preferFastLowNet = lowNetFast,
             memoryContext = combinedMemory,
+            context = ctx,
           )
           .collect { partial ->
             streamText = partial
@@ -645,7 +646,7 @@ fun RiyaChatDialog(close: () -> Unit) {
         }
       } catch (e: Exception) {
         val fallback =
-          "বস, এই মুহূর্তে সরাসরি উত্তর আনা যায়নি (${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"})। আপনি চাইলে Menu > Gemini API Key ও Voice দিয়ে ভয়েস লাইভ চালু করতে পারেন।"
+          "বস, এই মুহূর্তে সরাসরি উত্তর আনা যায়নি (${e.localizedMessage ?: "নেটওয়ার্ক সমস্যা"})। তুমি চাইলে Menu > Gemini API Key ও Voice দিয়ে ভয়েস লাইভ চালু করতে পারো।"
         RiyaState.addLog("LXR--AI: $fallback")
       } finally {
         streamText = ""

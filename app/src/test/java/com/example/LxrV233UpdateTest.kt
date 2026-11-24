@@ -141,11 +141,10 @@ class LxrV233UpdateTest {
 
   @Test
   fun personaEnforcesStrictTumiFull15CapabilitiesAndAll11PersonalityRules() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.33.0"))
-    assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"তুমি\" RULE"))
-    assertTrue(RiyaPersona.TEXT.contains("একজন প্রিয় মানুষের মতো কথা বলবে"))
-    assertTrue(RiyaPersona.TEXT.contains("চঞ্চল এবং শান্ত মস্তিষ্কের মানুষ"))
-    assertTrue(RiyaPersona.TEXT.contains("মায়া, ভালোবাসা, অভিমান অভিনয়"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"বস\" + \"তুমি\" RULE"))
+    assertTrue(RiyaPersona.TEXT.contains("মিষ্টি দুষ্টুমি"))
+    assertTrue(RiyaPersona.TEXT.contains("Caring & Supportive"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
 
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("আপনার"))

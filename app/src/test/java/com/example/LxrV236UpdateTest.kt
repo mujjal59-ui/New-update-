@@ -229,16 +229,15 @@ class LxrV236UpdateTest {
       ),
     )
 
-    assertEquals(110L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
-    assertEquals(220L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
+    assertEquals(90L, LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT))
+    assertEquals(180L, LiveVadConfig.effectiveHangoverMs(ReplyDelayOption.INSTANT))
   }
 
   @Test
   fun personaIncludesV236AndPreservesStrictTumiAnd15Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.36.0"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.35.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
-    assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"তুমি\" RULE"))
+    assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"বস\" + \"তুমি\" RULE"))
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("আপনার"))
     for (num in 1..15) {
       val bnDigits = num.toString().map { ('০'.code + (it - '0')).toChar() }.joinToString("")

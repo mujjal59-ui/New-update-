@@ -139,6 +139,8 @@ object UnlockPolicyGuard {
       "diagnose_and_fix_self",
       "critical_task_solve",
       "switch_camera_lens",
+      "get_activity_monitor",
+      "run_background_task",
     )
 
   /**
@@ -239,7 +241,7 @@ object ContactFirstWordMatcher {
         "${idx + 1}. ${m.displayName} (${m.phoneNumber})"
       }.joinToString("\n")
     return "সার্চ কীওয়ার্ড '${firstWord.ifBlank { query }}' অনুযায়ী কন্টাক্ট পাওয়া গেছে:\n$lines\n" +
-      "বসকে সঠিক নাম ও নম্বরটি পড়ে শোনাও এবং জিজ্ঞেস করো: \"আমি ${matches.first().displayName} (${matches.first().phoneNumber})-কে $actionLabelBn করবো কি? হ্যাঁ বা ঠিক আছে বলুন।\" — বসের স্পষ্ট 'হ্যাঁ / ঠিক আছে' সম্মতি পাওয়ার পরই confirmed=true দিয়ে $actionLabelBn করবে।"
+      "বসকে সঠিক নাম ও নম্বরটি পড়ে শোনাও এবং জিজ্ঞেস করো: \"আমি ${matches.first().displayName} (${matches.first().phoneNumber})-কে $actionLabelBn করবো কি? হ্যাঁ বা ঠিক আছে বলো।\" — বসের স্পষ্ট 'হ্যাঁ / ঠিক আছে' সম্মতি পাওয়ার পরই confirmed=true দিয়ে $actionLabelBn করবে।"
   }
 }
 
