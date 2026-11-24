@@ -881,6 +881,17 @@ fun RiyaHomeScreen(
           Button(
             onClick = {
               scope.launch {
+                ReplyPolicyScheduler.syncFromStore(ctx)
+                val limitMax = Store.replyLimitMax(ctx)
+                if (!ReplyPolicyScheduler.canSendReply(limitMax)) {
+                  Toast.makeText(
+                      ctx,
+                      "Reply Limit পূর্ণ ($limitMax/$limitMax) — Reset করুন।",
+                      Toast.LENGTH_SHORT,
+                    )
+                    .show()
+                  return@launch
+                }
                 val ok =
                   withContext(Dispatchers.IO) {
                     val sent =
@@ -890,7 +901,7 @@ fun RiyaHomeScreen(
                         pendingIncoming.suggestedReply,
                       )
                     if (sent) {
-                      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+                      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, limitMax)
                     }
                     RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
                       pendingIncoming.eventKey,

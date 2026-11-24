@@ -415,7 +415,7 @@ class RiyaNotificationListenerService : NotificationListenerService() {
               RiyaRuntimeBridge.canAutoReplyToSender(senderCooldownKey)
           ) {
             ReplyPolicyScheduler.syncFromStore(ctx)
-            val capturedDelaySec = ReplyPolicyScheduler.captureDelaySeconds(ctx)
+            val capturedDelayMs = ReplyPolicyScheduler.captureVoiceDelayMs(ctx)
             val currentLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
             if (!ReplyPolicyScheduler.canSendReply(currentLimit)) {
               repo.updateAutoReplyStatus(eventKey, "LIMIT_REACHED", immediateTemplate)
@@ -432,8 +432,8 @@ class RiyaNotificationListenerService : NotificationListenerService() {
 
             var slotConsumed = false
             val sent =
-              ReplyPolicyScheduler.executeAfterCapturedDelay(
-                initialDelaySeconds = capturedDelaySec,
+              ReplyPolicyScheduler.executeAfterCapturedDelayMs(
+                initialDelayMs = capturedDelayMs,
                 onBeforeExecute = {
                   val latestLimit = ReplyPolicyScheduler.currentLimitMax(ctx)
                   val allowed = ReplyPolicyScheduler.tryConsumeAndPersist(ctx, latestLimit)

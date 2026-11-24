@@ -722,8 +722,8 @@ object VoiceMatchPhraseVerifier {
   val ENROLL_VERIFICATION_MODELS =
     listOf(
       "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
       "gemini-flash-latest",
-      "gemini-2.5-pro",
     )
 
   fun normalizeTranscript(raw: String): String {
@@ -1010,7 +1010,8 @@ object VoiceMatchPhraseVerifier {
   ): Boolean {
     if (voicedFrames < 10) return false
     if (lastHttpCode in listOf(400, 401, 403)) return false
-    return lastHttpCode == 429 ||
+    return lastHttpCode == 404 ||
+      lastHttpCode == 429 ||
       lastHttpCode in 500..599 ||
       lastNetErr.isNotBlank() ||
       (lastHttpCode == 0 && !sawEmptyOk)
@@ -1405,19 +1406,21 @@ object VoiceMatchManager {
     releaseRecordSafely(null)
   }
 
-  private fun prepareNormalAudioAndReleaseLive(appCtx: Context) {
-    if (RiyaState.running.value) {
+  private fun prepareNormalAudioAndReleaseLive(appCtx: Context): Boolean {
+    val wasLiveRunning = RiyaState.running.value || RiyaState.live != null
+    if (wasLiveRunning) {
+      RiyaService.pausedForVoiceMatch = true
       try {
-        appCtx.startService(Intent(appCtx, RiyaService::class.java).setAction("STOP"))
+        RiyaState.live?.stop()
       } catch (_: Throwable) {}
-      val deadline = System.currentTimeMillis() + 950L
-      while (RiyaState.running.value && System.currentTimeMillis() < deadline) {
-        try {
-          Thread.sleep(50L)
-        } catch (_: Throwable) {
-          break
-        }
-      }
+      RiyaState.live = null
+      RiyaState.running.value = false
+      try {
+        appCtx.stopService(Intent(appCtx, RiyaService::class.java))
+      } catch (_: Throwable) {}
+      try {
+        Thread.sleep(160L)
+      } catch (_: Throwable) {}
     }
     try {
       RiyaVoiceManager.stopSpeaking()
@@ -1429,6 +1432,16 @@ object VoiceMatchManager {
         am.mode = android.media.AudioManager.MODE_NORMAL
       }
     } catch (_: Throwable) {}
+    return wasLiveRunning
+  }
+
+  private fun restoreLiveAfterVoiceMatchIfNeeded(appCtx: Context, wasLiveRunning: Boolean) {
+    RiyaService.pausedForVoiceMatch = false
+    if (wasLiveRunning && !Store.userStoppedService(appCtx) && Store.apiKey(appCtx).isNotBlank()) {
+      try {
+        ContextCompat.startForegroundService(appCtx, Intent(appCtx, RiyaService::class.java))
+      } catch (_: Throwable) {}
+    }
   }
 
   @SuppressLint("MissingPermission")
@@ -1455,11 +1468,12 @@ object VoiceMatchManager {
     val worker =
       Thread {
         var record: AudioRecord? = null
+        var wasLiveRunning = false
         try {
           try {
             prevThread?.join(600L)
           } catch (_: Throwable) {}
-          prepareNormalAudioAndReleaseLive(appCtx)
+          wasLiveRunning = prepareNormalAudioAndReleaseLive(appCtx)
           try {
             Thread.sleep(100L)
           } catch (_: Throwable) {}
@@ -1568,6 +1582,7 @@ object VoiceMatchManager {
         } finally {
           captureActive.set(false)
           releaseRecordSafely(record)
+          restoreLiveAfterVoiceMatchIfNeeded(appCtx, wasLiveRunning)
           mainHandler.post { onLevel(0f) }
         }
       }
@@ -1603,11 +1618,12 @@ object VoiceMatchManager {
     val worker =
       Thread {
         var record: AudioRecord? = null
+        var wasLiveRunning = false
         try {
           try {
             prevThread?.join(600L)
           } catch (_: Throwable) {}
-          prepareNormalAudioAndReleaseLive(appCtx)
+          wasLiveRunning = prepareNormalAudioAndReleaseLive(appCtx)
           if (!captureActive.get()) return@Thread
 
           val minBuf =
@@ -1680,6 +1696,7 @@ object VoiceMatchManager {
         } finally {
           captureActive.set(false)
           releaseRecordSafely(record)
+          restoreLiveAfterVoiceMatchIfNeeded(appCtx, wasLiveRunning)
           mainHandler.post { onLevel(0f) }
         }
       }

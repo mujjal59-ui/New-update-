@@ -36,16 +36,20 @@ class AutoReplyActionReceiver : BroadcastReceiver() {
         val repo = RiyaRepository(context.applicationContext)
         when (intent.action) {
           ACTION_APPROVE_REPLY -> {
-            val event = RiyaRuntimeBridge.getPendingMessage(eventKey)
-            val sent = RiyaNotificationListenerService.sendApprovedReply(context, eventKey)
-            if (sent) {
-              ReplyPolicyScheduler.tryConsumeAndPersist(context, -1)
+            ReplyPolicyScheduler.syncFromStore(context)
+            val limitMax = com.example.data.Store.replyLimitMax(context)
+            if (ReplyPolicyScheduler.canSendReply(limitMax)) {
+              val event = RiyaRuntimeBridge.getPendingMessage(eventKey)
+              val sent = RiyaNotificationListenerService.sendApprovedReply(context, eventKey)
+              if (sent) {
+                ReplyPolicyScheduler.tryConsumeAndPersist(context, limitMax)
+              }
+              repo.updateAutoReplyStatus(
+                eventKey,
+                if (sent) "SENT_APPROVED" else "FAILED",
+                event?.suggestedReply.orEmpty(),
+              )
             }
-            repo.updateAutoReplyStatus(
-              eventKey,
-              if (sent) "SENT_APPROVED" else "FAILED",
-              event?.suggestedReply.orEmpty(),
-            )
           }
 
           ACTION_DISMISS_REPLY -> {

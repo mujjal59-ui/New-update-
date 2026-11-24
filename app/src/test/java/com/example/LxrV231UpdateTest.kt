@@ -38,7 +38,7 @@ class LxrV231UpdateTest {
   fun replyDelayOptionsAndVadProfilesMatchInstantFastNormalSpeeds() {
     assertEquals(0L, ReplyDelayOption.INSTANT.voiceDelayMs)
     assertEquals(500L, ReplyDelayOption.FAST.voiceDelayMs)
-    assertEquals(1000L, ReplyDelayOption.NORMAL.voiceDelayMs)
+    assertEquals(100L, ReplyDelayOption.NORMAL.voiceDelayMs)
 
     assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
     assertEquals(540, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.FAST))

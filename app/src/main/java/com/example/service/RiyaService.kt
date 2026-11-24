@@ -43,6 +43,7 @@ class RiyaService : Service() {
 
   companion object {
     const val ACTION_SYNC_CAMERA = "com.example.service.SYNC_CAMERA"
+    @Volatile var pausedForVoiceMatch: Boolean = false
 
     fun syncCameraState(context: Context) {
       val appCtx = context.applicationContext
@@ -148,6 +149,10 @@ class RiyaService : Service() {
       return START_STICKY
     }
     Store.setUserStoppedService(applicationContext, false)
+    pausedForVoiceMatch = false
+    ReplyPolicyScheduler.syncFromStore(applicationContext, force = true)
+    RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(applicationContext)
+    RiyaState.replyLimitMax.value = Store.replyLimitMax(applicationContext)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       getSystemService(NotificationManager::class.java)
@@ -249,7 +254,7 @@ class RiyaService : Service() {
   }
 
   override fun onDestroy() {
-    val shouldStayAlive = !Store.userStoppedService(applicationContext)
+    val shouldStayAlive = !Store.userStoppedService(applicationContext) && !pausedForVoiceMatch
     try {
       serviceScope.cancel()
     } catch (_: Throwable) {}

@@ -1204,18 +1204,29 @@ class RiyaAccessibilityService : AccessibilityService() {
   fun global(a: String): String {
     if (a == "home") {
       val launchers = resolveHomeLauncherPackages()
+      if (isOnHomeLauncher(launchers) && LockVaultManager.isScreenUnlockedNow(this, this)) {
+        readEntireScreenTree(includeAllWindows = true)
+        return "সম্পন্ন"
+      }
       val activeBefore = rootInActiveWindow?.packageName?.toString().orEmpty()
-      if (activeBefore == "com.android.systemui" && Build.VERSION.SDK_INT >= 31) {
+      if (
+        activeBefore == "com.android.systemui" &&
+          Build.VERSION.SDK_INT >= 31 &&
+          LockVaultManager.isScreenUnlockedNow(this, this)
+      ) {
         runCatching { performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE) }
         Thread.sleep(150)
       }
       val globalOk = performGlobalAction(GLOBAL_ACTION_HOME)
-      repeat(5) {
+      repeat(8) {
         if (isOnHomeLauncher(launchers)) {
           readEntireScreenTree(includeAllWindows = true)
           return "সম্পন্ন"
         }
-        Thread.sleep(130)
+        Thread.sleep(110)
+      }
+      if (LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(this, this)) {
+        return if (globalOk) "সম্পন্ন" else "ব্যর্থ"
       }
       // Fallback: explicitly fire CATEGORY_HOME Intent so Infinix / OEM launchers or overlays cannot trap LxR inside an app
       return try {
@@ -1227,7 +1238,7 @@ class RiyaAccessibilityService : AccessibilityService() {
         startActivity(homeIntent)
         Thread.sleep(360)
         readEntireScreenTree(includeAllWindows = true)
-        if (globalOk || isOnHomeLauncher(launchers)) "সম্পন্ন" else "সম্পন্ন"
+        if (globalOk || isOnHomeLauncher(launchers)) "সম্পন্ন" else "ব্যর্থ"
       } catch (_: Throwable) {
         if (globalOk) "সম্পন্ন" else "ব্যর্থ"
       }

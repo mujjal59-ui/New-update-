@@ -122,7 +122,7 @@ enum class ReplyDelayOption(
 ) {
   INSTANT(0, "Instant — 00.0 sec (Default)", "Selected: Instant (00.0 sec)", 0L),
   FAST(5, "Fast — 00.5 sec", "Selected: Fast (00.5 sec)", 500L),
-  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)", 1000L),
+  NORMAL(10, "Normal — 00.10 sec", "Selected: Normal (00.10 sec)", 100L),
   ;
 
   companion object {
@@ -437,6 +437,7 @@ object Store {
     val valid = ReplyLimitOption.fromMaxReplies(limit).maxReplies
     p(c).edit().putInt("replyLimitMax", valid).commit()
     RiyaState.replyLimitMax.value = valid
+    RiyaState.live?.onReplyLimitChanged()
   }
 
   fun replyDispatchedCount(c: Context): Int =
@@ -469,15 +470,18 @@ object Store {
 
   fun voiceMatchEnabled(c: Context): Boolean = p(c).getBoolean("vmEnabled", true)
 
-  fun setVoiceMatchEnabled(c: Context, v: Boolean) = p(c).edit().putBoolean("vmEnabled", v).apply()
+  fun setVoiceMatchEnabled(c: Context, v: Boolean) {
+    p(c).edit().putBoolean("vmEnabled", v).commit()
+  }
 
   fun voiceMatchSensitivity(c: Context): VoiceMatchSensitivity {
     val raw = p(c).getString("vmSensitivity", VoiceMatchSensitivity.BALANCED.name)
     return VoiceMatchSensitivity.entries.firstOrNull { it.name == raw } ?: VoiceMatchSensitivity.BALANCED
   }
 
-  fun setVoiceMatchSensitivity(c: Context, s: VoiceMatchSensitivity) =
-    p(c).edit().putString("vmSensitivity", s.name).apply()
+  fun setVoiceMatchSensitivity(c: Context, s: VoiceMatchSensitivity) {
+    p(c).edit().putString("vmSensitivity", s.name).commit()
+  }
 
   fun voiceMatchStepJson(c: Context, step: Int): String =
     p(c).getString("vmStep_$step", "") ?: ""

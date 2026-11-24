@@ -141,17 +141,25 @@ object LockVaultManager {
   fun hasFullScreenVisibleKeyguardLayer(acc: RiyaAccessibilityService?): Boolean {
     if (acc == null) return false
     return try {
+      val km = acc.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      val keyguardLocked = km?.isKeyguardLocked == true
+      val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+      if (km != null && !shouldTrustSystemUiLockOverlay(keyguardLocked, deviceLocked)) {
+        return false
+      }
       val dm = acc.resources.displayMetrics
       val screenH = dm.heightPixels.coerceAtLeast(1200)
       val screenW = dm.widthPixels.coerceAtLeast(720)
       val wins = acc.windows.orEmpty()
       var maxRegularAppLayer = Int.MIN_VALUE
+      var hasVisibleRegularApp = false
       for (w in wins) {
         val p = w.root?.packageName?.toString()?.trim().orEmpty()
         if (w.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION &&
           isRegularAppPackage(p) &&
           w.root?.isVisibleToUser == true
         ) {
+          hasVisibleRegularApp = true
           if (w.layer > maxRegularAppLayer) maxRegularAppLayer = w.layer
         }
       }
@@ -170,8 +178,13 @@ object LockVaultManager {
           txt.contains("quick settings") ||
             txt.contains("clear all") ||
             txt.contains("notification shade") ||
-            txt.contains("brightness") && txt.contains("wi-fi")
-        !isQuickSettingsOrShade && (maxRegularAppLayer == Int.MIN_VALUE || w.layer >= maxRegularAppLayer)
+            txt.contains("slide again to unlock") ||
+            (txt.contains("brightness") && txt.contains("wi-fi"))
+        if (isQuickSettingsOrShade) return@any false
+        val keyguardCue = isKeyguardTextDump(txt)
+        if (keyguardCue) return@any true
+        // Never treat a transparent/edge SystemUI layer during Home or APK-update transition as lockscreen when a regular app/launcher is visible
+        !hasVisibleRegularApp && (maxRegularAppLayer == Int.MIN_VALUE || w.layer >= maxRegularAppLayer) && keyguardLocked
       }
     } catch (_: Throwable) {
       false
@@ -305,11 +318,14 @@ object LockVaultManager {
         return false
       }
     }
+    val activePkg = resolveBestForegroundPackage(acc)
+    if (isRegularAppPackage(activePkg) && !hasBouncerUiShowing(acc, Store.phoneLockType(ctx)) && !isSystemKeyguardUiShowing(acc)) {
+      return false
+    }
     if (keyguardLocked && (hasFullScreenVisibleKeyguardLayer(acc) || isSystemKeyguardUiShowing(acc))) {
       return true
     }
     val lockUi = isSystemKeyguardUiShowing(acc)
-    val activePkg = resolveBestForegroundPackage(acc)
     return evaluateMainScreenLocked(
       screenInteractive = true,
       keyguardLocked = keyguardLocked,
@@ -612,12 +628,12 @@ object LockVaultManager {
     val w = widthPx.coerceAtLeast(720f)
     val h = heightPx.coerceAtLeast(1400f)
     return listOf(
-      // 1. Primary Infinix swipe matching bottom "Use Fingerprint or Swipe Up to Unlock" straight up to center-top
-      LockSwipeVector(w * 0.50f, h * 0.88f, w * 0.50f, h * 0.30f, 240L),
-      // 2. Brisk full-throw swipe from lower edge
-      LockSwipeVector(w * 0.50f, h * 0.82f, w * 0.50f, h * 0.16f, 185L),
-      // 3. Mid-screen sweep fallback when notifications cover lower area
-      LockSwipeVector(w * 0.50f, h * 0.70f, w * 0.50f, h * 0.14f, 250L),
+      // 1. Steady full-travel swipe from Infinix XOS unlock prompt up to upper center (380ms avoids XOS "Slide again to unlock" edge flick guard)
+      LockSwipeVector(w * 0.50f, h * 0.86f, w * 0.50f, h * 0.22f, 380L),
+      // 2. Smooth mid-lower to top sweep (clear of bottom gesture navigation bar)
+      LockSwipeVector(w * 0.50f, h * 0.78f, w * 0.50f, h * 0.16f, 420L),
+      // 3. Center sweep fallback when notifications cover lower half
+      LockSwipeVector(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.14f, 450L),
     )
   }
 
@@ -648,18 +664,18 @@ object LockVaultManager {
     }
 
     wakeScreenIfNeeded(ctx, acc)
-    // Wait until display is interactive and lockscreen keyguard animations settle on Android 16
+    // Wait until display is interactive and Smart Lock / Face Unlock keyguard animations settle cleanly on Android 16
     val wakeWaitDeadline = System.currentTimeMillis() + 850L
     while (pm?.isInteractive == false && System.currentTimeMillis() < wakeWaitDeadline) {
       Thread.sleep(60L)
     }
-    Thread.sleep(220L)
+    Thread.sleep(320L)
 
     if (isScreenUnlockedNow(ctx, acc, lockType)) {
       return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিনের আলো জ্বালিয়ে আনলক করা হয়েছে ✓")
     }
 
-    // Extra safety check: NEVER swipe upward on an unlocked app window (causes "Slide again to unlock" on Infinix XOS)
+    // Extra safety check: NEVER swipe upward on an unlocked app window or Home launcher (causes "Slide again to unlock" on Infinix XOS)
     val kmCheck = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val deviceLockedCheck =
       if (Build.VERSION.SDK_INT >= 22) (kmCheck?.isDeviceLocked == true) else (kmCheck?.isKeyguardLocked == true)
@@ -667,6 +683,14 @@ object LockVaultManager {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     val fgPkgNow = resolveBestForegroundPackage(acc)
+    if (isRegularAppPackage(fgPkgNow) &&
+      !hasFullScreenVisibleKeyguardLayer(acc) &&
+      !isSystemKeyguardUiShowing(acc) &&
+      !hasBouncerUiShowing(acc, lockType) &&
+      !deviceLockedCheck
+    ) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+    }
     val keyguardConfirmed =
       hasFullScreenVisibleKeyguardLayer(acc) ||
         isSystemKeyguardUiShowing(acc) ||
@@ -683,12 +707,21 @@ object LockVaultManager {
         val kmLoop = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         val devLockedLoop =
           if (Build.VERSION.SDK_INT >= 22) (kmLoop?.isDeviceLocked == true) else (kmLoop?.isKeyguardLocked == true)
-        if ((kmLoop != null && !kmLoop.isKeyguardLocked && !devLockedLoop) || isScreenUnlockedNow(ctx, acc, lockType)) {
+        val fgLoop = resolveBestForegroundPackage(acc)
+        val regularForegroundActive =
+          isRegularAppPackage(fgLoop) &&
+            !hasFullScreenVisibleKeyguardLayer(acc) &&
+            !isSystemKeyguardUiShowing(acc) &&
+            !hasBouncerUiShowing(acc, lockType)
+        if ((kmLoop != null && !kmLoop.isKeyguardLocked && !devLockedLoop) ||
+          regularForegroundActive ||
+          isScreenUnlockedNow(ctx, acc, lockType)
+        ) {
           return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
         }
         acc.swipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY, durationMs = swipe.durationMs)
         val bouncerReady =
-          pollUnlocked(950L) {
+          pollUnlocked(1050L) {
             isScreenUnlockedNow(ctx, acc, lockType) || hasBouncerUiShowing(acc, lockType)
           }
         if (isScreenUnlockedNow(ctx, acc, lockType)) {

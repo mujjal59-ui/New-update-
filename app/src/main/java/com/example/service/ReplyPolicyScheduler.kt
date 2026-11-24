@@ -72,6 +72,7 @@ object ReplyPolicyScheduler {
     sentCounter.set(0)
     _dispatchedCount.value = 0
     syncedFromStore = true
+    com.example.data.RiyaState.live?.onReplyLimitChanged()
   }
 
   @Synchronized
@@ -80,6 +81,7 @@ object ReplyPolicyScheduler {
     _dispatchedCount.value = 0
     syncedFromStore = true
     Store.setReplyDispatchedCount(context, 0)
+    com.example.data.RiyaState.live?.onReplyLimitChanged()
   }
 
   /**
@@ -93,6 +95,25 @@ object ReplyPolicyScheduler {
     block: suspend () -> T,
   ): T? {
     val capturedMs = initialDelaySeconds.coerceAtLeast(0).toLong() * 1000L
+    return executeAfterCapturedDelayMs(
+      initialDelayMs = capturedMs,
+      delayFn = delayFn,
+      onBeforeExecute = onBeforeExecute,
+      block = block,
+    )
+  }
+
+  /**
+   * Captures [initialDelayMs] before sleeping (Instant=0ms, Fast=500ms, Normal=100ms) so edits
+   * mid-wait never mutate an already-running wait.
+   */
+  suspend fun <T> executeAfterCapturedDelayMs(
+    initialDelayMs: Long,
+    delayFn: suspend (Long) -> Unit = { ms -> delay(ms) },
+    onBeforeExecute: (() -> Boolean)? = null,
+    block: suspend () -> T,
+  ): T? {
+    val capturedMs = initialDelayMs.coerceAtLeast(0L)
     if (capturedMs > 0L) {
       delayFn(capturedMs)
     }
@@ -103,6 +124,8 @@ object ReplyPolicyScheduler {
   }
 
   fun captureDelaySeconds(context: Context): Int = Store.replyDelaySeconds(context)
+
+  fun captureVoiceDelayMs(context: Context): Long = Store.replyDelayOption(context).voiceDelayMs
 
   fun currentLimitMax(context: Context): Int = Store.replyLimitMax(context)
 }

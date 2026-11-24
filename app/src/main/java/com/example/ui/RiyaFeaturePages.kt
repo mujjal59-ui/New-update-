@@ -501,11 +501,22 @@ fun AutoReplyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
             Button(
               onClick = {
                 scope.launch {
+                  ReplyPolicyScheduler.syncFromStore(ctx)
+                  val limitMax = Store.replyLimitMax(ctx)
+                  if (!ReplyPolicyScheduler.canSendReply(limitMax)) {
+                    Toast.makeText(
+                        ctx,
+                        "Reply Limit পূর্ণ ($limitMax/$limitMax) — Reset করুন।",
+                        Toast.LENGTH_SHORT,
+                      )
+                      .show()
+                    return@launch
+                  }
                   val ok =
                     withContext(Dispatchers.IO) {
                       val sent = RiyaNotificationListenerService.sendApprovedReply(ctx, ev.eventKey, ev.suggestedReply)
                       if (sent) {
-                        ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+                        ReplyPolicyScheduler.tryConsumeAndPersist(ctx, limitMax)
                       }
                       RiyaRepository(ctx.applicationContext).updateAutoReplyStatus(
                         ev.eventKey,

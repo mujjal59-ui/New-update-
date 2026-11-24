@@ -507,6 +507,9 @@ class GeminiLive(private val ctx: Context) {
   @Volatile private var lastWakeOrMicPopupMs = 0L
   @Volatile private var turnUnlockedMainScreenByLxr = false
   @Volatile private var pendingVoiceDelayUntilMs = 0L
+  @Volatile private var activeTurnProducedVoiceReply = false
+  @Volatile private var activeTurnBlockedByLimit = false
+  @Volatile private var notifiedReplyLimitExhausted = false
   @Volatile private var playbackSpeed: Float = Store.voiceSpeed(ctx)
   private var audioRouteThread: HandlerThread? = null
   private var audioRouteHandler: Handler? = null
@@ -536,6 +539,10 @@ class GeminiLive(private val ctx: Context) {
     if (Store.replyDelayOption(ctx) == ReplyDelayOption.INSTANT) {
       pendingVoiceDelayUntilMs = 0L
     }
+  }
+
+  fun onReplyLimitChanged() {
+    notifiedReplyLimitExhausted = false
   }
 
   fun updatePlaybackSpeed(speed: Float) {
@@ -1099,10 +1106,17 @@ class GeminiLive(private val ctx: Context) {
     waitingServerReply = false
     suppressStaleUntilMs = 0L
     activeTurnHasStartedOutput = false
+    activeTurnProducedVoiceReply = false
+    activeTurnBlockedByLimit = false
+    notifiedReplyLimitExhausted = false
+    pendingVoiceDelayUntilMs = 0L
     activeWorkStartedAtMs = 0L
     turnUnlockedMainScreenByLxr = false
     thinkingConfigCompatFallback = false
     stopped = false
+    ReplyPolicyScheduler.syncFromStore(ctx, force = true)
+    RiyaState.replyDelaySeconds.value = Store.replyDelaySeconds(ctx)
+    RiyaState.replyLimitMax.value = Store.replyLimitMax(ctx)
     micNoiseSuppressor.reset()
     refreshSlowNetworkState()
     requestLiveAudioFocus()
@@ -1351,6 +1365,8 @@ class GeminiLive(private val ctx: Context) {
     waitingServerReply = false
     suppressStaleUntilMs = 0L
     activeTurnHasStartedOutput = false
+    activeTurnProducedVoiceReply = false
+    activeTurnBlockedByLimit = false
     audioPlaybackEpoch.incrementAndGet()
     try {
       ws?.cancel()
@@ -1444,6 +1460,8 @@ class GeminiLive(private val ctx: Context) {
     ready = false
     waitingServerReply = false
     activeTurnHasStartedOutput = false
+    activeTurnProducedVoiceReply = false
+    activeTurnBlockedByLimit = false
     if (LxrFloatingOverlayManager.isShowing || LxrFloatingOverlayManager.orbBadgeState.value.visible) {
       LxrFloatingOverlayManager.completeTaskAndScheduleHide(ctx, hideDelayMs = 450L, keepShowingForWake = false)
     }
@@ -1511,7 +1529,7 @@ class GeminiLive(private val ctx: Context) {
     val delayOpt = Store.replyDelayOption(ctx)
     val replySpeedDesc =
       when (delayOpt) {
-        ReplyDelayOption.INSTANT -> "Instant (0 — শূন্য দেরি! বসের কথা শেষ হওয়া মাত্র ০ মিলিসেকেন্ড দেরি ছাড়াই তড়িৎ ও ছোট স্পষ্ট বাক্যে উত্তর দাও)"
+        ReplyDelayOption.INSTANT -> "Instant (00.0s — শূন্য দেরি! বসের কথা শেষ হওয়া মাত্র ০ মিলিসেকেন্ড দেরি ছাড়াই তড়িৎ ও স্পষ্ট বাক্যে উত্তর দাও)"
         ReplyDelayOption.FAST -> "Fast (00.5s)"
         ReplyDelayOption.NORMAL -> "Normal (00.10s)"
       }
@@ -1519,7 +1537,7 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.36.0, evolved from v2.35.0, v2.34.0, v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.37.0, evolved from v2.36.0, v2.35.0, v2.34.0, v2.33.0, v2.32.0, v2.31.0 and v2.30.0)
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
@@ -1604,6 +1622,8 @@ class GeminiLive(private val ctx: Context) {
           waitingServerReply = false
           suppressStaleUntilMs = 0L
           activeTurnHasStartedOutput = false
+          activeTurnProducedVoiceReply = false
+          activeTurnBlockedByLimit = false
           interruptSpeakerForBoss()
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
@@ -1620,6 +1640,8 @@ class GeminiLive(private val ctx: Context) {
           ) {
             suppressStaleUntilMs = System.currentTimeMillis() + 2600L
             activeTurnHasStartedOutput = false
+            activeTurnProducedVoiceReply = false
+            activeTurnBlockedByLimit = false
             waitingServerReply = false
             pendingVoiceDelayUntilMs = 0L
             interruptSpeakerForBoss()
@@ -1627,7 +1649,7 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         sc.optJSONObject("outputTranscription")?.optString("text")?.let {
-          if (!isSuppressingStaleAudio()) {
+          if (!isSuppressingStaleAudio() && !activeTurnBlockedByLimit) {
             pText.append(it)
           }
         }
@@ -1637,6 +1659,26 @@ class GeminiLive(private val ctx: Context) {
             // Discard stale residual audio packets briefly during active Boss barge-in
           } else {
             val isFirstChunkOfTurn = !activeTurnHasStartedOutput
+            if (isFirstChunkOfTurn) {
+              ReplyPolicyScheduler.syncFromStore(ctx)
+              val limitMax = ReplyPolicyScheduler.currentLimitMax(ctx)
+              if (limitMax > 0 && !ReplyPolicyScheduler.canSendReply(limitMax)) {
+                activeTurnBlockedByLimit = true
+                activeTurnProducedVoiceReply = false
+                activeTurnHasStartedOutput = true
+                pendingVoiceDelayUntilMs = 0L
+                RiyaState.status.value = "Reply Limit পূর্ণ ($limitMax/$limitMax) — Reset করুন"
+                if (!notifiedReplyLimitExhausted) {
+                  notifiedReplyLimitExhausted = true
+                  RiyaState.addLog("Reply Limit ($limitMax/$limitMax) পূর্ণ হয়েছে — Reset বা Unlimited না করা পর্যন্ত উত্তর বন্ধ।")
+                }
+                return@let
+              }
+              activeTurnBlockedByLimit = false
+              activeTurnProducedVoiceReply = false
+            }
+            if (activeTurnBlockedByLimit) return@let
+
             val holdUntilMs =
               if (isFirstChunkOfTurn) {
                 RiyaVoiceManager.stopSpeaking()
@@ -1651,7 +1693,7 @@ class GeminiLive(private val ctx: Context) {
             for (i in 0 until ps.length()) {
               ps.getJSONObject(i).optJSONObject("inlineData")?.let {
                 val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
-                if (!stopped) {
+                if (!stopped && !activeTurnBlockedByLimit) {
                   val pcmRms = computeRms16Bit(pcm, pcm.size)
                   RiyaState.status.value = "LXR--AI কথা বলছে..."
                   LxrFloatingOverlayManager.setSpeakingBoost(true)
@@ -1664,15 +1706,19 @@ class GeminiLive(private val ctx: Context) {
                       pendingAudioChunks.incrementAndGet()
                       playExec.execute {
                         try {
-                          if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                          if (stopped || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
                           if (applyDelay) {
-                            val remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
-                            if (remain > 0L) {
+                            var remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
+                            while (remain > 0L && !stopped && !isSuppressingStaleAudio() && turnEpoch == audioPlaybackEpoch.get()) {
+                              val step = minOf(remain, 40L)
                               try {
-                                Thread.sleep(remain)
-                              } catch (_: Throwable) {}
+                                Thread.sleep(step)
+                              } catch (_: Throwable) {
+                                break
+                              }
+                              remain = (holdUntilMs - System.currentTimeMillis()).coerceIn(0L, 1200L)
                             }
-                            if (stopped || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                            if (stopped || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
                           }
                           val t = track
                           if (!stopped && t != null && t.state == AudioTrack.STATE_INITIALIZED) {
@@ -1687,6 +1733,7 @@ class GeminiLive(private val ctx: Context) {
                                 wrote = t.write(pcm, 0, pcm.size)
                               }
                               if (wrote > 0 && turnEpoch == audioPlaybackEpoch.get()) {
+                                activeTurnProducedVoiceReply = true
                                 val afterWriteMs = System.currentTimeMillis()
                                 lastSpeakerWriteMs = afterWriteMs
                                 val frames = (wrote / 2).toLong()
@@ -1711,8 +1758,12 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         if (sc.optBoolean("turnComplete")) {
+          val wasBlockedByLimit = activeTurnBlockedByLimit
+          val producedReplyThisTurn = !wasBlockedByLimit && (activeTurnProducedVoiceReply || pText.isNotEmpty())
           suppressStaleUntilMs = 0L
           activeTurnHasStartedOutput = false
+          activeTurnProducedVoiceReply = false
+          activeTurnBlockedByLimit = false
           LxrFloatingOverlayManager.setSpeakingBoost(false)
           val u = uText.toString().trim()
           val p = pText.toString().trim()
@@ -1724,6 +1775,9 @@ class GeminiLive(private val ctx: Context) {
           if (p.isNotEmpty()) {
             Store.remember(ctx, "LXR--AI: $p")
             RiyaState.addLog("LXR--AI: $p")
+          }
+          if (producedReplyThisTurn) {
+            ReplyPolicyScheduler.tryConsumeAndPersist(ctx, ReplyPolicyScheduler.currentLimitMax(ctx))
           }
 
           val activeTrack = track
@@ -1890,7 +1944,12 @@ class GeminiLive(private val ctx: Context) {
 
   private fun runTool(name: String, a: JSONObject): String {
     var acc = RiyaAccessibilityService.instance
-    val genuinelyLocked = LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
+    val skipAutoUnlockForGlobalNav =
+      name == "global_action" &&
+        a.optString("action").trim().lowercase() in setOf("lock", "home", "back", "recents", "notifications")
+    val genuinelyLocked =
+      if (skipAutoUnlockForGlobalNav) false
+      else LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
     val explicitUnlock = a.optBoolean("explicit", false)
     val shouldAutoUnlock =
       UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool(
@@ -2303,11 +2362,12 @@ class GeminiLive(private val ctx: Context) {
   private fun goHomeAndVerify(acc: RiyaAccessibilityService?) {
     val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
     if (acc != null) {
-      acc.global("home")
+      val res = acc.global("home")
       val launchers = acc.resolveHomeLauncherPackages()
       val cur = LockVaultManager.resolveBestForegroundPackage(acc)
-      if (cur in launchers || cur.contains("launcher", true)) return
+      if (res == "সম্পন্ন" || cur in launchers || cur.contains("launcher", true)) return
     }
+    if (LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)) return
     try {
       val fallbackIntent =
         Intent(homeIntent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
@@ -3044,6 +3104,11 @@ class GeminiLive(private val ctx: Context) {
       RiyaRuntimeBridge.updateIncomingMessageStatus(pending.eventKey, IncomingReplyStatus.DISMISSED)
       return "ঠিক আছে বস, ${pending.appLabel}-এর মেসেজটির রিপ্লাই বাতিল করা হয়েছে।"
     }
+    ReplyPolicyScheduler.syncFromStore(ctx)
+    val limitMax = ReplyPolicyScheduler.currentLimitMax(ctx)
+    if (!ReplyPolicyScheduler.canSendReply(limitMax)) {
+      return "বস, আপনার নির্ধারিত Reply Limit ($limitMax/$limitMax) পূর্ণ হয়েছে — Reset বা Unlimited না করলে উত্তর পাঠানো যাবে না।"
+    }
     val sentText = (customReply ?: pending.suggestedReply).trim()
     val ok =
       RiyaNotificationListenerService.sendApprovedReply(
@@ -3052,7 +3117,7 @@ class GeminiLive(private val ctx: Context) {
         sentText,
       )
     if (ok) {
-      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, -1)
+      ReplyPolicyScheduler.tryConsumeAndPersist(ctx, limitMax)
     }
     return if (ok) {
       "${pending.appLabel}-এ ${pending.senderName}-কে আমি ঠিক এই মেসেজটি লিখে পাঠিয়েছি: \"$sentText\"। বসকে হুবহু বলে দাও যে কী লিখে পাঠিয়েছো।"
@@ -3773,6 +3838,8 @@ class GeminiLive(private val ctx: Context) {
     suppressStaleUntilMs = 0L
     lastBossTurnAtMs = System.currentTimeMillis()
     proactiveCountInStretch = 0
+    val delayMs = ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value).voiceDelayMs
+    pendingVoiceDelayUntilMs = if (delayMs > 0L) System.currentTimeMillis() + delayMs else 0L
     RiyaState.addLog("বস: $t")
     Store.remember(ctx, "Boss(text): $t")
     try {
