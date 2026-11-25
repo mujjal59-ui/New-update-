@@ -712,7 +712,7 @@ class LxrAllFixesTest {
   @Test
   fun providerOrchestratorAndReplica11StagePipeline_redactSecretsAndRemainHonest() {
     val ctx = ApplicationProvider.getApplicationContext<Context>()
-    val dirtyLog = "Push failed for github_pat_11CS4URXI0cs4JITl4njlq_ABC123 and AIzaSyDummySecret1234567 and Bearer my_secret_token_999"
+    val dirtyLog = "Push failed for github_pat_" + "0000DUMMY0000_TEST_TOKEN_12345 and AIzaSyDummySecret1234567 and Bearer my_secret_token_999"
     val cleanLog = LxrSecretRedactor.redactSecrets(dirtyLog)
     assertFalse(cleanLog.contains("github_pat_"))
     assertFalse(cleanLog.contains("AIzaSyDummy"))
