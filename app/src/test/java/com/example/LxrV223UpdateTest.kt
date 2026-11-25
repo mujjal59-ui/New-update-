@@ -63,27 +63,27 @@ class LxrV223UpdateTest {
     assertEquals(ReplyDelayOption.INSTANT, Store.replyDelayOption(ctx))
     assertEquals(ReplyLimitOption.UNLIMITED, Store.replyLimitOption(ctx))
 
-    Store.setReplyDelaySeconds(ctx, 5)
+    Store.setReplyDelaySeconds(ctx, 8)
     Store.setReplyLimitMax(ctx, 20)
-    assertEquals(5, Store.replyDelaySeconds(ctx))
+    assertEquals(8, Store.replyDelaySeconds(ctx))
     assertEquals(ReplyDelayOption.FAST, Store.replyDelayOption(ctx))
     assertEquals(20, Store.replyLimitMax(ctx))
     assertEquals(ReplyLimitOption.LIMIT_20, Store.replyLimitOption(ctx))
 
-    Store.setReplyDelaySeconds(ctx, 10)
+    Store.setReplyDelaySeconds(ctx, 15)
     Store.setReplyLimitMax(ctx, 50)
-    assertEquals(10, Store.replyDelaySeconds(ctx))
+    assertEquals(15, Store.replyDelaySeconds(ctx))
     assertEquals(ReplyDelayOption.NORMAL, Store.replyDelayOption(ctx))
     assertEquals(50, Store.replyLimitMax(ctx))
     assertEquals(ReplyLimitOption.LIMIT_50, Store.replyLimitOption(ctx))
 
-    // Legacy 8s / 15s values cleanly migrate to 5s / 10s
-    assertEquals(ReplyDelayOption.FAST, ReplyDelayOption.fromSeconds(8))
-    assertEquals(ReplyDelayOption.NORMAL, ReplyDelayOption.fromSeconds(15))
-    Store.setReplyDelaySeconds(ctx, 8)
-    assertEquals(5, Store.replyDelaySeconds(ctx))
-    Store.setReplyDelaySeconds(ctx, 15)
-    assertEquals(10, Store.replyDelaySeconds(ctx))
+    // Legacy 5s / 10s values cleanly migrate to 8s / 15s
+    assertEquals(ReplyDelayOption.FAST, ReplyDelayOption.fromSeconds(5))
+    assertEquals(ReplyDelayOption.NORMAL, ReplyDelayOption.fromSeconds(10))
+    Store.setReplyDelaySeconds(ctx, 5)
+    assertEquals(8, Store.replyDelaySeconds(ctx))
+    Store.setReplyDelaySeconds(ctx, 10)
+    assertEquals(15, Store.replyDelaySeconds(ctx))
 
     // Invalid values safely fallback to defaults
     Store.setReplyDelaySeconds(ctx, 999)
@@ -94,9 +94,9 @@ class LxrV223UpdateTest {
 
   @Test
   fun replyPolicyScheduler_inFlightWaitKeepsInitialCapturedDelayWhenSettingChangesMidWait() = runTest {
-    Store.setReplyDelaySeconds(ctx, 10)
+    Store.setReplyDelaySeconds(ctx, 15)
     val initialCapturedDelay = ReplyPolicyScheduler.captureDelaySeconds(ctx)
-    assertEquals(10, initialCapturedDelay)
+    assertEquals(15, initialCapturedDelay)
 
     var executed = false
     val job = async {
@@ -108,21 +108,21 @@ class LxrV223UpdateTest {
       }
     }
 
-    advanceTimeBy(4_000L)
+    advanceTimeBy(6_000L)
     runCurrent()
-    assertFalse("10s captured wait must still be waiting at 4s", executed)
+    assertFalse("15s captured wait must still be waiting at 6s", executed)
 
-    // User changes setting to Instant (00.0s) while old wait is already running
+    // User changes setting to Instant (0 sec) while old wait is already running
     Store.setReplyDelaySeconds(ctx, 0)
     assertEquals(0, ReplyPolicyScheduler.captureDelaySeconds(ctx))
 
-    advanceTimeBy(4_000L)
+    advanceTimeBy(6_000L)
     runCurrent()
-    assertFalse("Old wait MUST keep its captured 10s time (still not done at 8s)", executed)
+    assertFalse("Old wait MUST keep its captured 15s time (still not done at 12s)", executed)
 
-    advanceTimeBy(2_000L)
+    advanceTimeBy(3_000L)
     runCurrent()
-    assertTrue("Old wait completes at 10s", executed)
+    assertTrue("Old wait completes at 15s", executed)
     assertEquals(true, job.await())
   }
 
@@ -193,9 +193,9 @@ class LxrV223UpdateTest {
 
     composeTestRule.onNodeWithTag("reply_delay_limit_card").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Reply Delay and Reply Limit").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Instant — 0 ms (Default)").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Fast — 30 ms").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Normal — 45 ms").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Instant — 0 sec (Default)").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Fast — 8 sec").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Normal — 15 sec").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Unlimited — Default").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("20 Replies").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("50 Replies").performScrollTo().assertIsDisplayed()
@@ -204,18 +204,18 @@ class LxrV223UpdateTest {
       .performScrollTo()
       .assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("reply_delay_option_5").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (30 ms)")
-    assertEquals(5, Store.replyDelaySeconds(ctx))
+    composeTestRule.onNodeWithTag("reply_delay_option_8").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Fast (8 sec)")
+    assertEquals(8, Store.replyDelaySeconds(ctx))
 
     composeTestRule.onNodeWithTag("reply_limit_option_20").performScrollTo().performClick()
     composeTestRule.onNodeWithTag("reply_limit_selected_text").assertTextEquals("Selected: 20 Replies")
     assertEquals(20, Store.replyLimitMax(ctx))
 
-    composeTestRule.onNodeWithTag("reply_delay_option_10").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Normal (45 ms)")
+    composeTestRule.onNodeWithTag("reply_delay_option_15").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("reply_delay_selected_text").assertTextEquals("Selected: Normal (15 sec)")
     composeTestRule.onNodeWithTag("reply_limit_option_50").performScrollTo().performClick()
-    assertEquals(10, Store.replyDelaySeconds(ctx))
+    assertEquals(15, Store.replyDelaySeconds(ctx))
     assertEquals(50, Store.replyLimitMax(ctx))
   }
 

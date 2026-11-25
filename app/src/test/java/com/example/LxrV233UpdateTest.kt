@@ -141,7 +141,7 @@ class LxrV233UpdateTest {
 
   @Test
   fun personaEnforcesStrictTumiFull15CapabilitiesAndAll11PersonalityRules() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"বস\" + \"তুমি\" RULE"))
     assertTrue(RiyaPersona.TEXT.contains("মিষ্টি দুষ্টুমি"))
     assertTrue(RiyaPersona.TEXT.contains("Caring & Supportive"))

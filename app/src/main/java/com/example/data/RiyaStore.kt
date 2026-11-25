@@ -120,9 +120,9 @@ enum class ReplyDelayOption(
   val selectedLabel: String,
   val voiceDelayMs: Long,
 ) {
-  INSTANT(0, "Instant — 0 ms (Default)", "Selected: Instant (0 ms)", 0L),
-  FAST(5, "Fast — 30 ms", "Selected: Fast (30 ms)", 30L),
-  NORMAL(10, "Normal — 45 ms", "Selected: Normal (45 ms)", 45L),
+  INSTANT(0, "Instant — 0 sec (Default)", "Selected: Instant (0 sec)", 0L),
+  FAST(8, "Fast — 8 sec", "Selected: Fast (8 sec)", 8_000L),
+  NORMAL(15, "Normal — 15 sec", "Selected: Normal (15 sec)", 15_000L),
   ;
 
   companion object {

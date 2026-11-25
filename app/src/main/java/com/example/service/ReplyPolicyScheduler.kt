@@ -104,7 +104,7 @@ object ReplyPolicyScheduler {
   }
 
   /**
-   * Captures [initialDelayMs] before sleeping (Instant=0ms, Fast=500ms, Normal=100ms) so edits
+   * Captures [initialDelayMs] before sleeping (Instant=0ms, Fast=8000ms, Normal=15000ms) so edits
    * mid-wait never mutate an already-running wait.
    */
   suspend fun <T> executeAfterCapturedDelayMs(

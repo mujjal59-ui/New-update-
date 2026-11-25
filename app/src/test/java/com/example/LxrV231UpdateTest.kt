@@ -37,8 +37,8 @@ class LxrV231UpdateTest {
   @Test
   fun replyDelayOptionsAndVadProfilesMatchInstantFastNormalSpeeds() {
     assertEquals(0L, ReplyDelayOption.INSTANT.voiceDelayMs)
-    assertEquals(30L, ReplyDelayOption.FAST.voiceDelayMs)
-    assertEquals(45L, ReplyDelayOption.NORMAL.voiceDelayMs)
+    assertEquals(8_000L, ReplyDelayOption.FAST.voiceDelayMs)
+    assertEquals(15_000L, ReplyDelayOption.NORMAL.voiceDelayMs)
 
     assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
     assertEquals(540, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.FAST))
@@ -143,7 +143,7 @@ class LxrV231UpdateTest {
 
   @Test
   fun personaReflectsV231PersonalityAndCapabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("শোনো"))
     assertTrue(RiyaPersona.TEXT.contains("থামো"))
     assertTrue(RiyaPersona.TEXT.contains("Singing & Personal Sharing"))

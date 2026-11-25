@@ -152,7 +152,7 @@ class LxrV230UpdateTest {
 
   @Test
   fun personaIncludesHumanEmotionalTraitsSelfDiagnosisAndV230Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("diagnose_and_fix_self"))
     assertTrue(RiyaPersona.TEXT.contains("critical_task_solve"))
     assertTrue(RiyaPersona.TEXT.contains("switch_camera_lens"))

@@ -70,6 +70,7 @@ import com.example.service.InfinixDevicePlaybook
 import com.example.service.Keep
 import com.example.service.LxrBackgroundTaskManager
 import com.example.service.LxrBackgroundTaskStatus
+import com.example.service.LxrVoiceCommandQueue
 import com.example.service.ReplyPolicyScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -83,6 +84,9 @@ import android.graphics.Rect
 import com.example.service.IncomingMessageEvent
 import com.example.service.IncomingReplyStatus
 import com.example.service.PendingIncomingMessage
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.launch
 
@@ -93,6 +97,8 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   val lastCompleted by RiyaState.lastCompletedTask.collectAsState()
   val motivation by RiyaState.motivationalBanner.collectAsState()
   val activityRecords by LxrBackgroundTaskManager.activities.collectAsState()
+  val voiceMetrics by LxrVoiceCommandQueue.liveMetrics.collectAsState()
+  val timeFmt = remember { SimpleDateFormat("hh:mm:ss a", Locale.US) }
   LaunchedEffect(Unit) { LxrBackgroundTaskManager.recoverInterruptedTasks(ctx) }
   var query by remember { mutableStateOf("") }
   var busy by remember { mutableStateOf(false) }
@@ -304,6 +310,9 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
               LxrBackgroundTaskStatus.FAILED -> CYBER_RED
               LxrBackgroundTaskStatus.PENDING -> Color.LightGray
             }
+          val recvStr = timeFmt.format(Date(rec.receivedAtMs))
+          val startStr = timeFmt.format(Date(rec.startedAtMs))
+          val durStr = "${rec.executionDurationMs} ms"
           Column(
             Modifier
               .fillMaxWidth()
@@ -322,6 +331,7 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                 color = Color.White,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
               )
               Text(
                 "${rec.status.labelBn} (${rec.progressPercent}%)",
@@ -336,12 +346,17 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
               color = statusColor,
               trackColor = Color(0xFF1F2B47),
             )
+            Text(
+              "প্রাপ্ত: $recvStr • শুরু: $startStr • মোড: ${rec.executionMode} • সময়: $durStr",
+              color = Color(0xFF93A5C0),
+              fontSize = 11.sp,
+            )
             if (rec.currentOperation.isNotBlank()) {
-              Text(rec.currentOperation, color = CYBER_CYAN, fontSize = 11.5.sp)
+              Text("অপারেশন: ${rec.currentOperation}", color = CYBER_CYAN, fontSize = 11.5.sp)
             }
             if (rec.retrievedInfo.isNotBlank()) {
               Text(
-                "তথ্য: ${rec.retrievedInfo.replace('\n', ' ').take(130)}",
+                "ফলাফল: ${rec.retrievedInfo.replace('\n', ' ').take(150)}",
                 color = Color.LightGray,
                 fontSize = 11.5.sp,
               )
@@ -360,14 +375,28 @@ fun TasksPage(back: () -> Unit, onNavigate: (String) -> Unit) {
                 fontSize = 11.sp,
               )
             }
-            if (!rec.errorDetails.isNullOrBlank()) {
-              Text(
-                "ত্রুটি: ${rec.errorDetails}",
-                color = CYBER_RED,
-                fontSize = 11.sp,
-              )
-            }
+            val errLine = rec.errorDetails?.takeIf { it.isNotBlank() } ?: "কোনো ত্রুটি নেই"
+            Text(
+              "ত্রুটি: $errLine",
+              color = if (rec.errorDetails.isNullOrBlank()) Color(0xFF7B8CA8) else CYBER_RED,
+              fontSize = 11.sp,
+            )
           }
+        }
+      }
+      if (voiceMetrics.isNotEmpty()) {
+        Text(
+          "⏱️ ভয়েস কিউ ল্যাটেন্সি (${voiceMetrics.size})",
+          color = CYBER_CYAN,
+          fontWeight = FontWeight.SemiBold,
+          fontSize = 12.sp,
+        )
+        voiceMetrics.take(3).forEach { m ->
+          Text(
+            m.toSummaryBn(),
+            color = Color(0xFFB6C3DA),
+            fontSize = 10.5.sp,
+          )
         }
       }
     }

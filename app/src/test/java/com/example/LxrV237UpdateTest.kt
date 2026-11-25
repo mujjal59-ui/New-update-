@@ -147,10 +147,10 @@ class LxrV237UpdateTest {
   }
 
   @Test
-  fun replyDelay_instantIs0msFastIs30msNormalIs45msAndPreservesCapturedInFlightWait() = runTest {
+  fun replyDelay_instantIs0msFastIs8sNormalIs15sAndPreservesCapturedInFlightWait() = runTest {
     assertEquals(0L, ReplyDelayOption.INSTANT.voiceDelayMs)
-    assertEquals(30L, ReplyDelayOption.FAST.voiceDelayMs)
-    assertEquals(45L, ReplyDelayOption.NORMAL.voiceDelayMs)
+    assertEquals(8_000L, ReplyDelayOption.FAST.voiceDelayMs)
+    assertEquals(15_000L, ReplyDelayOption.NORMAL.voiceDelayMs)
 
     // Instant executes immediately with zero delay
     Store.setReplyDelaySeconds(ctx, ReplyDelayOption.INSTANT.seconds)
@@ -164,10 +164,10 @@ class LxrV237UpdateTest {
     }
     assertTrue("Instant (0ms) must dispatch immediately", instantExecuted)
 
-    // Fast captures 30ms at start and keeps 30ms even if user switches to Normal mid-wait
+    // Fast captures 8000ms at start and keeps 8000ms even if user switches to Normal mid-wait
     Store.setReplyDelaySeconds(ctx, ReplyDelayOption.FAST.seconds)
     val capturedFastMs = ReplyPolicyScheduler.captureVoiceDelayMs(ctx)
-    assertEquals(30L, capturedFastMs)
+    assertEquals(8_000L, capturedFastMs)
     var fastExecuted = false
     val job = async {
       ReplyPolicyScheduler.executeAfterCapturedDelayMs(
@@ -177,20 +177,20 @@ class LxrV237UpdateTest {
         true
       }
     }
-    advanceTimeBy(15L)
+    advanceTimeBy(4_000L)
     runCurrent()
-    assertFalse("Fast (30ms) must not finish at 15ms", fastExecuted)
+    assertFalse("Fast (8s) must not finish at 4s", fastExecuted)
 
     Store.setReplyDelaySeconds(ctx, ReplyDelayOption.NORMAL.seconds)
-    assertEquals(45L, ReplyPolicyScheduler.captureVoiceDelayMs(ctx))
+    assertEquals(15_000L, ReplyPolicyScheduler.captureVoiceDelayMs(ctx))
 
-    advanceTimeBy(10L)
+    advanceTimeBy(3_500L)
     runCurrent()
-    assertFalse("In-flight 30ms wait must keep old 30ms duration at 25ms", fastExecuted)
+    assertFalse("In-flight 8s wait must keep old 8000ms duration at 7.5s", fastExecuted)
 
-    advanceTimeBy(5L)
+    advanceTimeBy(500L)
     runCurrent()
-    assertTrue("In-flight 30ms wait finishes cleanly at 30ms", fastExecuted)
+    assertTrue("In-flight 8s wait finishes cleanly at 8000ms", fastExecuted)
     assertEquals(true, job.await())
   }
 
@@ -233,7 +233,7 @@ class LxrV237UpdateTest {
 
   @Test
   fun riyaPersona_updatedToV2370WithStrictTumiAndCreatorRules() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
     assertTrue(RiyaPersona.TEXT.contains("তুমি"))
   }

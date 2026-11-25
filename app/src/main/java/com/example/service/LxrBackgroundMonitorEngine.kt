@@ -47,7 +47,16 @@ data class LxrActivityRecord(
   val completedAtMs: Long? = null,
   val verificationNote: String = "",
   val errorDetails: String? = null,
+  val receivedAtMs: Long = startedAtMs,
+  val executionMode: String = "BACKGROUND",
+  val dependsOnTaskId: String? = null,
+  val dedupKey: String? = null,
 ) {
+  val executionDurationMs: Long
+    get() =
+      if (startedAtMs <= 0L) 0L
+      else ((completedAtMs ?: System.currentTimeMillis()) - startedAtMs).coerceAtLeast(0L)
+
   fun toJson(): JSONObject =
     JSONObject()
       .put("taskId", taskId)
@@ -59,10 +68,14 @@ data class LxrActivityRecord(
       .put("retrievedInfo", retrievedInfo)
       .put("actionsCompleted", JSONArray(actionsCompleted))
       .put("generatedFiles", JSONArray(generatedFiles))
+      .put("receivedAtMs", receivedAtMs)
       .put("startedAtMs", startedAtMs)
       .put("completedAtMs", completedAtMs ?: JSONObject.NULL)
       .put("verificationNote", verificationNote)
       .put("errorDetails", errorDetails ?: JSONObject.NULL)
+      .put("executionMode", executionMode)
+      .put("dependsOnTaskId", dependsOnTaskId ?: JSONObject.NULL)
+      .put("dedupKey", dedupKey ?: JSONObject.NULL)
 
   companion object {
     fun fromJson(obj: JSONObject): LxrActivityRecord {
@@ -79,6 +92,11 @@ data class LxrActivityRecord(
       val completedRaw = obj.opt("completedAtMs")
       val completedMs = if (completedRaw is Number) completedRaw.toLong() else null
       val errRaw = obj.optString("errorDetails").takeIf { it.isNotBlank() && it != "null" }
+      val startedMs = obj.optLong("startedAtMs", System.currentTimeMillis())
+      val receivedMs = obj.optLong("receivedAtMs", startedMs)
+      val modeRaw = obj.optString("executionMode", "BACKGROUND").ifBlank { "BACKGROUND" }
+      val depRaw = obj.optString("dependsOnTaskId").takeIf { it.isNotBlank() && it != "null" }
+      val dedupRaw = obj.optString("dedupKey").takeIf { it.isNotBlank() && it != "null" }
       return LxrActivityRecord(
         taskId = obj.optString("taskId", UUID.randomUUID().toString().take(8)),
         command = obj.optString("command"),
@@ -89,14 +107,28 @@ data class LxrActivityRecord(
         retrievedInfo = obj.optString("retrievedInfo"),
         actionsCompleted = actions,
         generatedFiles = files,
-        startedAtMs = obj.optLong("startedAtMs", System.currentTimeMillis()),
+        startedAtMs = startedMs,
         completedAtMs = completedMs,
         verificationNote = obj.optString("verificationNote"),
         errorDetails = errRaw,
+        receivedAtMs = receivedMs,
+        executionMode = modeRaw,
+        dependsOnTaskId = depRaw,
+        dedupKey = dedupRaw,
       )
     }
   }
 }
+
+data class LxrParallelTaskSpec(
+  val command: String,
+  val targetApp: String,
+  val operation: String,
+  val executionMode: String = "BACKGROUND",
+  val dependsOnTaskId: String? = null,
+  val dedupKey: String? = null,
+  val executor: suspend () -> Pair<String, List<String>>,
+)
 
 data class LxrVerificationOutcome(
   val status: LxrBackgroundTaskStatus,
@@ -377,19 +409,27 @@ object LxrBackgroundTaskManager {
     command: String,
     targetApp: String,
     currentOperation: String,
+    executionMode: String = "BACKGROUND",
+    dependsOnTaskId: String? = null,
+    dedupKey: String? = null,
   ): LxrActivityRecord {
+    val now = System.currentTimeMillis()
     val rec =
       LxrActivityRecord(
-        taskId = "task-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(4)}",
+        taskId = "task-${now}-${UUID.randomUUID().toString().take(4)}",
         command = command,
         targetApp = targetApp,
         currentOperation = currentOperation,
         status = LxrBackgroundTaskStatus.PENDING,
         progressPercent = 5,
-        startedAtMs = System.currentTimeMillis(),
+        startedAtMs = now,
+        receivedAtMs = now,
+        executionMode = executionMode,
+        dependsOnTaskId = dependsOnTaskId,
+        dedupKey = dedupKey,
       )
     upsertRecord(ctx, rec)
-    appendMirrorLog(ctx, "PENDING [${rec.taskId}] ($targetApp): $command — $currentOperation")
+    appendMirrorLog(ctx, "PENDING [${rec.taskId}] ($executionMode | $targetApp): $command — $currentOperation")
     return rec
   }
 
@@ -405,6 +445,12 @@ object LxrBackgroundTaskManager {
     ensureLoaded(ctx)
     synchronized(lock) {
       val existing = _activities.value.firstOrNull { it.taskId == taskId } ?: return
+      val updatedStart =
+        if (status == LxrBackgroundTaskStatus.RUNNING && existing.status == LxrBackgroundTaskStatus.PENDING) {
+          System.currentTimeMillis()
+        } else {
+          existing.startedAtMs
+        }
       val updated =
         existing.copy(
           status = status,
@@ -412,6 +458,7 @@ object LxrBackgroundTaskManager {
           currentOperation = currentOperation,
           actionsCompleted = actionsCompleted ?: existing.actionsCompleted,
           retrievedInfo = retrievedInfo ?: existing.retrievedInfo,
+          startedAtMs = updatedStart,
         )
       upsertRecord(ctx, updated)
     }
@@ -475,14 +522,11 @@ object LxrBackgroundTaskManager {
     return finalized
   }
 
-  /**
-   * Synchronous wrapper for Gemini Live tool execution: creates PENDING -> RUNNING -> verified final status
-   * in real time so LXR Activity Monitor & "What did you do?" stay 100% truthful.
-   */
   fun recordAndVerifyToolExecution(
     ctx: Context,
     toolName: String,
     args: JSONObject,
+    executionMode: String = "BACKGROUND",
     block: () -> String,
   ): String {
     if (toolName == "get_activity_monitor") {
@@ -493,7 +537,14 @@ object LxrBackgroundTaskManager {
         .ifBlank { args.optString("setting_name") }
         .ifBlank { inferTargetAppFromTool(toolName) }
     val opDesc = LxrToolWorkDescriber.describeBn(toolName, args)
-    val rec = createInitialRecord(ctx, command = toolName, targetApp = targetApp, currentOperation = opDesc)
+    val rec =
+      createInitialRecord(
+        ctx = ctx,
+        command = toolName,
+        targetApp = targetApp,
+        currentOperation = opDesc,
+        executionMode = executionMode,
+      )
     updateProgress(ctx, rec.taskId, LxrBackgroundTaskStatus.RUNNING, 35, opDesc, listOf("শুরু: $toolName"))
 
     return try {
@@ -521,9 +572,25 @@ object LxrBackgroundTaskManager {
     }
   }
 
+  private fun isTerminalStatus(st: LxrBackgroundTaskStatus): Boolean =
+    st == LxrBackgroundTaskStatus.COMPLETED ||
+      st == LxrBackgroundTaskStatus.FAILED ||
+      st == LxrBackgroundTaskStatus.PARTIALLY_COMPLETED ||
+      st == LxrBackgroundTaskStatus.VERIFICATION_REQUIRED
+
+  suspend fun awaitTaskCompletion(taskId: String, timeoutMs: Long = 10_000L): LxrActivityRecord? {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      val rec = _activities.value.firstOrNull { it.taskId == taskId }
+      if (rec != null && isTerminalStatus(rec.status)) return rec
+      kotlinx.coroutines.delay(20L)
+    }
+    return _activities.value.firstOrNull { it.taskId == taskId }
+  }
+
   /**
    * Enqueues a background operation onto Android JobScheduler + coroutine background executor
-   * so work continues cleanly even outside foreground UI interaction.
+   * with deduplication and optional dependency ordering so work continues reliably outside foreground UI.
    */
   fun enqueueBackgroundTask(
     ctx: Context,
@@ -531,10 +598,34 @@ object LxrBackgroundTaskManager {
     targetApp: String,
     operation: String,
     scheduleOsJob: Boolean = true,
+    executionMode: String = "BACKGROUND",
+    dependsOnTaskId: String? = null,
+    dedupKey: String? = null,
     executor: (suspend () -> Pair<String, List<String>>)? = null,
   ): LxrActivityRecord {
     val appCtx = ctx.applicationContext
-    val rec = createInitialRecord(appCtx, command, targetApp, operation)
+    ensureLoaded(appCtx)
+    if (!dedupKey.isNullOrBlank()) {
+      synchronized(lock) {
+        val activeDup =
+          _activities.value.firstOrNull { prev ->
+            prev.dedupKey == dedupKey && !isTerminalStatus(prev.status)
+          }
+        if (activeDup != null) {
+          return activeDup
+        }
+      }
+    }
+    val rec =
+      createInitialRecord(
+        ctx = appCtx,
+        command = command,
+        targetApp = targetApp,
+        currentOperation = operation,
+        executionMode = executionMode,
+        dependsOnTaskId = dependsOnTaskId,
+        dedupKey = dedupKey,
+      )
     if (executor != null) {
       pendingJobExecutors[rec.taskId] = executor
     }
@@ -550,8 +641,39 @@ object LxrBackgroundTaskManager {
     return rec
   }
 
+  fun enqueueParallelTasks(
+    ctx: Context,
+    specs: List<LxrParallelTaskSpec>,
+    scheduleOsJob: Boolean = false,
+  ): List<LxrActivityRecord> {
+    return specs.map { spec ->
+      enqueueBackgroundTask(
+        ctx = ctx,
+        command = spec.command,
+        targetApp = spec.targetApp,
+        operation = spec.operation,
+        scheduleOsJob = scheduleOsJob,
+        executionMode = spec.executionMode,
+        dependsOnTaskId = spec.dependsOnTaskId,
+        dedupKey = spec.dedupKey,
+        executor = spec.executor,
+      )
+    }
+  }
+
   internal suspend fun runQueuedJobNow(ctx: Context, taskId: String): LxrActivityRecord? {
     val executor = pendingJobExecutors.remove(taskId) ?: return null
+    val depId = _activities.value.firstOrNull { it.taskId == taskId }?.dependsOnTaskId
+    if (!depId.isNullOrBlank()) {
+      updateProgress(
+        ctx,
+        taskId,
+        LxrBackgroundTaskStatus.WAITING_FOR_SYSTEM,
+        15,
+        "পূর্ববর্তী কাজের ($depId) সমাপ্তির অপেক্ষায়...",
+      )
+      awaitTaskCompletion(depId, timeoutMs = 15_000L)
+    }
     updateProgress(
       ctx,
       taskId,
@@ -596,8 +718,9 @@ object LxrBackgroundTaskManager {
   fun queryActivityHistory(ctx: Context, query: String = "", limit: Int = 8): String {
     ensureLoaded(ctx)
     val list = _activities.value
-    if (list.isEmpty()) {
-      return "বস, এখন পর্যন্ত LXR Activity Monitor-এ কোনো কাজ রেকর্ড হয়নি।"
+    val voiceSummary = LxrVoiceCommandQueue.buildMetricsSummaryBn(3)
+    if (list.isEmpty() && voiceSummary.isBlank()) {
+      return "বস, এখন পর্যন্ত LXR Activity Monitor-এ কোনো কাজ রেকর্ড হয়নি।"
     }
     val qLow = query.trim().lowercase(Locale.ROOT)
     val filtered =
@@ -610,23 +733,35 @@ object LxrBackgroundTaskManager {
 
     val fmt = SimpleDateFormat("hh:mm:ss a", Locale("bn", "BD"))
     return buildString {
-      appendLine("📊 LXR Activity Monitor — সাম্প্রতিক ${filtered.size}টি কাজের যাচাইকৃত হিসাব:")
-      filtered.forEachIndexed { idx, rec ->
-        val start = fmt.format(Date(rec.startedAtMs))
-        val end = rec.completedAtMs?.let { fmt.format(Date(it)) } ?: "চলছে"
-        appendLine("${idx + 1}. [${rec.status.labelBn} • ${rec.progressPercent}%] ${rec.targetApp} → ${rec.command} ($start - $end)")
-        if (rec.retrievedInfo.isNotBlank()) {
-          appendLine("   সংগৃহীত তথ্য: ${rec.retrievedInfo.replace('\n', ' ').take(140)}")
+      if (filtered.isNotEmpty()) {
+        appendLine("📊 LXR Activity Monitor — সাম্প্রতিক ${filtered.size}টি কাজের যাচাইকৃত হিসাব:")
+        filtered.forEachIndexed { idx, rec ->
+          val recv = fmt.format(Date(rec.receivedAtMs))
+          val start = fmt.format(Date(rec.startedAtMs))
+          val end = rec.completedAtMs?.let { fmt.format(Date(it)) } ?: "চলছে"
+          val dur = rec.executionDurationMs
+          appendLine(
+            "${idx + 1}. [${rec.executionMode}] [${rec.status.labelBn} • ${rec.progressPercent}%] ${rec.targetApp} → ${rec.command}",
+          )
+          appendLine("   প্রাপ্ত: $recv | শুরু: $start | শেষ: $end | মোট সময়: ${dur}ms")
+          appendLine("   অপারেশন: ${rec.currentOperation}")
+          if (rec.retrievedInfo.isNotBlank()) {
+            appendLine("   বাস্তব ফলাফল: ${rec.retrievedInfo.replace('\n', ' ').take(160)}")
+          }
+          if (rec.generatedFiles.isNotEmpty()) {
+            appendLine("   তৈরি ফাইল: ${rec.generatedFiles.joinToString(", ")}")
+          }
+          if (rec.verificationNote.isNotBlank()) {
+            appendLine("   যাচাই নোট: ${rec.verificationNote}")
+          }
+          if (!rec.errorDetails.isNullOrBlank()) {
+            appendLine("   ত্রুটি: ${rec.errorDetails}")
+          }
         }
-        if (rec.generatedFiles.isNotEmpty()) {
-          appendLine("   তৈরি ফাইল: ${rec.generatedFiles.joinToString(", ")}")
-        }
-        if (rec.verificationNote.isNotBlank()) {
-          appendLine("   যাচাই নোট: ${rec.verificationNote}")
-        }
-        if (!rec.errorDetails.isNullOrBlank()) {
-          appendLine("   ত্রুটি: ${rec.errorDetails}")
-        }
+      }
+      if (voiceSummary.isNotBlank()) {
+        if (isNotEmpty()) appendLine()
+        appendLine(voiceSummary)
       }
     }.trim()
   }

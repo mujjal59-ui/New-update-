@@ -185,7 +185,7 @@ class LxrV229UpdateTest {
 
     assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
     assertTrue(RiyaPersona.TEXT.contains("LAX"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("১৮০ দিন"))
     assertTrue(RiyaPersona.TEXT.contains("delete_memory_entry"))
     assertTrue(RiyaPersona.TEXT.contains("3D Studio"))

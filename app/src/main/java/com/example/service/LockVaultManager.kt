@@ -48,6 +48,22 @@ data class LivePhoneStateReport(
   val summaryBn: String,
 )
 
+enum class SmartLockExecutionMode {
+  UNLOCKED_DIRECT_EXECUTION,
+  LOCKED_BACKGROUND_EXECUTION,
+  LOCKED_REQUIRES_DEVICE_AUTH_OR_UNLOCK,
+  LOCKED_CANNOT_BYPASS_SECURE_LOCK,
+}
+
+data class SmartLockExecutionPlan(
+  val mode: SmartLockExecutionMode,
+  val phoneState: LivePhoneStateReport,
+  val shouldWakeScreen: Boolean,
+  val shouldSwipeKeyguard: Boolean,
+  val shouldRelockAfterFinish: Boolean,
+  val reasonBn: String,
+)
+
 /**
  * Manages stored Phone Screen Lock & App Lock credentials (up to 8-digit PIN/Password or 3x3 Pattern)
  * across Infinix, Xiaomi, Redmi, Realme, Tecno, itel & Android devices.
@@ -132,6 +148,31 @@ object LockVaultManager {
 
   fun shouldTrustSystemUiLockOverlay(keyguardLocked: Boolean, deviceLocked: Boolean): Boolean {
     return keyguardLocked || deviceLocked
+  }
+
+  /**
+   * True when any interactive regular app or Home Launcher window is visibly active to the user.
+   * Prevents Infinix XOS / Android 16 transient SystemUI overlays from triggering "Slide again to unlock".
+   */
+  fun hasVisibleRegularAppOrLauncherWindow(acc: RiyaAccessibilityService?): Boolean {
+    if (acc == null) return false
+    return try {
+      val wins = acc.windows.orEmpty()
+      val hasAppWindow =
+        wins.any { w ->
+          val root = w.root ?: return@any false
+          val p = root.packageName?.toString()?.trim().orEmpty()
+          w.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION &&
+            isRegularAppPackage(p) &&
+            root.isVisibleToUser
+        }
+      if (hasAppWindow) return true
+      val root = acc.rootInActiveWindow ?: return false
+      val rp = root.packageName?.toString()?.trim().orEmpty()
+      isRegularAppPackage(rp) && root.isVisibleToUser
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   /**
@@ -312,14 +353,20 @@ object LockVaultManager {
     val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val keyguardLocked = km?.isKeyguardLocked == true
     val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+    val regularWindowVisible = hasVisibleRegularAppOrLauncherWindow(acc)
     if (km != null && !keyguardLocked && !deviceLocked) {
+      if (regularWindowVisible) return false
       val activeRootPkg = acc?.rootInActiveWindow?.packageName?.toString()?.lowercase()?.trim().orEmpty()
       if (!activeRootPkg.contains("keyguard") && !activeRootPkg.contains("lockscreen")) {
         return false
       }
     }
     val activePkg = resolveBestForegroundPackage(acc)
-    if (isRegularAppPackage(activePkg) && !hasBouncerUiShowing(acc, Store.phoneLockType(ctx)) && !isSystemKeyguardUiShowing(acc)) {
+    if ((isRegularAppPackage(activePkg) || regularWindowVisible) &&
+      !hasBouncerUiShowing(acc, Store.phoneLockType(ctx)) &&
+      !isSystemKeyguardUiShowing(acc) &&
+      !hasFullScreenVisibleKeyguardLayer(acc)
+    ) {
       return false
     }
     if (keyguardLocked && (hasFullScreenVisibleKeyguardLayer(acc) || isSystemKeyguardUiShowing(acc))) {
@@ -457,6 +504,59 @@ object LockVaultManager {
   /** Pure helper: decides whether auto-relock after task is permitted. */
   fun shouldAutoRelockAfterTask(startedWithLockedScreen: Boolean, autoUnlockEnabled: Boolean): Boolean {
     return startedWithLockedScreen && autoUnlockEnabled
+  }
+
+  /**
+   * Smart Lock-Aware Execution Decision:
+   * - Unlocked -> UNLOCKED_DIRECT_EXECUTION (zero swipes, zero unlock overlays)
+   * - Locked + background-capable -> LOCKED_BACKGROUND_EXECUTION (runs silently without waking screen)
+   * - Locked + UI required -> validates authorized credentials/DeviceAuth; refuses illegal bypasses
+   */
+  fun evaluateSmartLockExecutionDecision(
+    phoneState: LivePhoneStateReport,
+    requiresForegroundUi: Boolean,
+    autoUnlockEnabled: Boolean,
+    hasSavedCredentials: Boolean,
+    isDeviceSecure: Boolean,
+  ): SmartLockExecutionPlan {
+    if (!phoneState.isLocked) {
+      return SmartLockExecutionPlan(
+        mode = SmartLockExecutionMode.UNLOCKED_DIRECT_EXECUTION,
+        phoneState = phoneState,
+        shouldWakeScreen = false,
+        shouldSwipeKeyguard = false,
+        shouldRelockAfterFinish = false,
+        reasonBn = "স্ক্রিন আনলক অবস্থায় আছে — সরাসরি কাজ চলবে।",
+      )
+    }
+    if (!requiresForegroundUi) {
+      return SmartLockExecutionPlan(
+        mode = SmartLockExecutionMode.LOCKED_BACKGROUND_EXECUTION,
+        phoneState = phoneState,
+        shouldWakeScreen = false,
+        shouldSwipeKeyguard = false,
+        shouldRelockAfterFinish = false,
+        reasonBn = "ফোন লক থাকলেও ব্যাকগ্রাউন্ড API দিয়ে স্ক্রিন না জ্বালিয়েই কাজ সম্পন্ন হবে।",
+      )
+    }
+    if (!autoUnlockEnabled || (isDeviceSecure && !hasSavedCredentials)) {
+      return SmartLockExecutionPlan(
+        mode = SmartLockExecutionMode.LOCKED_CANNOT_BYPASS_SECURE_LOCK,
+        phoneState = phoneState,
+        shouldWakeScreen = false,
+        shouldSwipeKeyguard = false,
+        shouldRelockAfterFinish = false,
+        reasonBn = "ফোন সুরক্ষিত লক অবস্থায় আছে — অনুমোদিত ডিভাইস আনলক বা অটো-আনলক সেটিং ছাড়া UI কাজ সম্ভব নয়।",
+      )
+    }
+    return SmartLockExecutionPlan(
+      mode = SmartLockExecutionMode.LOCKED_REQUIRES_DEVICE_AUTH_OR_UNLOCK,
+      phoneState = phoneState,
+      shouldWakeScreen = phoneState.phase == LivePhoneLockPhase.SCREEN_OFF,
+      shouldSwipeKeyguard = phoneState.phase != LivePhoneLockPhase.APP_LOCKED,
+      shouldRelockAfterFinish = true,
+      reasonBn = "UI কাজের জন্য নিরাপদে আনলক করে কাজ শেষে পুনরায় লক করা হবে।",
+    )
   }
 
   /**
@@ -675,7 +775,6 @@ object LockVaultManager {
       return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিনের আলো জ্বালিয়ে আনলক করা হয়েছে ✓")
     }
 
-    // Extra safety check: NEVER swipe upward on an unlocked app window or Home launcher (causes "Slide again to unlock" on Infinix XOS)
     val kmCheck = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val deviceLockedCheck =
       if (Build.VERSION.SDK_INT >= 22) (kmCheck?.isDeviceLocked == true) else (kmCheck?.isKeyguardLocked == true)
@@ -683,7 +782,7 @@ object LockVaultManager {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     val fgPkgNow = resolveBestForegroundPackage(acc)
-    if (isRegularAppPackage(fgPkgNow) &&
+    if ((isRegularAppPackage(fgPkgNow) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
       !hasFullScreenVisibleKeyguardLayer(acc) &&
       !isSystemKeyguardUiShowing(acc) &&
       !hasBouncerUiShowing(acc, lockType) &&
@@ -695,7 +794,7 @@ object LockVaultManager {
       hasFullScreenVisibleKeyguardLayer(acc) ||
         isSystemKeyguardUiShowing(acc) ||
         hasBouncerUiShowing(acc, lockType) ||
-        (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow))
+        (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow) && !hasVisibleRegularAppOrLauncherWindow(acc))
     if (!keyguardConfirmed && (pm?.isInteractive != false)) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
@@ -709,7 +808,7 @@ object LockVaultManager {
           if (Build.VERSION.SDK_INT >= 22) (kmLoop?.isDeviceLocked == true) else (kmLoop?.isKeyguardLocked == true)
         val fgLoop = resolveBestForegroundPackage(acc)
         val regularForegroundActive =
-          isRegularAppPackage(fgLoop) &&
+          (isRegularAppPackage(fgLoop) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
             !hasFullScreenVisibleKeyguardLayer(acc) &&
             !isSystemKeyguardUiShowing(acc) &&
             !hasBouncerUiShowing(acc, lockType)

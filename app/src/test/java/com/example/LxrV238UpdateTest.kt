@@ -69,7 +69,7 @@ class LxrV238UpdateTest {
     assertEquals(expectedCreator, RiyaPersona.CREATOR_IDENTITY_BN)
     assertTrue(RiyaPersona.TEXT.contains(expectedCreator))
     assertTrue(RiyaPersona.TEXT.contains("Personal AI Operating System Controller"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
 
     // Strict Boss + Tumi enforcement: no formal honorifics or old legacy names in capabilities list
     val caps = RiyaPersona.CAPABILITIES_A_TO_Z_BN
@@ -100,13 +100,13 @@ class LxrV238UpdateTest {
   }
 
   @Test
-  fun responseSpeed_0ms30ms45msProfilesAndInstantVad() {
+  fun responseSpeed_0s8s15sProfilesAndInstantVad() {
     assertEquals(0L, ReplyDelayOption.INSTANT.voiceDelayMs)
-    assertEquals(30L, ReplyDelayOption.FAST.voiceDelayMs)
-    assertEquals(45L, ReplyDelayOption.NORMAL.voiceDelayMs)
-    assertEquals("Instant — 0 ms (Default)", ReplyDelayOption.INSTANT.optionLabel)
-    assertEquals("Fast — 30 ms", ReplyDelayOption.FAST.optionLabel)
-    assertEquals("Normal — 45 ms", ReplyDelayOption.NORMAL.optionLabel)
+    assertEquals(8_000L, ReplyDelayOption.FAST.voiceDelayMs)
+    assertEquals(15_000L, ReplyDelayOption.NORMAL.voiceDelayMs)
+    assertEquals("Instant — 0 sec (Default)", ReplyDelayOption.INSTANT.optionLabel)
+    assertEquals("Fast — 8 sec", ReplyDelayOption.FAST.optionLabel)
+    assertEquals("Normal — 15 sec", ReplyDelayOption.NORMAL.optionLabel)
 
     assertTrue(
       LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT) <

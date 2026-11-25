@@ -199,12 +199,19 @@ object LxrSocialAndBrowserAgent {
       }
     }
 
-    // Open App Drawer by swiping up from bottom-middle
+    // Open App Drawer by swiping up from bottom-middle ONLY when unlocked launcher is active
     goHomeFn()
     Thread.sleep(240L)
-    acc.swipe(w * 0.50f, h * 0.82f, w * 0.50f, h * 0.25f, 280L)
-    Thread.sleep(450L)
-    acc.readEntireScreenTree()
+    val fgDrawerPkg = LockVaultManager.resolveBestForegroundPackage(acc).lowercase()
+    val launchers = acc.resolveHomeLauncherPackages().map { it.lowercase() }.toSet()
+    val safeToOpenDrawer =
+      !LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc) &&
+        (fgDrawerPkg in launchers || fgDrawerPkg.contains("launcher") || fgDrawerPkg.contains("home"))
+    if (safeToOpenDrawer) {
+      acc.swipe(w * 0.50f, h * 0.80f, w * 0.50f, h * 0.28f, 340L)
+      Thread.sleep(450L)
+      acc.readEntireScreenTree()
+    }
 
     val drawerHit = acc.clickText(cleanQuery, isContact = false)
     if (drawerHit.contains("ক্লিক করা হয়েছে")) {

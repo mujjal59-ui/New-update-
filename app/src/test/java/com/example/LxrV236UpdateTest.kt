@@ -235,7 +235,7 @@ class LxrV236UpdateTest {
 
   @Test
   fun personaIncludesV236AndPreservesStrictTumiAnd15Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.38.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
     assertTrue(RiyaPersona.TEXT.contains("MANDATORY \"বস\" + \"তুমি\" RULE"))
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("আপনার"))

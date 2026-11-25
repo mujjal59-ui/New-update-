@@ -18,6 +18,7 @@ import android.location.Address
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
+import android.os.CancellationSignal
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -768,6 +769,31 @@ object LxrDeviceAndHardwareEngine {
     return "এক্সট্রা ক্রিটিক্যাল মডেল এই মুহূর্তে নেটওয়ার্ক থেকে সাড়া দিতে পারেনি বস।"
   }
 
+  fun selectBestLocation(candidates: List<Location>): Location? {
+    var best: Location? = null
+    for (cand in candidates) {
+      val cur = best
+      if (cur == null) {
+        best = cand
+        continue
+      }
+      val timeDelta = cand.time - cur.time
+      val significantlyNewer = timeDelta > 120_000L
+      val significantlyOlder = timeDelta < -120_000L
+      if (significantlyNewer) {
+        best = cand
+      } else if (!significantlyOlder) {
+        val accBetter =
+          if (cand.hasAccuracy() && cur.hasAccuracy()) cand.accuracy < cur.accuracy
+          else cand.hasAccuracy() && !cur.hasAccuracy()
+        if (accBetter || (cand.accuracy == cur.accuracy && cand.time > cur.time)) {
+          best = cand
+        }
+      }
+    }
+    return best
+  }
+
   @Suppress("MissingPermission", "DEPRECATION")
   fun getLiveLocationReport(ctx: Context): String {
     if (!hasLocationPermission(ctx)) {
@@ -779,11 +805,32 @@ object LxrDeviceAndHardwareEngine {
       return "ফোনের GPS / Location সুইচ বন্ধ আছে বস! বললে আমি এখনই Location চালু করে তোমার বর্তমান ঠিকানা বের করে দিচ্ছি।"
     }
 
-    var best: Location? = null
-    for (provider in lm.getProviders(true)) {
-      val cand = runCatching { lm.getLastKnownLocation(provider) }.getOrNull() ?: continue
-      if (best == null || cand.accuracy < best.accuracy || cand.time > best.time + 120_000L) {
-        best = cand
+    val candidates = mutableListOf<Location>()
+    val enabledProviders = lm.getProviders(true)
+    for (provider in enabledProviders) {
+      runCatching { lm.getLastKnownLocation(provider) }.getOrNull()?.let { candidates.add(it) }
+    }
+    var best = selectBestLocation(candidates)
+    val now = System.currentTimeMillis()
+    val needsFreshFix = best == null || (best.time > 0L && (now - best.time) > 120_000L)
+
+    if (Build.VERSION.SDK_INT >= 30 && needsFreshFix && !Build.FINGERPRINT.equals("robolectric", ignoreCase = true)) {
+      val preferredProvider =
+        listOf("fused", LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+          .firstOrNull { it in enabledProviders }
+      if (preferredProvider != null) {
+        runCatching {
+          val latch = CountDownLatch(1)
+          val cancelSignal = CancellationSignal()
+          lm.getCurrentLocation(preferredProvider, cancelSignal, ctx.mainExecutor) { fresh ->
+            if (fresh != null) candidates.add(fresh)
+            latch.countDown()
+          }
+          if (!latch.await(2600L, TimeUnit.MILLISECONDS)) {
+            cancelSignal.cancel()
+          }
+        }
+        best = selectBestLocation(candidates)
       }
     }
 
