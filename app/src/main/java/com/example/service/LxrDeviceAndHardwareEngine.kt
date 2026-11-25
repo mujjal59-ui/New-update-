@@ -29,18 +29,41 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.SystemClock
+import android.provider.AlarmClock
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.example.MainActivity
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class ScheduledPhoneAlarm(
+  val id: String,
+  val reqCode: Int,
+  val title: String,
+  val mode: String,
+  val triggerAtEpochMs: Long,
+  val hour: Int,
+  val minute: Int,
+  val delaySeconds: Long,
+  val exactScheduled: Boolean,
+  val alarmClockRegistered: Boolean,
+  val phoneClockDispatched: Boolean,
+  val phoneClockPackage: String,
+  val status: String,
+  val createdAtMs: Long,
+)
 
 /**
  * Full device hardware diagnostics, expanded phone settings toggles/sliders,
@@ -672,39 +695,381 @@ object LxrDeviceAndHardwareEngine {
     Keep.openAppInfo(ctx)
   }
 
-  fun scheduleExactReminder(ctx: Context, title: String, delaySeconds: Long): String {
-    val cleanTitle = title.trim().ifBlank { "বসের নির্ধারিত কাজ" }
+  private const val ALARM_PREFS_NAME = "lxr_alarm_prefs"
+  private const val KEY_SCHEDULED_ALARMS = "scheduled_alarms_v1"
+
+  fun computeTargetAlarmTrigger(
+    delaySeconds: Long,
+    hour: Int?,
+    minute: Int?,
+    nowMs: Long = System.currentTimeMillis(),
+  ): Triple<Long, Int, Int> {
+    val tz = TimeZone.getTimeZone("Asia/Dhaka")
+    val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
+    if (hour != null && hour in 0..23) {
+      val safeMin = (minute ?: 0).coerceIn(0, 59)
+      cal.set(Calendar.HOUR_OF_DAY, hour)
+      cal.set(Calendar.MINUTE, safeMin)
+      cal.set(Calendar.SECOND, 0)
+      cal.set(Calendar.MILLISECOND, 0)
+      if (cal.timeInMillis <= nowMs + 2_000L) {
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+      }
+      return Triple(cal.timeInMillis, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+    }
     val clampedSec = delaySeconds.coerceIn(5L, 86_400L * 7L)
-    val alarm = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
-      ?: return "অ্যালার্ম সার্ভিস পাওয়া যায়নি বস।"
-    val triggerAtElapsed = SystemClock.elapsedRealtime() + (clampedSec * 1000L)
-    val reqCode = ((System.currentTimeMillis() / 1000L) % 50_000L).toInt() + 7000
-    val intent =
+    val triggerMs = nowMs + clampedSec * 1000L
+    cal.timeInMillis = triggerMs
+    return Triple(triggerMs, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+  }
+
+  fun resolvePhoneClockPackage(ctx: Context, action: String = AlarmClock.ACTION_SET_ALARM): String? {
+    return try {
+      val intent = Intent(action)
+      val preferred = listOf("com.transsion.deskclock", "com.google.android.deskclock", "com.android.deskclock")
+      val pm = ctx.packageManager
+      val matches =
+        if (Build.VERSION.SDK_INT >= 33) {
+          pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()))
+        } else {
+          @Suppress("DEPRECATION")
+          pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        }.mapNotNull { it.activityInfo?.packageName?.trim() }
+          .filter { it.isNotBlank() && it != ctx.packageName }
+      preferred.firstOrNull { it in matches }
+        ?: matches.firstOrNull()
+        ?: preferred.firstOrNull { pkg -> runCatching { pm.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false) }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun readPersistedAlarmsLocked(ctx: Context): MutableList<ScheduledPhoneAlarm> {
+    val sp = ctx.applicationContext.getSharedPreferences(ALARM_PREFS_NAME, Context.MODE_PRIVATE)
+    val raw = sp.getString(KEY_SCHEDULED_ALARMS, "[]") ?: "[]"
+    val list = mutableListOf<ScheduledPhoneAlarm>()
+    runCatching {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        list.add(
+          ScheduledPhoneAlarm(
+            id = o.optString("id"),
+            reqCode = o.optInt("reqCode", 7000 + i),
+            title = o.optString("title"),
+            mode = o.optString("mode", "auto"),
+            triggerAtEpochMs = o.optLong("triggerAtEpochMs", 0L),
+            hour = o.optInt("hour", 0),
+            minute = o.optInt("minute", 0),
+            delaySeconds = o.optLong("delaySeconds", 0L),
+            exactScheduled = o.optBoolean("exactScheduled", false),
+            alarmClockRegistered = o.optBoolean("alarmClockRegistered", false),
+            phoneClockDispatched = o.optBoolean("phoneClockDispatched", false),
+            phoneClockPackage = o.optString("phoneClockPackage"),
+            status = o.optString("status", "SCHEDULED"),
+            createdAtMs = o.optLong("createdAtMs", 0L),
+          )
+        )
+      }
+    }
+    return list
+  }
+
+  private fun writePersistedAlarmsLocked(ctx: Context, alarms: List<ScheduledPhoneAlarm>) {
+    val trimmed = alarms.sortedByDescending { it.createdAtMs }.take(40)
+    val arr = JSONArray()
+    trimmed.forEach { a ->
+      arr.put(
+        JSONObject()
+          .put("id", a.id)
+          .put("reqCode", a.reqCode)
+          .put("title", a.title)
+          .put("mode", a.mode)
+          .put("triggerAtEpochMs", a.triggerAtEpochMs)
+          .put("hour", a.hour)
+          .put("minute", a.minute)
+          .put("delaySeconds", a.delaySeconds)
+          .put("exactScheduled", a.exactScheduled)
+          .put("alarmClockRegistered", a.alarmClockRegistered)
+          .put("phoneClockDispatched", a.phoneClockDispatched)
+          .put("phoneClockPackage", a.phoneClockPackage)
+          .put("status", a.status)
+          .put("createdAtMs", a.createdAtMs)
+      )
+    }
+    ctx.applicationContext
+      .getSharedPreferences(ALARM_PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_SCHEDULED_ALARMS, arr.toString())
+      .commit()
+  }
+
+  @Synchronized
+  fun markAlarmStatus(ctx: Context, alarmId: String, newStatus: String) {
+    if (alarmId.isBlank()) return
+    val list = readPersistedAlarmsLocked(ctx)
+    var changed = false
+    val updated =
+      list.map { item ->
+        if (item.id == alarmId) {
+          changed = true
+          item.copy(status = newStatus)
+        } else {
+          item
+        }
+      }
+    if (changed) writePersistedAlarmsLocked(ctx, updated)
+  }
+
+  @Synchronized
+  fun listPersistedAlarms(ctx: Context): List<ScheduledPhoneAlarm> = readPersistedAlarmsLocked(ctx)
+
+  private fun scheduleSystemAlarmClockOrExact(
+    ctx: Context,
+    alarmMgr: AlarmManager,
+    alarmId: String,
+    reqCode: Int,
+    title: String,
+    triggerAtEpochMs: Long,
+    isExactAllowed: Boolean,
+  ): Boolean {
+    val triggerIntent =
       Intent(ctx.applicationContext, LxrReminderReceiver::class.java)
-        .putExtra(LxrReminderReceiver.EXTRA_REMINDER_TEXT, cleanTitle)
-    val pi =
+        .setAction(LxrReminderReceiver.ACTION_ALARM_TRIGGER)
+        .putExtra(LxrReminderReceiver.EXTRA_REMINDER_TEXT, title)
+        .putExtra(LxrReminderReceiver.EXTRA_ALARM_ID, alarmId)
+        .putExtra(LxrReminderReceiver.EXTRA_NOTIF_ID, reqCode)
+    val triggerPi =
       PendingIntent.getBroadcast(
         ctx.applicationContext,
         reqCode,
-        intent,
+        triggerIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
-    val isExact = canScheduleExactAlarms(ctx)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      if (isExact) {
-        alarm.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
-      } else {
-        alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
+    val showIntent =
+      Intent(ctx.applicationContext, MainActivity::class.java)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    val showPi =
+      PendingIntent.getActivity(
+        ctx.applicationContext,
+        reqCode + 10_000,
+        showIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+    return if (isExactAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      runCatching {
+        alarmMgr.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtEpochMs, showPi), triggerPi)
+        true
+      }.getOrElse {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+          alarmMgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtEpochMs, triggerPi)
+        } else {
+          alarmMgr.setExact(AlarmManager.RTC_WAKEUP, triggerAtEpochMs, triggerPi)
+        }
+        true
       }
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      alarmMgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtEpochMs, triggerPi)
+      false
     } else {
-      alarm.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
+      alarmMgr.set(AlarmManager.RTC_WAKEUP, triggerAtEpochMs, triggerPi)
+      false
     }
-    com.example.data.Store.remember(ctx, "[রিমাইন্ডার সেট]: '$cleanTitle' (${clampedSec}s পর)")
-    return if (isExact) {
-      "হয়েছে, বস! '$cleanTitle' রিমাইন্ডারটি সঠিক সময়ে (${clampedSec} সেকেন্ড পর) বাজবে — Alarms & reminders এর মাধ্যমে সেট করেছি ✓"
-    } else {
-      "'$cleanTitle' রিমাইন্ডারটি (${clampedSec} সেকেন্ড পর) সেট করেছি বস, তবে একদম নিখুঁত সময়ের জন্য Permissions > Alarms & reminders চালু করে দাও।"
+  }
+
+  @Synchronized
+  fun reschedulePersistedAlarms(ctx: Context): Int {
+    val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return 0
+    val nowMs = System.currentTimeMillis()
+    val exact = canScheduleExactAlarms(ctx)
+    val list = readPersistedAlarmsLocked(ctx)
+    var count = 0
+    val updated =
+      list.map { item ->
+        if (item.status == "SCHEDULED" && item.triggerAtEpochMs > nowMs + 2_000L) {
+          val okClock =
+            scheduleSystemAlarmClockOrExact(
+              ctx = ctx,
+              alarmMgr = am,
+              alarmId = item.id,
+              reqCode = item.reqCode,
+              title = item.title,
+              triggerAtEpochMs = item.triggerAtEpochMs,
+              isExactAllowed = exact,
+            )
+          count++
+          item.copy(exactScheduled = exact, alarmClockRegistered = okClock)
+        } else {
+          item
+        }
+      }
+    writePersistedAlarmsLocked(ctx, updated)
+    return count
+  }
+
+  @JvmOverloads
+  fun scheduleExactReminder(
+    ctx: Context,
+    title: String,
+    delaySeconds: Long = 60L,
+    hour: Int? = null,
+    minute: Int? = null,
+    mode: String = "auto",
+  ): String {
+    val cleanTitle = title.trim().ifBlank { "বসের নির্ধারিত অ্যালার্ম" }
+    val cleanMode = mode.trim().lowercase().ifBlank { "auto" }
+    val alarm = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+      ?: return "অ্যালার্ম সার্ভিস পাওয়া যায়নি বস।"
+
+    val nowMs = System.currentTimeMillis()
+    val effectiveHour = hour?.takeIf { it in 0..23 }
+    val effectiveMin = minute?.takeIf { it in 0..59 }
+    val (triggerAtEpochMs, targetHour, targetMinute) =
+      computeTargetAlarmTrigger(
+        delaySeconds = delaySeconds,
+        hour = effectiveHour,
+        minute = effectiveMin,
+        nowMs = nowMs,
+      )
+    val computedDelaySec = ((triggerAtEpochMs - nowMs) / 1000L).coerceAtLeast(1L)
+    val reqCode = ((nowMs % 40_000L).toInt() + 7100)
+    val alarmId = "lxr_alm_${nowMs}_$reqCode"
+    val isExact = canScheduleExactAlarms(ctx)
+
+    // 1. Register genuine OS AlarmClock + WakeLock receiver (fires Alarm ringtone, vibration & full-screen alert)
+    val alarmClockRegistered =
+      scheduleSystemAlarmClockOrExact(
+        ctx = ctx,
+        alarmMgr = alarm,
+        alarmId = alarmId,
+        reqCode = reqCode,
+        title = cleanTitle,
+        triggerAtEpochMs = triggerAtEpochMs,
+        isExactAllowed = isExact,
+      )
+
+    val verifiedNextOsAlarmMs =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        runCatching { alarm.nextAlarmClock?.triggerTime ?: 0L }.getOrDefault(0L)
+      } else 0L
+
+    // 2. Dispatch directly to phone's native Clock app (AlarmClock.ACTION_SET_ALARM / ACTION_SET_TIMER) when applicable
+    val useTimerAction = cleanMode == "timer"
+    val useClockAlarmAction =
+      cleanMode == "alarm" ||
+        effectiveHour != null ||
+        (cleanMode == "auto" && computedDelaySec >= 60L)
+
+    var clockDispatched = false
+    var clockPackage = ""
+    if (useTimerAction || useClockAlarmAction) {
+      val clockAction = if (useTimerAction) AlarmClock.ACTION_SET_TIMER else AlarmClock.ACTION_SET_ALARM
+      clockPackage = resolvePhoneClockPackage(ctx, clockAction).orEmpty()
+      val clockIntent =
+        if (useTimerAction) {
+          Intent(AlarmClock.ACTION_SET_TIMER)
+            .putExtra(AlarmClock.EXTRA_LENGTH, computedDelaySec.toInt().coerceIn(5, 86_400))
+            .putExtra(AlarmClock.EXTRA_MESSAGE, cleanTitle)
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        } else {
+          Intent(AlarmClock.ACTION_SET_ALARM)
+            .putExtra(AlarmClock.EXTRA_HOUR, targetHour)
+            .putExtra(AlarmClock.EXTRA_MINUTES, targetMinute)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, cleanTitle)
+            .putExtra(AlarmClock.EXTRA_VIBRATE, true)
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        }.apply {
+          if (clockPackage.isNotBlank()) `package` = clockPackage
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+      val hasHandler = clockIntent.resolveActivity(ctx.packageManager) != null
+      if (hasHandler) {
+        clockDispatched =
+          runCatching {
+            ctx.startActivity(clockIntent)
+            true
+          }.getOrDefault(false)
+      }
     }
+
+    val record =
+      ScheduledPhoneAlarm(
+        id = alarmId,
+        reqCode = reqCode,
+        title = cleanTitle,
+        mode = cleanMode,
+        triggerAtEpochMs = triggerAtEpochMs,
+        hour = targetHour,
+        minute = targetMinute,
+        delaySeconds = computedDelaySec,
+        exactScheduled = isExact,
+        alarmClockRegistered = alarmClockRegistered && isExact,
+        phoneClockDispatched = clockDispatched,
+        phoneClockPackage = clockPackage,
+        status = "SCHEDULED",
+        createdAtMs = nowMs,
+      )
+    val existing = readPersistedAlarmsLocked(ctx)
+    existing.add(0, record)
+    writePersistedAlarmsLocked(ctx, existing)
+
+    val formattedTime =
+      SimpleDateFormat("dd MMM, hh:mm:ss a", Locale("bn", "BD")).apply {
+        timeZone = TimeZone.getTimeZone("Asia/Dhaka")
+      }.format(Date(triggerAtEpochMs))
+
+    com.example.data.Store.remember(
+      ctx,
+      "[ফোন অ্যালার্ম/রিমাইন্ডার সেট]: '$cleanTitle' -> $formattedTime (Clock=$clockDispatched:$clockPackage, OSNextAlarm=${verifiedNextOsAlarmMs > 0L}, Exact=$isExact)",
+    )
+
+    return buildString {
+      if (isExact && alarmClockRegistered) {
+        append("হয়েছে, বস! '$cleanTitle' সরাসরি ফোনের সিস্টেম অ্যালার্ম হিসেবে সেট করেছি ✓\n")
+      } else {
+        append("'$cleanTitle' অ্যালার্ম/রিমাইন্ডার কিউ করেছি বস, তবে LXR--AI এর 'Alarms & reminders' অনুমতি এখন OFF থাকায় OS-level exact wake পূর্ণ করতে সেটিংস Allow করা দরকার!\n")
+      }
+      append("• বাজবে: $formattedTime (${computedDelaySec} সেকেন্ড পর)\n")
+      append("• Android AlarmClock নিবন্ধন: ${if (verifiedNextOsAlarmMs > 0L) "নিশ্চিত ✓ (OS সিস্টেম অ্যালার্ম আইকন সক্রিয়)" else if (alarmClockRegistered) "সিডিউলড ✓" else "অপেক্ষমাণ"}\n")
+      if (useTimerAction || useClockAlarmAction) {
+        append(
+          if (clockDispatched) "• ফোনের Clock অ্যাপ ($clockPackage): সরাসরি ${String.format(Locale.US, "%02d:%02d", targetHour, targetMinute)}-এ পাঠানো হয়েছে ✓"
+          else "• ফোনের Clock অ্যাপ: আলাদা ইনটেন্ট হ্যান্ডলার না মেলায় LXR অ্যালার্ম ইঞ্জিন নিজে রিংটোন+ভাইব্রেশন+লকস্ক্রিন অ্যালার্ট বাজাবে।"
+        )
+      } else {
+        append("• অ্যালার্ট মাধ্যম: নির্দিষ্ট সময়ে ফোনের রিংটোন, ভাইব্রেশন, লকস্ক্রিন ফুল-অ্যালার্ট ও ভয়েস ঘোষণা সরাসরি বাজবে।")
+      }
+    }.trim()
+  }
+
+  fun listScheduledAlarmsReport(ctx: Context): String {
+    val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+    val nextClock =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        runCatching { am?.nextAlarmClock?.triggerTime }.getOrNull()
+      } else null
+    val exactOn = canScheduleExactAlarms(ctx)
+    val clockPkg = resolvePhoneClockPackage(ctx, AlarmClock.ACTION_SET_ALARM) ?: "পাওয়া যায়নি"
+    val df =
+      SimpleDateFormat("dd MMM, hh:mm:ss a", Locale("bn", "BD")).apply {
+        timeZone = TimeZone.getTimeZone("Asia/Dhaka")
+      }
+    val items = listPersistedAlarms(ctx)
+    return buildString {
+      appendLine("⏰ ফোনের আসল অ্যালার্ম ও রিমাইন্ডার যাচাই রিপোর্ট:")
+      appendLine("• Alarms & reminders (Exact Alarm) অনুমতি: ${if (exactOn) "চালু ✓" else "বন্ধ (সেটিংসে Allow দিন)"}")
+      appendLine("• ফোনের Clock অ্যাপ: $clockPkg")
+      appendLine("• Android OS AlarmManager nextAlarmClock: ${if (nextClock != null && nextClock > 0L) df.format(Date(nextClock)) + " ✓" else "কোনো সিস্টেম অ্যালার্ম নির্ধারিত নেই"}")
+      if (items.isEmpty()) {
+        append("• LXR সংরক্ষিত অ্যালার্ম তালিকা: এখনো কোনো অ্যালার্ম সেট করা হয়নি।")
+      } else {
+        appendLine("• সাম্প্রতিক অ্যালার্মসমূহ (${items.size}টি):")
+        items.take(8).forEachIndexed { idx, a ->
+          val clockTag = if (a.phoneClockDispatched) "Clock+OS" else "LXR AlarmClock"
+          appendLine("  ${idx + 1}. ${a.title} | ${df.format(Date(a.triggerAtEpochMs))} | $clockTag | অবস্থা: ${a.status}")
+        }
+      }
+    }.trim()
   }
 
   fun solveCriticalTaskWithExtraModel(ctx: Context, taskPrompt: String, screenContext: String = ""): String {

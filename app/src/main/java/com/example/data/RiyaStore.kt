@@ -159,6 +159,58 @@ data class LiveVoiceModelOption(
   val badge: String,
 )
 
+data class LiveModelTimingProfile(
+  val modelId: String,
+  val displayName: String,
+  val wsConnectTimeoutSec: Long = 16L,
+  val wsWriteTimeoutSec: Long = 30L,
+  val wsPingIntervalSec: Long = 30L,
+  val setupTimeoutMs: Long = 12_000L,
+  val reconnectDelayMs: Long = 3_000L,
+  val micChunkBytes: Int = 1600,
+  val minAudioRecordBufferBytes: Int = 6400,
+  val audioTrackBufferMultiplier: Int = 4,
+  val screenWatchIntervalMs: Long = 3_500L,
+  val screenScanMinGapMs: Long = 1_200L,
+  val bossSpeakingGapMs: Long = 2_000L,
+  val aiSpeakingGapMs: Long = 1_000L,
+  val phoneTailHoldMs: Long = 240L,
+  val silenceInstantMs: Int = 240,
+  val silenceFastMs: Int = 360,
+  val silenceNormalMs: Int = 480,
+  val flushInstantMs: Long = 60L,
+  val flushFastMs: Long = 100L,
+  val flushNormalMs: Long = 140L,
+  val hangoverInstantMs: Long = 180L,
+  val hangoverFastMs: Long = 220L,
+  val hangoverNormalMs: Long = 260L,
+  val supportsMinimalThinking: Boolean = true,
+) {
+  fun silenceDurationMs(delayOption: ReplyDelayOption): Int =
+    when (delayOption) {
+      ReplyDelayOption.INSTANT -> silenceInstantMs
+      ReplyDelayOption.FAST -> silenceFastMs
+      ReplyDelayOption.NORMAL -> silenceNormalMs
+    }
+
+  fun endOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
+    when (delayOption) {
+      ReplyDelayOption.INSTANT -> flushInstantMs
+      ReplyDelayOption.FAST -> flushFastMs
+      ReplyDelayOption.NORMAL -> flushNormalMs
+    }
+
+  fun hangoverMs(delayOption: ReplyDelayOption): Long =
+    when (delayOption) {
+      ReplyDelayOption.INSTANT -> hangoverInstantMs
+      ReplyDelayOption.FAST -> hangoverFastMs
+      ReplyDelayOption.NORMAL -> hangoverNormalMs
+    }
+
+  fun toSummaryBn(): String =
+    "Model=$displayName ($modelId) | Mic=${micChunkBytes}B(50ms)/RecBuf>=${minAudioRecordBufferBytes}B(0.2s) | Track=24kHz(min*${audioTrackBufferMultiplier}) | Ping=${wsPingIntervalSec}s | Setup=${setupTimeoutMs / 1000L}s | Reconnect=${reconnectDelayMs / 1000L}s | ScreenWatch=${screenWatchIntervalMs}ms/ScanGap=${screenScanMinGapMs}ms | Silence=${silenceInstantMs}/${silenceFastMs}/${silenceNormalMs}ms | Flush=${flushInstantMs}/${flushFastMs}/${flushNormalMs}ms | TailHold=${phoneTailHoldMs}ms | BossGap=${bossSpeakingGapMs}ms"
+}
+
 object RiyaState {
   val running = MutableStateFlow(false)
   val resume = MutableStateFlow(0)
@@ -265,6 +317,40 @@ object Store {
       else -> LIVE_VOICE_MODEL_OPTIONS[1]
     }
   }
+
+  val ALL_MODEL_TIMING_PROFILES: Map<String, LiveModelTimingProfile> =
+    mapOf(
+      "gemini-3.8-live" to
+        LiveModelTimingProfile(
+          modelId = "gemini-3.8-live",
+          displayName = "Gemini 3.8 Live",
+          supportsMinimalThinking = true,
+        ),
+      "gemini-3.1-flash-live-preview" to
+        LiveModelTimingProfile(
+          modelId = "gemini-3.1-flash-live-preview",
+          displayName = "Gemini 3.1 Flash Live (preview)",
+          supportsMinimalThinking = true,
+        ),
+      "gemini-2.5-flash-native-audio-preview-12-2025" to
+        LiveModelTimingProfile(
+          modelId = "gemini-2.5-flash-native-audio-preview-12-2025",
+          displayName = "Gemini 2.5 Flash Native Audio (Dec 2025)",
+          supportsMinimalThinking = false,
+        ),
+    )
+
+  fun timingProfileForModel(modelId: String): LiveModelTimingProfile {
+    val resolved = liveVoiceModelById(modelId)
+    return ALL_MODEL_TIMING_PROFILES[resolved.modelId]
+      ?: LiveModelTimingProfile(
+        modelId = resolved.modelId,
+        displayName = resolved.title,
+        supportsMinimalThinking = resolved.modelId.contains("3.1") || resolved.modelId.contains("3.8"),
+      )
+  }
+
+  fun activeTimingProfile(c: Context): LiveModelTimingProfile = timingProfileForModel(model(c))
 
   val EXTRA_CRITICAL_MODEL_OPTIONS =
     listOf(

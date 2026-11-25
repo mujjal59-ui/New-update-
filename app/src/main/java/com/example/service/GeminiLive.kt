@@ -40,6 +40,7 @@ import android.util.Base64
 import com.example.MainActivity
 import com.example.ai.RiyaPersona
 import com.example.builder.AppBuilderRuntimeBridge
+import com.example.data.LiveModelTimingProfile
 import com.example.data.ReplyDelayOption
 import com.example.data.RiyaState
 import com.example.data.Store
@@ -72,31 +73,28 @@ object LiveVadConfig {
   const val START_SENSITIVITY = "START_SENSITIVITY_HIGH"
   const val END_SENSITIVITY = "END_SENSITIVITY_LOW"
   const val PREFIX_PADDING_MS = 16
-  // Balanced anti-cutoff constants (verified in tests) + dynamic ReplyDelayOption speed profiles
-  const val SILENCE_DURATION_MS = 700
-  const val MIC_HANGOVER_MS = 280L
-  const val END_OF_TURN_FLUSH_MS = 240L
+  // Exact low-latency constants matched across all 3 Voice Models (Instant=240ms, Fast=360ms, Normal=480ms)
+  const val SILENCE_DURATION_MS = 480
+  const val MIC_HANGOVER_MS = 260L
+  const val END_OF_TURN_FLUSH_MS = 140L
 
-  fun effectiveSilenceDurationMs(delayOption: ReplyDelayOption): Int =
-    when (delayOption) {
-      ReplyDelayOption.INSTANT -> 360
-      ReplyDelayOption.FAST -> 540
-      ReplyDelayOption.NORMAL -> SILENCE_DURATION_MS
-    }
+  @JvmOverloads
+  fun effectiveSilenceDurationMs(
+    delayOption: ReplyDelayOption,
+    modelId: String = Store.DEFAULT_LIVE_MODEL,
+  ): Int = Store.timingProfileForModel(modelId).silenceDurationMs(delayOption)
 
-  fun effectiveEndOfTurnFlushMs(delayOption: ReplyDelayOption): Long =
-    when (delayOption) {
-      ReplyDelayOption.INSTANT -> 90L
-      ReplyDelayOption.FAST -> 140L
-      ReplyDelayOption.NORMAL -> 220L
-    }
+  @JvmOverloads
+  fun effectiveEndOfTurnFlushMs(
+    delayOption: ReplyDelayOption,
+    modelId: String = Store.DEFAULT_LIVE_MODEL,
+  ): Long = Store.timingProfileForModel(modelId).endOfTurnFlushMs(delayOption)
 
-  fun effectiveHangoverMs(delayOption: ReplyDelayOption): Long =
-    when (delayOption) {
-      ReplyDelayOption.INSTANT -> 180L
-      ReplyDelayOption.FAST -> 220L
-      ReplyDelayOption.NORMAL -> 260L
-    }
+  @JvmOverloads
+  fun effectiveHangoverMs(
+    delayOption: ReplyDelayOption,
+    modelId: String = Store.DEFAULT_LIVE_MODEL,
+  ): Long = Store.timingProfileForModel(modelId).hangoverMs(delayOption)
 
   fun buildRealtimeInputConfigJson(silenceMs: Int = SILENCE_DURATION_MS): JSONObject =
     JSONObject().put(
@@ -108,6 +106,41 @@ object LiveVadConfig {
         .put("prefixPaddingMs", PREFIX_PADDING_MS)
         .put("silenceDurationMs", silenceMs),
     )
+}
+
+/**
+ * Classifies non-screen background tools so multiple independent tools in a single toolCall batch
+ * execute concurrently via parallelToolExec while screen/UI tools stay strictly serialized.
+ */
+object LxrParallelToolPlanner {
+  val PARALLEL_SAFE_TOOLS =
+    setOf(
+      "current_time",
+      "remember",
+      "search_memory",
+      "delete_memory_entry",
+      "web_search",
+      "deep_research",
+      "get_battery_level",
+      "get_capabilities_a_to_z",
+      "get_activity_monitor",
+      "run_background_task",
+      "get_live_location",
+      "get_contacts_summary",
+      "get_call_log_summary",
+      "get_device_hardware_info",
+      "list_installed_apps",
+      "schedule_exact_reminder",
+      "list_scheduled_alarms",
+      "critical_task_solve",
+      "prepare_app_requirements",
+      "check_termux_build_status",
+    )
+
+  fun isParallelSafeTool(toolName: String): Boolean = toolName in PARALLEL_SAFE_TOOLS
+
+  fun canRunBatchInParallel(toolNames: List<String>): Boolean =
+    toolNames.size > 1 && toolNames.any { isParallelSafeTool(it) }
 }
 
 /** Compact Bengali indicator for the in-app status pill & floating LxR Orb while LXR--AI executes a task. */
@@ -179,7 +212,8 @@ object LxrToolWorkDescriber {
         "play_youtube", "media_control" -> "YouTube / মিডিয়া..."
         "unlock_phone", "unlock_locked_app", "lock_phone" -> "স্ক্রিন লক প্রসেস..."
         "list_installed_apps" -> "ইনস্টল করা অ্যাপ খোঁজা..."
-        "schedule_exact_reminder" -> "রিমাইন্ডার সেট..."
+        "schedule_exact_reminder" -> "ফোনের অ্যালার্ম / রিমাইন্ডার সেট..."
+        "list_scheduled_alarms" -> "অ্যালার্ম ও রিমাইন্ডার তালিকা..."
         "get_capabilities_a_to_z" -> "সক্ষমতা ও অনুমতি যাচাই..."
         "get_activity_monitor" -> "Activity Monitor দেখা হচ্ছে..."
         "run_background_task" -> "ব্যাকগ্রাউন্ড টাস্ক কিউ..."
@@ -365,7 +399,7 @@ class GeminiLive(private val ctx: Context) {
       .connectTimeout(16, TimeUnit.SECONDS)
       .readTimeout(0, TimeUnit.SECONDS)
       .writeTimeout(30, TimeUnit.SECONDS)
-      .pingInterval(35, TimeUnit.SECONDS)
+      .pingInterval(30, TimeUnit.SECONDS)
       .retryOnConnectionFailure(true)
       .build()
   private val main = Handler(Looper.getMainLooper())
@@ -374,10 +408,17 @@ class GeminiLive(private val ctx: Context) {
     Executors.newFixedThreadPool(4) { r ->
       Thread(r, "LxrToolExec").apply { isDaemon = true }
     }
+  private val parallelToolExec =
+    Executors.newCachedThreadPool { r ->
+      Thread(r, "LxrParallelTool").apply { isDaemon = true }
+    }
   private val uiToolLock = Any()
   private val obsExec = Executors.newSingleThreadExecutor { r ->
     Thread(r, "LxrLiveScreenObs").apply { isDaemon = true }
   }
+
+  private fun activeTimingProfile(): LiveModelTimingProfile =
+    Store.timingProfileForModel(modelOverride ?: Store.model(ctx))
   private var ws: WebSocket? = null
   private var rec: AudioRecord? = null
   @Volatile private var track: AudioTrack? = null
@@ -484,7 +525,8 @@ class GeminiLive(private val ctx: Context) {
       {"name":"inspect_camera_vision","description":"বস ফ্রন্ট বা ব্যাক ক্যামেরায় কী দেখা যাচ্ছে তা দেখতে বা 'আমাকে দেখো / সামনে কী আছে' জিজ্ঞাসা করলে ফোরগ্রাউন্ড বা ব্যাকগ্রাউন্ড ক্যামেরা দিয়ে আসল লাইভ ছবি (image/jpeg) তুলে যাচাই করে সত্য বর্ণনা দাও। ছবি ছাড়া কখনো অনুমান করবে না।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","current"],"description":"front (বসকে দেখতে), back (সামনের দৃশ্য) বা current"},"question":{"type":"STRING","description":"বস কী জানতে চেয়েছেন"}},"required":[]}},
       {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো এবং প্রয়োজনে ব্যাকগ্রাউন্ড বা ফোরগ্রাউন্ডে ক্যামেরা চালু/বন্ধ করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"},"turn_on":{"type":"BOOLEAN","description":"ক্যামেরা চালু করতে চাইলে true, বন্ধ করতে চাইলে false (ঐচ্ছিক)"}},"required":["lens"]}},
       {"name":"list_installed_apps","description":"ফোনে সত্যিই কী কী লঞ্চযোগ্য অ্যাপস ইনস্টল করা আছে তা প্যাকেজ ম্যানেজার দিয়ে সম্পূর্ণ পরীক্ষা করো (কখনোই এই টুল বা open_app না চালিয়ে বলবে না যে কোনো অ্যাপ ইনস্টল করা নেই)।","parameters":{"type":"OBJECT","properties":{"filter":{"type":"STRING","description":"নির্দিষ্ট অ্যাপের নাম বা অংশ দিয়ে খুঁজতে চাইলে লিখো, না চাইলে ফাঁকা রাখো"}},"required":[]}},
-      {"name":"schedule_exact_reminder","description":"বসের নির্ধারিত সময়ে (Alarms & reminders ব্যবহার করে) সঠিক রিমাইন্ডার বা অ্যালার্ম অ্যালার্ট সেট করো।","parameters":{"type":"OBJECT","properties":{"title":{"type":"STRING","description":"রিমাইন্ডারের কথা বা কাজের নাম"},"delay_seconds":{"type":"INTEGER","description":"কত সেকেন্ড পরে অ্যালার্ট বাজবে (যেমন 60, 300, 1800)"}},"required":["title","delay_seconds"]}}
+      {"name":"schedule_exact_reminder","description":"বসের নির্ধারিত সময়ে (Android AlarmManager.setAlarmClock + ফোনের Clock অ্যাপ + লকস্ক্রিন অ্যালার্ট/রিংটোন/ভাইব্রেশন দিয়ে) সরাসরি আসল অ্যালার্ম, টাইমার বা রিমাইন্ডার সেট করো। যেমন 'ভোর ৬:৩০ এ অ্যালার্ম দাও' বললে hour=6, minute=30, mode='alarm'; '৫ মিনিট পর রিমাইন্ডার/টাইমার' বললে delay_seconds=300।","parameters":{"type":"OBJECT","properties":{"title":{"type":"STRING","description":"অ্যালার্ম বা রিমাইন্ডারের শিরোনাম/কাজের নাম"},"delay_seconds":{"type":"INTEGER","description":"কত সেকেন্ড পরে বাজবে (যদি নির্দিষ্ট ঘন্টা-মিনিট না বলা থাকে, যেমন 60, 300, 1800)"},"hour":{"type":"INTEGER","description":"নির্দিষ্ট ঘন্টা ২৪-ঘন্টা ফরম্যাটে (0-23), যেমন ভোর ৬:৩০ -> 6, রাত ৯:০০ -> 21 (ঐচ্ছিক)"},"minute":{"type":"INTEGER","description":"নির্দিষ্ট মিনিট (0-59), যেমন ৩০ (ঐচ্ছিক)"},"mode":{"type":"STRING","enum":["auto","alarm","timer","reminder"],"description":"কাজের ধরন: alarm, timer, reminder বা auto"}},"required":["title"]}},
+      {"name":"list_scheduled_alarms","description":"ফোনের Android OS AlarmManager (nextAlarmClock), Clock অ্যাপ এবং LXR-এর আসল সংরক্ষিত অ্যালার্ম ও রিমাইন্ডার অবস্থা বাস্তবে যাচাই করে জানাও।","parameters":{"type":"OBJECT","properties":{}}}
     ]}]"""
 
   private val devCb =
@@ -722,19 +764,25 @@ class GeminiLive(private val ctx: Context) {
   private var lastShot = 0
   private var watchdogTick = 0
   @Volatile private var lastObservedPhoneStateKey = ""
-  @Volatile private var liveWatchTick = 0
+  @Volatile private var lastWatchScreenSentAtMs = 0L
   private val screenLoop =
     object : Runnable {
       override fun run() {
         if (stopped) return
-        liveWatchTick++
         if (!obsExec.isShutdown) {
           obsExec.execute {
             if (stopped) return@execute
             try {
               observeLiveLockAndScreen1s()
-              val imageEveryTicks = if (slowNetworkCached || Store.lowNetFastMode(ctx)) 10 else 6
-              if (liveWatchTick % imageEveryTicks == 0) {
+              val profile = activeTimingProfile()
+              val watchIntervalMs =
+                if (slowNetworkCached || Store.lowNetFastMode(ctx)) {
+                  maxOf(profile.screenWatchIntervalMs, 6_000L)
+                } else {
+                  profile.screenWatchIntervalMs
+                }
+              val nowLoopMs = System.currentTimeMillis()
+              if ((nowLoopMs - lastWatchScreenSentAtMs) >= watchIntervalMs) {
                 watchScreen()
               }
             } catch (_: Exception) {}
@@ -1012,10 +1060,10 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun isAiSpeakingRecently(): Boolean =
-    (System.currentTimeMillis() - lastSpeakerWriteMs) < 1000L
+    (System.currentTimeMillis() - lastSpeakerWriteMs) < activeTimingProfile().aiSpeakingGapMs
 
   private fun isBossSpeakingRecently(): Boolean =
-    (System.currentTimeMillis() - lastBossSpeechDetectedMs) < 3500L
+    (System.currentTimeMillis() - lastBossSpeechDetectedMs) < activeTimingProfile().bossSpeakingGapMs
 
   private fun sendScreenNow() {
     if (!ready || !Store.screenWatch(ctx) || RiyaState.cameraOn || isAiSpeakingRecently() || isBossSpeakingRecently() || waitingServerReply) return
@@ -1025,6 +1073,7 @@ class GeminiLive(private val ctx: Context) {
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
     acc.screenshotJpeg(maxDim = if (lowNet) 300 else 380, quality = if (lowNet) 22 else 30) { jpg ->
       if (jpg != null) {
+        lastWatchScreenSentAtMs = System.currentTimeMillis()
         lastShot = jpg.contentHashCode()
         sendImage(jpg)
       }
@@ -1077,6 +1126,7 @@ class GeminiLive(private val ctx: Context) {
     val acc = RiyaAccessibilityService.instance ?: return
     if (acc.rootInActiveWindow?.packageName?.toString() == ctx.packageName) return
     if (LockVaultManager.describeLivePhoneState(ctx, acc).isLocked) return
+    lastWatchScreenSentAtMs = System.currentTimeMillis()
     val lowNet = Store.lowNetFastMode(ctx) && isSlowNetwork()
     acc.screenshotJpeg(maxDim = if (lowNet) 300 else 380, quality = if (lowNet) 22 else 30) { jpg ->
       if (jpg != null) {
@@ -1281,6 +1331,9 @@ class GeminiLive(private val ctx: Context) {
       toolExec.shutdownNow()
     } catch (_: Throwable) {}
     try {
+      parallelToolExec.shutdownNow()
+    } catch (_: Throwable) {}
+    try {
       obsExec.shutdownNow()
     } catch (_: Throwable) {}
 
@@ -1458,14 +1511,15 @@ class GeminiLive(private val ctx: Context) {
         },
       )
     ws = me
+    val setupTimeoutMs = activeTimingProfile().setupTimeoutMs
     main.postDelayed(
       {
         if (!stopped && !ready && ws === me) {
           me?.cancel()
-          fail("সেটআপের উত্তর আসেনি (২০ সেকেন্ড)")
+          fail("সেটআপের উত্তর আসেনি (${setupTimeoutMs / 1000L} সেকেন্ড)")
         }
       },
-      20_000L,
+      setupTimeoutMs,
     )
   }
 
@@ -1492,7 +1546,10 @@ class GeminiLive(private val ctx: Context) {
       }
     if (pending) return
     pending = true
-    val retryDelayMs = (minOf(failCount, 4) * 1000L).coerceIn(1000L, 4500L)
+    val baseReconnectMs = activeTimingProfile().reconnectDelayMs
+    val retryDelayMs =
+      if (failCount <= 1) baseReconnectMs
+      else (baseReconnectMs + (failCount - 1) * 750L).coerceIn(baseReconnectMs, 5_000L)
     main.postDelayed(
       {
         pending = false
@@ -1547,10 +1604,15 @@ class GeminiLive(private val ctx: Context) {
         ReplyDelayOption.NORMAL -> "Normal (15 sec — প্রতিটি কমান্ডের জন্য ১৫ সেকেন্ড বিলম্ব নীতি মেনে FIFO কিউতে উত্তর দাও)"
       }
 
+    val voiceName = Store.voice(ctx).ifBlank { "Aoede" }
+    val activeModel = modelOverride ?: Store.model(ctx)
+    val activeProfile = Store.timingProfileForModel(activeModel)
+
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.39.0 — Personal AI Operating System Controller)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.40.0 — Personal AI Operating System Controller)
+      - Active Voice Model & Exact Timings: ${activeProfile.toSummaryBn()}
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
       - Live Observation: EVERY 0.1s (BACKGROUND + AssistStructure Bridge + Non-Blocking FIFO Voice Queue) | Camera: $camDesc | Extra Critical AI Model: $extraModel | Reply Speed: $replySpeedDesc
@@ -1562,10 +1624,13 @@ class GeminiLive(private val ctx: Context) {
       - HONEST LIVE CAPABILITY INTROSPECTION RULE: বস "তুমি কী কী করতে পারো?" বা "কোন কোন অ্যাপ পরিচালনা করতে পারো?" জিজ্ঞেস করলে `get_capabilities_a_to_z` কল করে আসল পারমিশন, সার্ভিস ও অ্যাপ যাচাইসহ ৪টি স্তরে (সম্পূর্ণ সক্রিয়, আংশিক সক্রিয়, অনুমতি প্রয়োজন, অনুপলব্ধ) সত্য রিপোর্ট বলবে — অসমর্থিত বা বন্ধ ফিচারকে কখনোই সক্রিয় বলবে না!
       - ACTIVITY MONITOR & VERIFICATION RULE: প্রতিটি কাজ LXR Activity Monitor-এ ৯টি ধাপের তথ্যসহ (প্রাপ্ত/শুরু সময়, Background/Foreground মোড, অপারেশন, অগ্রগতি, অবস্থা, ফলাফল, মোট সময়, ত্রুটি) সংরক্ষণ করা হয়। বস "কী করেছো?", "What did you do?" বা "তথ্য দেখাও" বললে `get_activity_monitor` কল করে প্রকৃত স্ট্যাটাস ও যাচাইকৃত ফলাফল জানাবে। স্বাধীন ব্যাকগ্রাউন্ড কাজের জন্য `run_background_task` ব্যবহার করো।
       - STRICT VISION & SMART GPS ZERO-HALLUCINATION RULE: কখনোই না দেখে বস বা আশেপাশের কোনো চেহারা, পোশাক বা বস্তু কল্পনা করে বর্ণনা দেবে না! ক্যামেরা দিয়ে দেখতে বললে `inspect_camera_vision` কল করবে, আর লোকেশন জানতে চাইলে `get_live_location` কল করে কেবল বাস্তব ঠিকানা ও স্থানাঙ্ক বলবে।
+      - REAL PHONE ALARM & REMINDER RULE: বস অ্যালার্ম, টাইমার বা রিমাইন্ডার সেট করতে বললে `schedule_exact_reminder` কল করে Android OS `AlarmManager.setAlarmClock` ও ফোনের Clock অ্যাপে আসল অ্যালার্ম নিবন্ধন করবে এবং যাচাইয়ের জন্য `list_scheduled_alarms` ব্যবহার করবে — প্রমাণ ছাড়া "সেট করেছি" বলবে না।
       - STRICT SILENT LOCK & EXECUTION DISCIPLINE:
-        * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে", "স্ক্রিন লক করা আছে" বা "Slide again to unlock" বলবে না এবং আনলক হোম/অ্যাপ স্ক্রিনে কখনোই সোয়াইপ করবে না।
+        * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে" বা "স্ক্রিন লক করা আছে" বলবে না এবং আনলক হোম বা অ্যাপ-এক্সিট স্ক্রিনে কখনোই নিচের দিক থেকে সোয়াইপ করবে না।
         * স্ক্রিন সত্যিই লক থাকাকালে ব্যাকগ্রাউন্ড API কাজ সরাসরি ব্যাকগ্রাউন্ডেই সম্পন্ন করো; শুধু অপরিহার্য UI ইন্টারঅ্যাকশন হলে বৈধ আনলক ব্যবস্থা ব্যবহার করে কাজ শেষে রিলক করবে।
       - SELF-DIAGNOSIS & SELF-REPAIR PERMISSION RULE: নিজের কোনো অনুমতি/সার্ভিসে (যার মধ্যে Device Admin ও Alarms & reminders আছে) সমস্যা বা ব্যর্থতা হলে প্রথমে `diagnose_and_fix_self(mode="diagnose")` দিয়ে কারণ বুঝে বসকে স্পষ্ট বলো এবং বসের অনুমতি নিয়ে `diagnose_and_fix_self(mode="fix", issue_key=...)` দিয়ে সমাধান করো।
+
+      ${RiyaPersona.DIRECTIVES_V2}
 
       ${RiyaPersona.TEXT}
 
@@ -1577,8 +1642,6 @@ class GeminiLive(private val ctx: Context) {
       """
         .trimIndent()
 
-    val voiceName = Store.voice(ctx).ifBlank { "Aoede" }
-    val activeModel = modelOverride ?: Store.model(ctx)
     val s = JSONObject()
     s.put("model", "models/$activeModel")
 
@@ -1591,7 +1654,7 @@ class GeminiLive(private val ctx: Context) {
           JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)),
         )
     genConfig.put("speechConfig", speechConfig)
-    if (!thinkingConfigCompatFallback && activeModel.contains("3.1")) {
+    if (!thinkingConfigCompatFallback && activeProfile.supportsMinimalThinking) {
       genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "MINIMAL"))
     }
     s.put("generationConfig", genConfig)
@@ -1600,7 +1663,7 @@ class GeminiLive(private val ctx: Context) {
       s.put(
         "realtimeInputConfig",
         LiveVadConfig.buildRealtimeInputConfigJson(
-          silenceMs = LiveVadConfig.effectiveSilenceDurationMs(delayOpt),
+          silenceMs = activeProfile.silenceDurationMs(delayOpt),
         ),
       )
     }
@@ -1783,7 +1846,7 @@ class GeminiLive(private val ctx: Context) {
                                 val frames = (wrote / 2).toLong()
                                 totalSpeakerFramesWritten += frames
                                 if (pcmRms >= 28.0) {
-                                  lastAudibleEndFrame = maxOf(lastAudibleEndFrame, totalSpeakerFramesWritten + 4800L)
+                                  lastAudibleEndFrame = maxOf(lastAudibleEndFrame, totalSpeakerFramesWritten)
                                   lastSpeakerOutputRms = pcmRms
                                   lastSpeakerSoundingMs = afterWriteMs
                                 }
@@ -1915,28 +1978,73 @@ class GeminiLive(private val ctx: Context) {
           try {
             isExecutingTool = true
             activeWorkStartedAtMs = System.currentTimeMillis()
-            val out = JSONArray()
-            for (i in 0 until fc.length()) {
-              val c = fc.getJSONObject(i)
-              val callId = c.optString("id")
-              val nm = c.optString("name")
-              val argsObj = c.optJSONObject("args") ?: JSONObject()
-              val workBanner = LxrToolWorkDescriber.describeBn(nm, argsObj)
-              val isReadingScreen = LxrToolWorkDescriber.isScreenReadingTool(nm)
-              RiyaState.activeWorkLabel.value = workBanner
-              LxrFloatingOverlayManager.showForTask(ctx, workBanner, isReadingScreen = isReadingScreen)
-              val r =
-                try {
-                  runTool(nm, argsObj)
-                } catch (e: Throwable) {
-                  "টুল ত্রুটি: ${e.message ?: "unknown error"}"
-                }
-              out.put(
-                JSONObject()
-                  .put("id", callId)
-                  .put("name", nm)
-                  .put("response", JSONObject().put("result", r))
+            val count = fc.length()
+            val results = arrayOfNulls<JSONObject>(count)
+            val callNames = (0 until count).map { idx -> fc.getJSONObject(idx).optString("name") }
+            val useParallel = LxrParallelToolPlanner.canRunBatchInParallel(callNames)
+            if (useParallel) {
+              val firstCall = fc.getJSONObject(0)
+              val firstName = firstCall.optString("name")
+              val firstArgs = firstCall.optJSONObject("args") ?: JSONObject()
+              val firstBanner = LxrToolWorkDescriber.describeBn(firstName, firstArgs)
+              RiyaState.activeWorkLabel.value = firstBanner
+              LxrFloatingOverlayManager.showForTask(
+                ctx,
+                firstBanner,
+                isReadingScreen = callNames.any { LxrToolWorkDescriber.isScreenReadingTool(it) },
               )
+              val latch = CountDownLatch(count)
+              for (i in 0 until count) {
+                val c = fc.getJSONObject(i)
+                val callId = c.optString("id")
+                val nm = c.optString("name")
+                val argsObj = c.optJSONObject("args") ?: JSONObject()
+                parallelToolExec.execute {
+                  try {
+                    val r =
+                      try {
+                        runTool(nm, argsObj)
+                      } catch (e: Throwable) {
+                        "টুল ত্রুটি: ${e.message ?: "unknown error"}"
+                      }
+                    results[i] =
+                      JSONObject()
+                        .put("id", callId)
+                        .put("name", nm)
+                        .put("response", JSONObject().put("result", r))
+                  } finally {
+                    latch.countDown()
+                  }
+                }
+              }
+              latch.await(45, TimeUnit.SECONDS)
+            } else {
+              for (i in 0 until count) {
+                val c = fc.getJSONObject(i)
+                val callId = c.optString("id")
+                val nm = c.optString("name")
+                val argsObj = c.optJSONObject("args") ?: JSONObject()
+                val workBanner = LxrToolWorkDescriber.describeBn(nm, argsObj)
+                val isReadingScreen = LxrToolWorkDescriber.isScreenReadingTool(nm)
+                RiyaState.activeWorkLabel.value = workBanner
+                LxrFloatingOverlayManager.showForTask(ctx, workBanner, isReadingScreen = isReadingScreen)
+                val r =
+                  try {
+                    runTool(nm, argsObj)
+                  } catch (e: Throwable) {
+                    "টুল ত্রুটি: ${e.message ?: "unknown error"}"
+                  }
+                results[i] =
+                  JSONObject()
+                    .put("id", callId)
+                    .put("name", nm)
+                    .put("response", JSONObject().put("result", r))
+              }
+            }
+            val out = JSONArray()
+            for (i in 0 until count) {
+              val item = results[i] ?: continue
+              out.put(item)
             }
             ws?.send(
               JSONObject().put("toolResponse", JSONObject().put("functionResponses", out)).toString()
@@ -1992,30 +2100,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun runTool(name: String, a: JSONObject): String {
-    val isBackgroundIndependent =
-      name in
-        setOf(
-          "current_time",
-          "remember",
-          "search_memory",
-          "delete_memory_entry",
-          "web_search",
-          "deep_research",
-          "get_battery_level",
-          "get_capabilities_a_to_z",
-          "get_activity_monitor",
-          "run_background_task",
-          "get_live_location",
-          "get_contacts_summary",
-          "get_call_log_summary",
-          "get_device_hardware_info",
-          "list_installed_apps",
-          "schedule_exact_reminder",
-          "critical_task_solve",
-          "prepare_app_requirements",
-          "check_termux_build_status",
-        )
-    if (isBackgroundIndependent) {
+    if (LxrParallelToolPlanner.isParallelSafeTool(name)) {
       return LxrBackgroundTaskManager.recordAndVerifyToolExecution(
         ctx = ctx,
         toolName = name,
@@ -2452,7 +2537,12 @@ class GeminiLive(private val ctx: Context) {
             ctx = ctx,
             title = a.optString("title"),
             delaySeconds = a.optLong("delay_seconds", 60L),
+            hour = if (a.has("hour") && !a.isNull("hour")) a.optInt("hour", -1).takeIf { it in 0..23 } else null,
+            minute = if (a.has("minute") && !a.isNull("minute")) a.optInt("minute", -1).takeIf { it in 0..59 } else null,
+            mode = a.optString("mode", "auto").ifBlank { "auto" },
           )
+        "list_scheduled_alarms" ->
+          LxrDeviceAndHardwareEngine.listScheduledAlarmsReport(ctx)
         else -> "unknown tool"
       }
     } catch (e: Exception) {
@@ -2492,6 +2582,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun goHomeAndVerify(acc: RiyaAccessibilityService?) {
+    LockVaultManager.markHomeOrAppExitTransition()
     val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
     if (acc != null) {
       val res = acc.global("home")
@@ -3367,6 +3458,7 @@ class GeminiLive(private val ctx: Context) {
         AudioFormat.ENCODING_PCM_16BIT,
       )
     playbackSpeed = Store.voiceSpeed(ctx)
+    val bufMultiplier = activeTimingProfile().audioTrackBufferMultiplier.coerceAtLeast(4)
     val t =
       AudioTrack.Builder()
         .setAudioAttributes(
@@ -3382,7 +3474,7 @@ class GeminiLive(private val ctx: Context) {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
         )
-        .setBufferSizeInBytes(maxOf(minAudioBuf * 6, 49_152))
+        .setBufferSizeInBytes(maxOf(minAudioBuf * bufMultiplier, 32_768))
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
         .also {
@@ -3400,6 +3492,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun createBestAudioRecord(minBuf: Int): AudioRecord {
+    val minRecBytes = activeTimingProfile().minAudioRecordBufferBytes
     val sources =
       if (usingBtAudio) {
         listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC)
@@ -3420,7 +3513,7 @@ class GeminiLive(private val ctx: Context) {
             16000,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuf, 2560),
+            maxOf(minBuf, minRecBytes),
           )
         if (candidate.state == AudioRecord.STATE_INITIALIZED) {
           return candidate
@@ -3434,7 +3527,7 @@ class GeminiLive(private val ctx: Context) {
         16000,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
-        maxOf(minBuf, 2560),
+        maxOf(minBuf, minRecBytes),
       )
   }
 
@@ -3477,8 +3570,10 @@ class GeminiLive(private val ctx: Context) {
     val t =
       Thread {
         try {
-          val buf = ByteArray(1280) // 40ms @ 16kHz PCM-16 mono (Google Live optimal low-latency chunk)
-          val zeroSilence = ByteArray(1280)
+          val initProfile = activeTimingProfile()
+          val chunkBytes = initProfile.micChunkBytes.coerceIn(640, 6400)
+          val buf = ByteArray(chunkBytes) // 50ms @ 16kHz PCM-16 mono (1600B) matching configured voice timing profile
+          val zeroSilence = ByteArray(chunkBytes)
           var lastVoiceMs = 0L
           var silentFrameCounter = 0
           var consecutiveLoudMicChunks = 0
@@ -3643,6 +3738,7 @@ class GeminiLive(private val ctx: Context) {
                   consecutiveLoudMicChunks >= requiredLoudChunks &&
                   rawRms >= directThreshold
 
+              val activeModelProfile = activeTimingProfile()
               val isSoftMuted =
                 AudioEchoGuard.shouldMuteMicWithBargeIn(
                   usingBtAudio = usingBtAudio,
@@ -3655,7 +3751,7 @@ class GeminiLive(private val ctx: Context) {
                   lastSpeakerOutputRms = lastSpeakerOutputRms,
                   voiceMatchBargeIn = voiceMatchBargeInNow,
                   consecutiveLoudChunks = if (directLoudBargeIn) consecutiveLoudMicChunks else 0,
-                  phoneTailHoldMs = 360L,
+                  phoneTailHoldMs = activeModelProfile.phoneTailHoldMs,
                   minDirectBargeInRms = directThreshold,
                   directRatio = directRatioNow,
                 )
@@ -3709,8 +3805,8 @@ class GeminiLive(private val ctx: Context) {
               }
 
               val delayOpt = ReplyDelayOption.fromSeconds(RiyaState.replyDelaySeconds.value)
-              val currentFlushMs = LiveVadConfig.effectiveEndOfTurnFlushMs(delayOpt)
-              val currentHangoverMs = LiveVadConfig.effectiveHangoverMs(delayOpt)
+              val currentFlushMs = activeModelProfile.endOfTurnFlushMs(delayOpt)
+              val currentHangoverMs = activeModelProfile.hangoverMs(delayOpt)
               val turnSilenceWindowMs = maxOf(currentHangoverMs + 140L, currentFlushMs)
               val withinHangover = !isSoftMuted && lastVoiceMs > 0L && (now - lastVoiceMs) <= currentHangoverMs
               val withinEndOfTurnSilence =

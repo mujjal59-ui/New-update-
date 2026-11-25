@@ -277,12 +277,12 @@ class LxrAllFixesTest {
     assertEquals("START_SENSITIVITY_HIGH", LiveVadConfig.START_SENSITIVITY)
     assertEquals("END_SENSITIVITY_LOW", LiveVadConfig.END_SENSITIVITY)
     assertTrue(
-      "Silence window should stay in natural anti-cutoff window (700..900ms)",
-      LiveVadConfig.SILENCE_DURATION_MS in 700..900,
+      "Silence window should stay in configured low-latency window (240..700ms)",
+      LiveVadConfig.SILENCE_DURATION_MS in 240..700,
     )
     assertTrue(
-      "Mic hangover should bridge brief syllable pauses cleanly (280..400ms)",
-      LiveVadConfig.MIC_HANGOVER_MS in 280L..400L,
+      "Mic hangover should bridge brief syllable pauses cleanly (180..400ms)",
+      LiveVadConfig.MIC_HANGOVER_MS in 180L..400L,
     )
     val cfg = LiveVadConfig.buildRealtimeInputConfigJson().getJSONObject("automaticActivityDetection")
     assertFalse(cfg.getBoolean("disabled"))
@@ -403,10 +403,10 @@ class LxrAllFixesTest {
   fun lxrPersonaAndZeroDelayVad_enforceNameLaxZeroExcuseAndStudioCapabilities() {
     assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
     assertTrue(RiyaPersona.TEXT.contains("LAX"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
-    assertTrue("End-of-turn flush window must stay balanced to avoid clipping", LiveVadConfig.END_OF_TURN_FLUSH_MS in 200L..600L)
+    assertTrue("End-of-turn flush window must stay balanced and snappy (60..400ms)", LiveVadConfig.END_OF_TURN_FLUSH_MS in 60L..400L)
     assertTrue("Prefix padding must stay tight", LiveVadConfig.PREFIX_PADDING_MS <= 30)
   }
 

@@ -221,7 +221,7 @@ class LxrV237UpdateTest {
   fun lockVault_smoothSwipeDurationsAndHomeUnlockedStateNeverTriggersUnlockSwipe() {
     val strategies = LockVaultManager.buildLockscreenSwipeStrategies(1080f, 2400f)
     assertEquals(3, strategies.size)
-    assertTrue(strategies[0].startY > 2400f * 0.85f)
+    assertTrue("Swipe start must stay above Infinix bottom-edge zone (< 0.75h)", strategies[0].startY in 2400f * 0.55f..2400f * 0.75f)
     assertTrue(strategies[0].endY <= 2400f * 0.35f)
     assertTrue("Primary swipe duration >= 350ms prevents Infinix Slide again to unlock", strategies[0].durationMs >= 350L)
 
@@ -233,7 +233,7 @@ class LxrV237UpdateTest {
 
   @Test
   fun riyaPersona_updatedToV2370WithStrictTumiAndCreatorRules() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
     assertTrue(RiyaPersona.TEXT.contains("তুমি"))
   }

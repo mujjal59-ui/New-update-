@@ -69,7 +69,7 @@ class LxrV238UpdateTest {
     assertEquals(expectedCreator, RiyaPersona.CREATOR_IDENTITY_BN)
     assertTrue(RiyaPersona.TEXT.contains(expectedCreator))
     assertTrue(RiyaPersona.TEXT.contains("Personal AI Operating System Controller"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
 
     // Strict Boss + Tumi enforcement: no formal honorifics or old legacy names in capabilities list
     val caps = RiyaPersona.CAPABILITIES_A_TO_Z_BN

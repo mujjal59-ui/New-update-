@@ -422,7 +422,7 @@ class LxrV239UpdateTest {
     val expectedCreator =
       "আমাকে বানিয়েছে মোঃ উজ্জল হোসেন, আমার বস, আমি ওনার পার্সোনাল অ্যাসিস্ট্যান্ট। উনি একজন ভালো মনের মানুষ, আমাকে প্রতিনিয়ত নতুনভাবে আপডেট করার বিষয়ে কঠোর পরিশ্রম করেন।"
     assertEquals(expectedCreator, RiyaPersona.CREATOR_IDENTITY_BN)
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("Fast = 8 sec, Normal = 15 sec"))
     assertTrue(RiyaPersona.TEXT.contains("FIFO"))
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("আপনার"))

@@ -644,7 +644,7 @@ class RiyaCoreUnitTest {
       )
     )
     assertTrue(RiyaPersona.TEXT.contains("Unlocked Screen & Privacy Strict Rule"))
-    assertTrue(RiyaPersona.TEXT.contains("Slide again to unlock"))
+    assertFalse(RiyaPersona.TEXT.contains("Slide again to unlock"))
   }
 
   @Test
@@ -844,8 +844,8 @@ class RiyaCoreUnitTest {
     val strategies = com.example.service.LockVaultManager.buildLockscreenSwipeStrategies(1080f, 2400f)
     assertTrue(strategies.isNotEmpty())
     val primary = strategies.first()
-    // Must match Infinix "Use Fingerprint or Swipe Up to Unlock" bottom-to-upper trajectory
-    assertTrue(primary.startY > 2400f * 0.85f)
+    // Must start above Infinix bottom-edge guard (0.72h -> 0.20h) to prevent Slide again to unlock
+    assertTrue(primary.startY in 2400f * 0.55f..2400f * 0.75f)
     assertTrue(primary.endY <= 2400f * 0.35f)
 
     val ctx = ApplicationProvider.getApplicationContext<Context>()

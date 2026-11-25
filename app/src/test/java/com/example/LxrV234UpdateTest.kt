@@ -208,7 +208,7 @@ class LxrV234UpdateTest {
 
   @Test
   fun personaIncludesV234HonestVisionAndOrbCapabilitiesWithStrictTumi() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("inspect_camera_vision"))
     assertTrue(RiyaPersona.TEXT.contains("👁️ স্ক্রিন পড়ছে..."))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))

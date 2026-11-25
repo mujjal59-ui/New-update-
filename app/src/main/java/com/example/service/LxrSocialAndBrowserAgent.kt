@@ -199,16 +199,16 @@ object LxrSocialAndBrowserAgent {
       }
     }
 
-    // Open App Drawer by swiping up from bottom-middle ONLY when unlocked launcher is active
+    // Open App Drawer by swiping from mid-screen ONLY after Home transition settles
     goHomeFn()
-    Thread.sleep(240L)
+    Thread.sleep(420L)
     val fgDrawerPkg = LockVaultManager.resolveBestForegroundPackage(acc).lowercase()
     val launchers = acc.resolveHomeLauncherPackages().map { it.lowercase() }.toSet()
     val safeToOpenDrawer =
       !LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc) &&
         (fgDrawerPkg in launchers || fgDrawerPkg.contains("launcher") || fgDrawerPkg.contains("home"))
     if (safeToOpenDrawer) {
-      acc.swipe(w * 0.50f, h * 0.80f, w * 0.50f, h * 0.28f, 340L)
+      acc.swipe(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.22f, 360L)
       Thread.sleep(450L)
       acc.readEntireScreenTree()
     }

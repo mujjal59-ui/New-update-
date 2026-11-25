@@ -40,9 +40,9 @@ class LxrV231UpdateTest {
     assertEquals(8_000L, ReplyDelayOption.FAST.voiceDelayMs)
     assertEquals(15_000L, ReplyDelayOption.NORMAL.voiceDelayMs)
 
-    assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
-    assertEquals(540, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.FAST))
-    assertEquals(700, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.NORMAL))
+    assertEquals(240, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
+    assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.FAST))
+    assertEquals(480, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.NORMAL))
 
     assertTrue(
       LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT) <
@@ -143,7 +143,7 @@ class LxrV231UpdateTest {
 
   @Test
   fun personaReflectsV231PersonalityAndCapabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("শোনো"))
     assertTrue(RiyaPersona.TEXT.contains("থামো"))
     assertTrue(RiyaPersona.TEXT.contains("Singing & Personal Sharing"))

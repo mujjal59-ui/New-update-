@@ -150,9 +150,21 @@ object LockVaultManager {
     return keyguardLocked || deviceLocked
   }
 
+  @Volatile private var lastHomeOrExitTransitionMs: Long = 0L
+  const val HOME_EXIT_UNLOCK_SUPPRESSION_MS = 2_200L
+
+  fun markHomeOrAppExitTransition(nowMs: Long = System.currentTimeMillis()) {
+    lastHomeOrExitTransitionMs = nowMs
+  }
+
+  fun isInHomeOrAppExitTransition(nowMs: Long = System.currentTimeMillis()): Boolean {
+    val t = lastHomeOrExitTransitionMs
+    return t > 0L && (nowMs - t) in 0L..HOME_EXIT_UNLOCK_SUPPRESSION_MS
+  }
+
   /**
    * True when any interactive regular app or Home Launcher window is visibly active to the user.
-   * Prevents Infinix XOS / Android 16 transient SystemUI overlays from triggering "Slide again to unlock".
+   * Prevents transient SystemUI overlays during app exit or Home navigation from false lock detection.
    */
   fun hasVisibleRegularAppOrLauncherWindow(acc: RiyaAccessibilityService?): Boolean {
     if (acc == null) return false
@@ -219,7 +231,7 @@ object LockVaultManager {
           txt.contains("quick settings") ||
             txt.contains("clear all") ||
             txt.contains("notification shade") ||
-            txt.contains("slide again to unlock") ||
+            txt.contains("again to unlock") ||
             (txt.contains("brightness") && txt.contains("wi-fi"))
         if (isQuickSettingsOrShade) return@any false
         val keyguardCue = isKeyguardTextDump(txt)
@@ -353,6 +365,9 @@ object LockVaultManager {
     val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
     val keyguardLocked = km?.isKeyguardLocked == true
     val deviceLocked = if (Build.VERSION.SDK_INT >= 22) (km?.isDeviceLocked == true) else keyguardLocked
+    if (!keyguardLocked && !deviceLocked && isInHomeOrAppExitTransition()) {
+      return false
+    }
     val regularWindowVisible = hasVisibleRegularAppOrLauncherWindow(acc)
     if (km != null && !keyguardLocked && !deviceLocked) {
       if (regularWindowVisible) return false
@@ -407,7 +422,9 @@ object LockVaultManager {
       val keyguardLayerOnTop = trustLock && (hasFullScreenVisibleKeyguardLayer(acc) || isSystemKeyguardUiShowing(acc))
       val bouncerVisible = trustLock && hasBouncerUiShowing(acc, lockType)
       val mainLocked =
-        if (km != null && !keyguardLocked && !deviceLocked) {
+        if (!keyguardLocked && !deviceLocked && (isInHomeOrAppExitTransition() || hasVisibleRegularAppOrLauncherWindow(acc))) {
+          false
+        } else if (km != null && !keyguardLocked && !deviceLocked) {
           lowerPkg.contains("keyguard") || lowerPkg.contains("lockscreen")
         } else {
           keyguardLayerOnTop ||
@@ -728,17 +745,26 @@ object LockVaultManager {
     val w = widthPx.coerceAtLeast(720f)
     val h = heightPx.coerceAtLeast(1400f)
     return listOf(
-      // 1. Steady full-travel swipe from Infinix XOS unlock prompt up to upper center (380ms avoids XOS "Slide again to unlock" edge flick guard)
-      LockSwipeVector(w * 0.50f, h * 0.86f, w * 0.50f, h * 0.22f, 380L),
-      // 2. Smooth mid-lower to top sweep (clear of bottom gesture navigation bar)
-      LockSwipeVector(w * 0.50f, h * 0.78f, w * 0.50f, h * 0.16f, 420L),
-      // 3. Center sweep fallback when notifications cover lower half
-      LockSwipeVector(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.14f, 450L),
+      // 1. Steady mid-lower to upper-center sweep cleanly above bottom gesture/edge guard
+      LockSwipeVector(w * 0.50f, h * 0.72f, w * 0.50f, h * 0.20f, 380L),
+      // 2. Smooth mid-screen sweep fallback (well clear of navigation bar)
+      LockSwipeVector(w * 0.50f, h * 0.66f, w * 0.50f, h * 0.16f, 420L),
+      // 3. Upper-mid sweep fallback when notifications cover lower half
+      LockSwipeVector(w * 0.50f, h * 0.60f, w * 0.50f, h * 0.14f, 450L),
     )
   }
 
   fun unlockDeviceIfLocked(ctx: Context, acc: RiyaAccessibilityService?): UnlockAttemptResult {
     val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    val kmEarly = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+    val keyguardLockedEarly = kmEarly?.isKeyguardLocked == true
+    val deviceLockedEarly =
+      if (Build.VERSION.SDK_INT >= 22) (kmEarly?.isDeviceLocked == true) else keyguardLockedEarly
+    if (pm?.isInteractive != false && !keyguardLockedEarly && !deviceLockedEarly &&
+      (isInHomeOrAppExitTransition() || hasVisibleRegularAppOrLauncherWindow(acc))
+    ) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+    }
     val lockType = Store.phoneLockType(ctx)
     val initiallyLocked = (pm != null && !pm.isInteractive) || !isScreenUnlockedNow(ctx, acc, lockType)
     if (!initiallyLocked) {

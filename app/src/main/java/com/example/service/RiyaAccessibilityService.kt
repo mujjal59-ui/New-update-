@@ -143,6 +143,7 @@ class RiyaAccessibilityService : AccessibilityService() {
           (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) &&
           (com.example.data.RiyaState.running.value || pkg == "com.android.systemui")
+      val activeScanGap = com.example.data.Store.activeTimingProfile(this).screenScanMinGapMs
       val minGap =
         when {
           isOwnUi && isStateChange -> 420L
@@ -150,7 +151,7 @@ class RiyaAccessibilityService : AccessibilityService() {
           isStateChange && com.example.data.RiyaState.running.value -> 80L
           isStateChange -> 180L
           com.example.data.RiyaState.running.value -> 260L
-          else -> 650L
+          else -> activeScanGap
         }
       if ((isStateChange || isContentChange) &&
         minGap < Long.MAX_VALUE &&
@@ -287,7 +288,8 @@ class RiyaAccessibilityService : AccessibilityService() {
         nodes.add(info)
 
         val readable = txt.ifBlank { desc }
-        if (readable.isNotBlank() && seenLines.size < 90) {
+        val isTransientEdgeHint = readable.contains("again to unlock", ignoreCase = true)
+        if (readable.isNotBlank() && !isTransientEdgeHint && seenLines.size < 90) {
           seenLines.add(readable)
         }
 
@@ -1203,8 +1205,10 @@ class RiyaAccessibilityService : AccessibilityService() {
 
   fun global(a: String): String {
     if (a == "home") {
+      LockVaultManager.markHomeOrAppExitTransition()
       val launchers = resolveHomeLauncherPackages()
       if (isOnHomeLauncher(launchers) && LockVaultManager.isScreenUnlockedNow(this, this)) {
+        LockVaultManager.markHomeOrAppExitTransition()
         readEntireScreenTree(includeAllWindows = true)
         return "সম্পন্ন"
       }
@@ -1220,6 +1224,7 @@ class RiyaAccessibilityService : AccessibilityService() {
       val globalOk = performGlobalAction(GLOBAL_ACTION_HOME)
       repeat(8) {
         if (isOnHomeLauncher(launchers)) {
+          LockVaultManager.markHomeOrAppExitTransition()
           readEntireScreenTree(includeAllWindows = true)
           return "সম্পন্ন"
         }
@@ -1237,11 +1242,15 @@ class RiyaAccessibilityService : AccessibilityService() {
         launchers.firstOrNull()?.let { homeIntent.`package` = it }
         startActivity(homeIntent)
         Thread.sleep(360)
+        LockVaultManager.markHomeOrAppExitTransition()
         readEntireScreenTree(includeAllWindows = true)
         if (globalOk || isOnHomeLauncher(launchers)) "সম্পন্ন" else "ব্যর্থ"
       } catch (_: Throwable) {
         if (globalOk) "সম্পন্ন" else "ব্যর্থ"
       }
+    }
+    if (a == "back" || a == "recents") {
+      LockVaultManager.markHomeOrAppExitTransition()
     }
     val act =
       when (a) {

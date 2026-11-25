@@ -137,7 +137,7 @@ class LxrV232UpdateTest {
       )
     assertTrue("Sub-setting Location Accuracy must be excluded", accuracyScore < 0)
 
-    assertEquals(360, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
+    assertEquals(240, LiveVadConfig.effectiveSilenceDurationMs(ReplyDelayOption.INSTANT))
     assertTrue(
       LiveVadConfig.effectiveEndOfTurnFlushMs(ReplyDelayOption.INSTANT) <= 120L,
     )
@@ -157,8 +157,8 @@ class LxrV232UpdateTest {
 
   @Test
   fun personaIncludesV232AndPreservesV231AndV230Capabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.39.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
     assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
-    assertTrue(RiyaPersona.TEXT.contains("Slide again to unlock"))
+    assertFalse(RiyaPersona.TEXT.contains("Slide again to unlock"))
   }
 }

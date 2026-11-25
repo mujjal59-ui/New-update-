@@ -141,6 +141,8 @@ object UnlockPolicyGuard {
       "switch_camera_lens",
       "get_activity_monitor",
       "run_background_task",
+      "schedule_exact_reminder",
+      "list_scheduled_alarms",
     )
 
   /**
