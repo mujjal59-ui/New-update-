@@ -271,7 +271,7 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     }
   }
   val devAdminGo = { LxrDeviceAndHardwareEngine.openDeviceAdminSettings(ctx) }
-  val alarmGo = { LxrDeviceAndHardwareEngine.openExactAlarmSettings(ctx) }
+  val alarmGo: () -> Unit = { LxrDeviceAndHardwareEngine.openExactAlarmSettings(ctx) }
   val batGo = { Keep.openBattery(ctx) }
   val oemGo = {
     prefs.edit().putBoolean("oemDone", true).apply()
@@ -428,12 +428,13 @@ fun PermPage(back: () -> Unit, onNavigate: (String) -> Unit) {
       ),
       PermItem(
         "Alarms & reminders",
-        "সঠিক সময়ে রিমাইন্ডার, অ্যালার্ম ও ২৪/৭ ব্যাকগ্রাউন্ড সচল রাখতে",
+        "সঠিক সময়ে রিমাইন্ডার, সরাসরি ফোন অ্যালার্ম ও ২৪/৭ ব্যাকগ্রাউন্ড সচল রাখতে",
         Icons.Filled.Notifications,
         listOf(CYBER_AMBER, CYBER_GREEN),
         alarmOk,
         alarmGo,
-        hint = "Alarms & reminders তালিকা থেকে LXR--AI এর সুইচ Allow করে দিন।",
+        hint =
+          "Alarms & reminders তালিকা থেকে LXR--AI এর সুইচ Allow করুন (সুইচ ধূসর বা তালিকায় না দেখালে App info → ⋮ → Allow restricted settings চালু করে আবার চেষ্টা করুন)।",
         hintLabel = "Alarms & reminders খুলুন",
         hintGo = alarmGo,
       ),

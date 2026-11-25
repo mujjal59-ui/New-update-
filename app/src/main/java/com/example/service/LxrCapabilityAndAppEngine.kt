@@ -235,13 +235,13 @@ object LxrCapabilityInspector {
         // E. Background Operations
         LxrCapabilityItem(
           id = "background_task_queue_and_monitor",
-          nameBn = "২৪/৭ ব্যাকগ্রাউন্ড টাস্ক কিউ, ফোনের আসল অ্যালার্ম ও LXR Activity Monitor",
+          nameBn = "২৪/৭ ব্যাকগ্রাউন্ড টাস্ক কিউ, সরাসরি ফোনের অ্যালার্ম সেট/বন্ধ ও Activity Monitor",
           category = LxrCapabilityCategory.BACKGROUND_OPERATIONS,
           availability =
             if (exactAlarmOn) LxrCapabilityAvailability.FULLY_OPERATIONAL
             else LxrCapabilityAvailability.PARTIALLY_SUPPORTED,
           detailBn =
-            "JobScheduler + Foreground Service + Disk Persistence সক্রিয়; Exact Alarm: ${if (exactAlarmOn) "ON" else "OFF"}; Clock: ${LxrDeviceAndHardwareEngine.resolvePhoneClockPackage(appCtx) ?: "LXR AlarmClock"}",
+            "JobScheduler + Foreground Service + Disk Persistence সক্রিয়; Alarms & reminders: ${if (exactAlarmOn) "ON" else "OFF (Settings পেজ থেকে Allow দিন)"}; Clock (Set/Dismiss): ${LxrDeviceAndHardwareEngine.resolvePhoneClockPackage(appCtx) ?: "LXR AlarmClock"}",
         ),
         LxrCapabilityItem(
           id = "os_protected_root_restrictions",

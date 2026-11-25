@@ -631,8 +631,16 @@ object LxrDeviceAndHardwareEngine {
         "বস, Device Admin Apps সেটিংস খুলেছি — এখান থেকে LXR--AI Activate করে দাও। 'Controlled by Restricted Setting' দেখালে App info > উপরে ডানে ⋮ > Allow restricted settings চালু করে আবার চেষ্টা করো।"
       }
       k.contains("alarm") || k.contains("remind") -> {
-        openExactAlarmSettings(ctx)
-        "বস, Alarms & reminders অনুমতি পেজ খুলেছি — LXR--AI এর সুইচ Allow করে দাও।"
+        if (canScheduleExactAlarms(ctx)) {
+          "হয়েছে বস! LXR--AI এর Alarms & reminders অনুমতি আগে থেকেই চালু (Allowed) আছে ✓"
+        } else {
+          val opened = openExactAlarmSettings(ctx)
+          if (opened) {
+            "বস, ফোনের Alarms & reminders অনুমতি পেজ খুলেছি — তালিকা থেকে LXR--AI এর সুইচ Allow করে দাও। যদি সুইচ ধূসর বা না দেখা যায়, App info > উপরে ডানে ⋮ > Allow restricted settings চালু করে দিও।"
+          } else {
+            "বস, সরাসরি Alarms & reminders পেজ খোলার চেষ্টা করেছি — না খুললে Settings > Apps > Special app access > Alarms & reminders থেকে LXR--AI Allow করে দাও।"
+          }
+        }
       }
       k.contains("app_info") -> {
         Keep.openAppInfo(ctx)
@@ -682,17 +690,30 @@ object LxrDeviceAndHardwareEngine {
     }
   }
 
-  fun openExactAlarmSettings(ctx: Context) {
+  fun openExactAlarmSettings(ctx: Context): Boolean {
+    val acc = RiyaAccessibilityService.instance
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      try {
-        ctx.startActivity(
-          Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-        return
-      } catch (_: Throwable) {}
+      val appExactIntent =
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}"))
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      if (LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, appExactIntent)) {
+        return true
+      }
+      val listExactIntent =
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      if (LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, listExactIntent)) {
+        return true
+      }
+    }
+    val appDetailsIntent =
+      Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, appDetailsIntent)) {
+      return true
     }
     Keep.openAppInfo(ctx)
+    return false
   }
 
   private const val ALARM_PREFS_NAME = "lxr_alarm_prefs"
@@ -983,12 +1004,13 @@ object LxrDeviceAndHardwareEngine {
           addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
       val hasHandler = clockIntent.resolveActivity(ctx.packageManager) != null
-      if (hasHandler) {
+      if (hasHandler || clockPackage.isNotBlank()) {
         clockDispatched =
-          runCatching {
-            ctx.startActivity(clockIntent)
-            true
-          }.getOrDefault(false)
+          LxrAppDiscoveryEngine.launchActivitySafely(
+            ctx,
+            RiyaAccessibilityService.instance,
+            clockIntent,
+          )
       }
     }
 
@@ -1069,6 +1091,152 @@ object LxrDeviceAndHardwareEngine {
           appendLine("  ${idx + 1}. ${a.title} | ${df.format(Date(a.triggerAtEpochMs))} | $clockTag | অবস্থা: ${a.status}")
         }
       }
+    }.trim()
+  }
+
+  @Synchronized
+  @JvmOverloads
+  fun dismissOrCancelAlarm(
+    ctx: Context,
+    acc: RiyaAccessibilityService? = RiyaAccessibilityService.instance,
+    titleQuery: String = "",
+    hour: Int? = null,
+    minute: Int? = null,
+    dismissAll: Boolean = false,
+  ): String {
+    val cleanQuery = titleQuery.trim()
+    val validHour = hour?.takeIf { it in 0..23 }
+    val validMinute = minute?.takeIf { it in 0..59 }
+    val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+
+    // 1. Stop any active ringing alarm tone, vibration, or urgent voice announcement immediately
+    LxrAlarmAlertActivity.stopActiveRingtone()
+    RiyaVoiceManager.stopSpeaking()
+
+    val persisted = readPersistedAlarmsLocked(ctx)
+    val activeStatuses = setOf("SCHEDULED", "FIRED")
+    val matchedIds = mutableSetOf<String>()
+    val cancelledDescriptions = mutableListOf<String>()
+
+    val candidateItems = persisted.filter { it.status in activeStatuses }
+    val targetItems =
+      when {
+        dismissAll -> candidateItems
+        validHour != null ->
+          candidateItems.filter { item ->
+            item.hour == validHour && (validMinute == null || item.minute == validMinute)
+          }
+        cleanQuery.isNotBlank() ->
+          candidateItems.filter { item ->
+            item.title.contains(cleanQuery, ignoreCase = true)
+          }
+        else -> {
+          val nextOrFired =
+            candidateItems
+              .sortedBy { it.triggerAtEpochMs }
+              .firstOrNull()
+          listOfNotNull(nextOrFired)
+        }
+      }
+
+    for (item in targetItems) {
+      matchedIds.add(item.id)
+      val triggerIntent =
+        Intent(ctx.applicationContext, LxrReminderReceiver::class.java)
+          .setAction(LxrReminderReceiver.ACTION_ALARM_TRIGGER)
+      val existingPi =
+        PendingIntent.getBroadcast(
+          ctx.applicationContext,
+          item.reqCode,
+          triggerIntent,
+          PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
+          ?: PendingIntent.getBroadcast(
+            ctx.applicationContext,
+            item.reqCode,
+            triggerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+          )
+      if (am != null) {
+        runCatching { am.cancel(existingPi) }
+      }
+      runCatching { existingPi.cancel() }
+      runCatching { nm?.cancel(item.reqCode) }
+      cancelledDescriptions.add(
+        "${item.title} (${String.format(Locale.US, "%02d:%02d", item.hour, item.minute)})"
+      )
+    }
+
+    if (matchedIds.isNotEmpty()) {
+      val updated =
+        persisted.map { item ->
+          if (item.id in matchedIds) item.copy(status = "DISMISSED") else item
+        }
+      writePersistedAlarmsLocked(ctx, updated)
+    }
+
+    // 2. Also send AlarmClock.ACTION_DISMISS_ALARM to phone's native Clock app
+    val clockPkg = resolvePhoneClockPackage(ctx, AlarmClock.ACTION_DISMISS_ALARM).orEmpty()
+    var clockDismissDispatched = false
+    val dismissIntent =
+      Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
+        if (clockPkg.isNotBlank()) `package` = clockPkg
+        putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        when {
+          dismissAll -> putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_ALL)
+          validHour != null -> {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+            putExtra(AlarmClock.EXTRA_HOUR, validHour)
+            putExtra(AlarmClock.EXTRA_MINUTES, validMinute ?: 0)
+          }
+          cleanQuery.isNotBlank() -> {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_LABEL)
+            putExtra(AlarmClock.EXTRA_MESSAGE, cleanQuery)
+          }
+          else -> putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
+        }
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+    val hasClockDismissHandler = dismissIntent.resolveActivity(ctx.packageManager) != null
+    if (hasClockDismissHandler || clockPkg.isNotBlank()) {
+      clockDismissDispatched =
+        LxrAppDiscoveryEngine.launchActivitySafely(
+          ctx,
+          acc ?: RiyaAccessibilityService.instance,
+          dismissIntent,
+        )
+    }
+
+    val remainingNextOsAlarmMs =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        runCatching { am?.nextAlarmClock?.triggerTime ?: 0L }.getOrDefault(0L)
+      } else 0L
+
+    com.example.data.Store.remember(
+      ctx,
+      "[ফোন অ্যালার্ম বন্ধ]: count=${matchedIds.size}, query='$cleanQuery', time=${validHour ?: -1}:${validMinute ?: -1}, ClockDismiss=$clockDismissDispatched:$clockPkg",
+    )
+
+    return buildString {
+      if (matchedIds.isNotEmpty() || clockDismissDispatched) {
+        append("হয়েছে, বস! সরাসরি ফোনের অ্যালার্ম বন্ধ/বাতিল করেছি ✓\n")
+      } else {
+        append("বস, সক্রিয় রিংটোন থামিয়েছি এবং অ্যালার্ম তালিকা পরীক্ষা করেছি।\n")
+      }
+      if (cancelledDescriptions.isNotEmpty()) {
+        append("• বন্ধ করা LXR/OS অ্যালার্ম (${cancelledDescriptions.size}টি): ${cancelledDescriptions.joinToString(", ")}\n")
+      } else {
+        append("• LXR শিডিউলার তালিকায় মিল থাকা সক্রিয় অ্যালার্ম ছিল না।\n")
+      }
+      append(
+        if (clockDismissDispatched) "• ফোনের Clock অ্যাপ ($clockPkg): সরাসরি ACTION_DISMISS_ALARM পাঠানো হয়েছে ✓\n"
+        else "• ফোনের Clock অ্যাপ: আলাদা ডিসমিস হ্যান্ডলার না মেলায় সিস্টেম অ্যালার্ম/রিংটোন সরাসরি বন্ধ করা হয়েছে।\n"
+      )
+      append(
+        if (remainingNextOsAlarmMs > 0L) "• পরবর্তী সক্রিয় OS AlarmClock: চালু আছে"
+        else "• Android OS AlarmClock: এই মুহূর্তে আর কোনো নির্ধারিত সিস্টেম অ্যালার্ম নেই ✓"
+      )
     }.trim()
   }
 

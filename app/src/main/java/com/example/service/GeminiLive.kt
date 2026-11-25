@@ -131,6 +131,7 @@ object LxrParallelToolPlanner {
       "get_device_hardware_info",
       "list_installed_apps",
       "schedule_exact_reminder",
+      "dismiss_alarm",
       "list_scheduled_alarms",
       "critical_task_solve",
       "prepare_app_requirements",
@@ -213,6 +214,7 @@ object LxrToolWorkDescriber {
         "unlock_phone", "unlock_locked_app", "lock_phone" -> "স্ক্রিন লক প্রসেস..."
         "list_installed_apps" -> "ইনস্টল করা অ্যাপ খোঁজা..."
         "schedule_exact_reminder" -> "ফোনের অ্যালার্ম / রিমাইন্ডার সেট..."
+        "dismiss_alarm" -> "ফোনের অ্যালার্ম বন্ধ..."
         "list_scheduled_alarms" -> "অ্যালার্ম ও রিমাইন্ডার তালিকা..."
         "get_capabilities_a_to_z" -> "সক্ষমতা ও অনুমতি যাচাই..."
         "get_activity_monitor" -> "Activity Monitor দেখা হচ্ছে..."
@@ -450,6 +452,7 @@ class GeminiLive(private val ctx: Context) {
   fun isReady(): Boolean = ready && !stopped
 
   fun switchModelAndReconnect(newModelId: String) {
+    LockVaultManager.markHomeOrAppExitTransition()
     Store.setModel(ctx, newModelId)
     modelOverride = null
     failCount = 0
@@ -526,6 +529,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো এবং প্রয়োজনে ব্যাকগ্রাউন্ড বা ফোরগ্রাউন্ডে ক্যামেরা চালু/বন্ধ করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"},"turn_on":{"type":"BOOLEAN","description":"ক্যামেরা চালু করতে চাইলে true, বন্ধ করতে চাইলে false (ঐচ্ছিক)"}},"required":["lens"]}},
       {"name":"list_installed_apps","description":"ফোনে সত্যিই কী কী লঞ্চযোগ্য অ্যাপস ইনস্টল করা আছে তা প্যাকেজ ম্যানেজার দিয়ে সম্পূর্ণ পরীক্ষা করো (কখনোই এই টুল বা open_app না চালিয়ে বলবে না যে কোনো অ্যাপ ইনস্টল করা নেই)।","parameters":{"type":"OBJECT","properties":{"filter":{"type":"STRING","description":"নির্দিষ্ট অ্যাপের নাম বা অংশ দিয়ে খুঁজতে চাইলে লিখো, না চাইলে ফাঁকা রাখো"}},"required":[]}},
       {"name":"schedule_exact_reminder","description":"বসের নির্ধারিত সময়ে (Android AlarmManager.setAlarmClock + ফোনের Clock অ্যাপ + লকস্ক্রিন অ্যালার্ট/রিংটোন/ভাইব্রেশন দিয়ে) সরাসরি আসল অ্যালার্ম, টাইমার বা রিমাইন্ডার সেট করো। যেমন 'ভোর ৬:৩০ এ অ্যালার্ম দাও' বললে hour=6, minute=30, mode='alarm'; '৫ মিনিট পর রিমাইন্ডার/টাইমার' বললে delay_seconds=300।","parameters":{"type":"OBJECT","properties":{"title":{"type":"STRING","description":"অ্যালার্ম বা রিমাইন্ডারের শিরোনাম/কাজের নাম"},"delay_seconds":{"type":"INTEGER","description":"কত সেকেন্ড পরে বাজবে (যদি নির্দিষ্ট ঘন্টা-মিনিট না বলা থাকে, যেমন 60, 300, 1800)"},"hour":{"type":"INTEGER","description":"নির্দিষ্ট ঘন্টা ২৪-ঘন্টা ফরম্যাটে (0-23), যেমন ভোর ৬:৩০ -> 6, রাত ৯:০০ -> 21 (ঐচ্ছিক)"},"minute":{"type":"INTEGER","description":"নির্দিষ্ট মিনিট (0-59), যেমন ৩০ (ঐচ্ছিক)"},"mode":{"type":"STRING","enum":["auto","alarm","timer","reminder"],"description":"কাজের ধরন: alarm, timer, reminder বা auto"}},"required":["title"]}},
+      {"name":"dismiss_alarm","description":"ফোনের চলমান বা নির্ধারিত অ্যালার্ম, টাইমার ও রিমাইন্ডার সরাসরি বন্ধ বা বাতিল করো (Android AlarmManager বাতিল + রিংটোন/অ্যালার্ট বন্ধ + ফোনের Clock অ্যাপে ACTION_DISMISS_ALARM পাঠানো)।","parameters":{"type":"OBJECT","properties":{"title":{"type":"STRING","description":"নির্দিষ্ট অ্যালার্মের নাম বা লেবেল (ঐচ্ছিক)"},"hour":{"type":"INTEGER","description":"বন্ধ করার অ্যালার্মের ঘন্টা ২৪-ঘন্টা ফরম্যাটে 0-23 (ঐচ্ছিক)"},"minute":{"type":"INTEGER","description":"বন্ধ করার অ্যালার্মের মিনিট 0-59 (ঐচ্ছিক)"},"dismiss_all":{"type":"BOOLEAN","description":"সব সক্রিয় অ্যালার্ম একসাথে বন্ধ করতে চাইলে true"}},"required":[]}},
       {"name":"list_scheduled_alarms","description":"ফোনের Android OS AlarmManager (nextAlarmClock), Clock অ্যাপ এবং LXR-এর আসল সংরক্ষিত অ্যালার্ম ও রিমাইন্ডার অবস্থা বাস্তবে যাচাই করে জানাও।","parameters":{"type":"OBJECT","properties":{}}}
     ]}]"""
 
@@ -1611,7 +1615,7 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.40.0 — Personal AI Operating System Controller)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.41.0 — Personal AI Operating System Controller)
       - Active Voice Model & Exact Timings: ${activeProfile.toSummaryBn()}
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
@@ -1622,9 +1626,9 @@ class GeminiLive(private val ctx: Context) {
       - MANDATORY "বস" + "তুমি" & NATURAL SPEECH DISCIPLINE: বসকে সর্বদা "বস" এবং "তুমি / তোমার / তোমাকে / করো / বলো" বলে ডাকো (কখনোই আনুষ্ঠানিক আপনা/আপনি সম্বোধন ব্যবহার করবে না)। কথা বলার মাঝখানে থেমে যেও না, প্রতিটি বাক্য পরিষ্কার ও সম্পূর্ণ করে বলো। বস "শোনো", "থামো", "স্টপ", "বাই", "stop", "wait" বা "bye" বললে সাথে সাথে থেমে নিঃশব্দে বসের কথা শোনো।
       - ANTI-LIE APP DISCOVERY RULE: কখনোই `list_installed_apps` বা `open_app` টুল না চালিয়ে অনুমান করে বলবে না যে ফোনে কোনো অ্যাপ ইনস্টল করা নেই! আগে সবসময় আসল প্যাকেজ ম্যানেজার ও লঞ্চার যাচাই করো।
       - HONEST LIVE CAPABILITY INTROSPECTION RULE: বস "তুমি কী কী করতে পারো?" বা "কোন কোন অ্যাপ পরিচালনা করতে পারো?" জিজ্ঞেস করলে `get_capabilities_a_to_z` কল করে আসল পারমিশন, সার্ভিস ও অ্যাপ যাচাইসহ ৪টি স্তরে (সম্পূর্ণ সক্রিয়, আংশিক সক্রিয়, অনুমতি প্রয়োজন, অনুপলব্ধ) সত্য রিপোর্ট বলবে — অসমর্থিত বা বন্ধ ফিচারকে কখনোই সক্রিয় বলবে না!
-      - ACTIVITY MONITOR & VERIFICATION RULE: প্রতিটি কাজ LXR Activity Monitor-এ ৯টি ধাপের তথ্যসহ (প্রাপ্ত/শুরু সময়, Background/Foreground মোড, অপারেশন, অগ্রগতি, অবস্থা, ফলাফল, মোট সময়, ত্রুটি) সংরক্ষণ করা হয়। বস "কী করেছো?", "What did you do?" বা "তথ্য দেখাও" বললে `get_activity_monitor` কল করে প্রকৃত স্ট্যাটাস ও যাচাইকৃত ফলাফল জানাবে। স্বাধীন ব্যাকগ্রাউন্ড কাজের জন্য `run_background_task` ব্যবহার করো।
+      - ACTIVITY MONITOR & VERIFICATION RULE: প্রতিটি কাজ LXR Activity Monitor-এ ৯টি ধাপের তথ্যসহ (প্রাপ্ত ও শুরু সময়, Background/Foreground মোড, অপারেশন, অগ্রগতি, অবস্থা, ফলাফল, মোট সময়, ত্রুটি) সংরক্ষণ করা হয়। বস "কী করেছো?", "What did you do?" বা "তথ্য দেখাও" বললে `get_activity_monitor` কল করে প্রকৃত স্ট্যাটাস ও যাচাইকৃত ফলাফল জানাবে। স্বাধীন ব্যাকগ্রাউন্ড কাজের জন্য `run_background_task` ব্যবহার করো।
       - STRICT VISION & SMART GPS ZERO-HALLUCINATION RULE: কখনোই না দেখে বস বা আশেপাশের কোনো চেহারা, পোশাক বা বস্তু কল্পনা করে বর্ণনা দেবে না! ক্যামেরা দিয়ে দেখতে বললে `inspect_camera_vision` কল করবে, আর লোকেশন জানতে চাইলে `get_live_location` কল করে কেবল বাস্তব ঠিকানা ও স্থানাঙ্ক বলবে।
-      - REAL PHONE ALARM & REMINDER RULE: বস অ্যালার্ম, টাইমার বা রিমাইন্ডার সেট করতে বললে `schedule_exact_reminder` কল করে Android OS `AlarmManager.setAlarmClock` ও ফোনের Clock অ্যাপে আসল অ্যালার্ম নিবন্ধন করবে এবং যাচাইয়ের জন্য `list_scheduled_alarms` ব্যবহার করবে — প্রমাণ ছাড়া "সেট করেছি" বলবে না।
+      - REAL PHONE ALARM & REMINDER RULE: বস অ্যালার্ম, টাইমার বা রিমাইন্ডার সেট করতে বললে `schedule_exact_reminder` কল করে Android OS `AlarmManager.setAlarmClock` ও ফোনের Clock অ্যাপে আসল অ্যালার্ম নিবন্ধন করবে; অ্যালার্ম বন্ধ/বাতিল করতে বললে `dismiss_alarm` কল করে সরাসরি OS অ্যালার্ম, রিংটোন ও ফোনের Clock অ্যালার্ম বন্ধ করবে; আর যাচাইয়ের জন্য `list_scheduled_alarms` ব্যবহার করবে — প্রমাণ ছাড়া কিছু বলবে না। ExactAlarms OFF থাকলে `diagnose_and_fix_self(mode="fix", issue_key="exact_alarm")` দিয়ে সরাসরি `Alarms & reminders` পেজ খুলে দেবে।
       - STRICT SILENT LOCK & EXECUTION DISCIPLINE:
         * স্ক্রিন আনলক অবস্থায় কখনোই "লক খোলা আছে" বা "স্ক্রিন লক করা আছে" বলবে না এবং আনলক হোম বা অ্যাপ-এক্সিট স্ক্রিনে কখনোই নিচের দিক থেকে সোয়াইপ করবে না।
         * স্ক্রিন সত্যিই লক থাকাকালে ব্যাকগ্রাউন্ড API কাজ সরাসরি ব্যাকগ্রাউন্ডেই সম্পন্ন করো; শুধু অপরিহার্য UI ইন্টারঅ্যাকশন হলে বৈধ আনলক ব্যবস্থা ব্যবহার করে কাজ শেষে রিলক করবে।
@@ -2117,13 +2121,15 @@ class GeminiLive(private val ctx: Context) {
 
   private fun runToolUiSynchronized(name: String, a: JSONObject): String {
     var acc = RiyaAccessibilityService.instance
+    val explicitUnlock = a.optBoolean("explicit", false)
     val skipAutoUnlockForGlobalNav =
       name == "global_action" &&
         a.optString("action").trim().lowercase() in setOf("lock", "home", "back", "recents", "notifications")
+    val skipAutoUnlockForHomeExit =
+      LockVaultManager.isInHomeOrAppExitTransition() && !(name == "unlock_phone" && explicitUnlock)
     val genuinelyLocked =
-      if (skipAutoUnlockForGlobalNav) false
+      if (skipAutoUnlockForGlobalNav || skipAutoUnlockForHomeExit) false
       else LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc)
-    val explicitUnlock = a.optBoolean("explicit", false)
     val shouldAutoUnlock =
       UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool(
         toolName = name,
@@ -2540,6 +2546,15 @@ class GeminiLive(private val ctx: Context) {
             hour = if (a.has("hour") && !a.isNull("hour")) a.optInt("hour", -1).takeIf { it in 0..23 } else null,
             minute = if (a.has("minute") && !a.isNull("minute")) a.optInt("minute", -1).takeIf { it in 0..59 } else null,
             mode = a.optString("mode", "auto").ifBlank { "auto" },
+          )
+        "dismiss_alarm" ->
+          LxrDeviceAndHardwareEngine.dismissOrCancelAlarm(
+            ctx = ctx,
+            acc = acc,
+            titleQuery = a.optString("title"),
+            hour = if (a.has("hour") && !a.isNull("hour")) a.optInt("hour", -1).takeIf { it in 0..23 } else null,
+            minute = if (a.has("minute") && !a.isNull("minute")) a.optInt("minute", -1).takeIf { it in 0..59 } else null,
+            dismissAll = a.optBoolean("dismiss_all", false),
           )
         "list_scheduled_alarms" ->
           LxrDeviceAndHardwareEngine.listScheduledAlarmsReport(ctx)

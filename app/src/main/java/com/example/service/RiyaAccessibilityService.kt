@@ -71,6 +71,8 @@ class RiyaAccessibilityService : AccessibilityService() {
 
   @Volatile private var lastScan = 0L
   @Volatile private var scanScheduled = false
+  @Volatile private var cachedLauncherPkgs: Set<String> = emptySet()
+  @Volatile private var lastEventPkg: String = ""
 
   override fun onCreate() {
     super.onCreate()
@@ -92,6 +94,7 @@ class RiyaAccessibilityService : AccessibilityService() {
     Log.d(TAG, "LXR--AI AccessibilityService connected")
     snapshotExec.execute {
       try {
+        cachedLauncherPkgs = resolveHomeLauncherPackages()
         readEntireScreenTree()
       } catch (_: Throwable) {}
     }
@@ -133,6 +136,24 @@ class RiyaAccessibilityService : AccessibilityService() {
       }
 
       if (pkg.isNotEmpty()) {
+        val isStateChangeEvt = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        if (isStateChangeEvt) {
+          if (cachedLauncherPkgs.isEmpty()) {
+            cachedLauncherPkgs = resolveHomeLauncherPackages()
+          }
+          val isLauncherPkg =
+            pkg in cachedLauncherPkgs ||
+              pkg.contains("launcher", ignoreCase = true) ||
+              pkg == "com.transsion.xoslauncher" ||
+              pkg == "com.transsion.hilauncher"
+          val exitedOwnApp = lastEventPkg == packageName && pkg != packageName
+          if (isLauncherPkg || exitedOwnApp) {
+            LockVaultManager.markHomeOrAppExitTransition()
+          }
+          if (pkg != "com.android.systemui") {
+            lastEventPkg = pkg
+          }
+        }
         currentApp = pkg
       }
       val now = System.currentTimeMillis()

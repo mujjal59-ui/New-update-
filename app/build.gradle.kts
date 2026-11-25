@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.riyaai.krmxvp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 58
-    versionName = "2.40.0"
+    versionCode = 59
+    versionName = "2.41.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

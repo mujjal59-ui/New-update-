@@ -142,6 +142,7 @@ object UnlockPolicyGuard {
       "get_activity_monitor",
       "run_background_task",
       "schedule_exact_reminder",
+      "dismiss_alarm",
       "list_scheduled_alarms",
     )
 

@@ -151,7 +151,7 @@ object LockVaultManager {
   }
 
   @Volatile private var lastHomeOrExitTransitionMs: Long = 0L
-  const val HOME_EXIT_UNLOCK_SUPPRESSION_MS = 2_200L
+  const val HOME_EXIT_UNLOCK_SUPPRESSION_MS = 6_000L
 
   fun markHomeOrAppExitTransition(nowMs: Long = System.currentTimeMillis()) {
     lastHomeOrExitTransitionMs = nowMs
@@ -160,6 +160,31 @@ object LockVaultManager {
   fun isInHomeOrAppExitTransition(nowMs: Long = System.currentTimeMillis()): Boolean {
     val t = lastHomeOrExitTransitionMs
     return t > 0L && (nowMs - t) in 0L..HOME_EXIT_UNLOCK_SUPPRESSION_MS
+  }
+
+  fun isLauncherPackage(ctx: Context?, pkgRaw: String?): Boolean {
+    val pkg = pkgRaw?.trim()?.lowercase().orEmpty()
+    if (pkg.isEmpty()) return false
+    if (pkg.contains("launcher") || pkg == "com.transsion.xoslauncher" || pkg == "com.transsion.hilauncher") {
+      return true
+    }
+    if (ctx == null) return false
+    return try {
+      val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME)
+      val info =
+        if (Build.VERSION.SDK_INT >= 33) {
+          ctx.packageManager.resolveActivity(
+            homeIntent,
+            android.content.pm.PackageManager.ResolveInfoFlags.of(android.content.pm.PackageManager.MATCH_DEFAULT_ONLY.toLong()),
+          )
+        } else {
+          @Suppress("DEPRECATION")
+          ctx.packageManager.resolveActivity(homeIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        }
+      info?.activityInfo?.packageName?.trim()?.lowercase() == pkg
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   /**
@@ -614,8 +639,11 @@ object LockVaultManager {
   @Suppress("DEPRECATION")
   fun wakeScreenIfNeeded(ctx: Context, acc: RiyaAccessibilityService? = RiyaAccessibilityService.instance) {
     try {
+      if (isInHomeOrAppExitTransition()) return
       val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
       if (pm.isInteractive) return
+      val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+      if (km != null && !km.isKeyguardLocked && !km.isDeviceLocked) return
 
       // 1. Physical Double-Tap gesture on closed/AOD screen to trigger OEM Double-Tap-to-Wake screen light
       if (acc != null) {
@@ -760,9 +788,18 @@ object LockVaultManager {
     val keyguardLockedEarly = kmEarly?.isKeyguardLocked == true
     val deviceLockedEarly =
       if (Build.VERSION.SDK_INT >= 22) (kmEarly?.isDeviceLocked == true) else keyguardLockedEarly
+    val activeRootEarly = acc?.rootInActiveWindow?.packageName?.toString()?.lowercase()?.trim().orEmpty()
+    val explicitKeyguardPkgEarly =
+      activeRootEarly.contains("keyguard") || activeRootEarly.contains("lockscreen")
     if (pm?.isInteractive != false && !keyguardLockedEarly && !deviceLockedEarly &&
-      (isInHomeOrAppExitTransition() || hasVisibleRegularAppOrLauncherWindow(acc))
+      ((kmEarly != null && !explicitKeyguardPkgEarly) ||
+        isInHomeOrAppExitTransition() ||
+        hasVisibleRegularAppOrLauncherWindow(acc) ||
+        isLauncherPackage(ctx, activeRootEarly))
     ) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
+    }
+    if (pm?.isInteractive != false && isInHomeOrAppExitTransition()) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     val lockType = Store.phoneLockType(ctx)
@@ -787,6 +824,9 @@ object LockVaultManager {
         UnlockStatus.ACCESSIBILITY_OFF,
         "ফোন আনলক করতে Accessibility চালু থাকা প্রয়োজন বস।",
       )
+    }
+    if (isInHomeOrAppExitTransition() || (pm?.isInteractive != false && kmEarly != null && !kmEarly.isKeyguardLocked && !deviceLockedEarly)) {
+      return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
 
     wakeScreenIfNeeded(ctx, acc)
@@ -829,12 +869,15 @@ object LockVaultManager {
     val strategies = buildLockscreenSwipeStrategies(dm.widthPixels.toFloat(), dm.heightPixels.toFloat())
     if (!hasBouncerUiShowing(acc, lockType)) {
       for (swipe in strategies) {
+        if (isInHomeOrAppExitTransition()) {
+          return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "হোম স্ক্রিন আনলক অবস্থায় আছে।")
+        }
         val kmLoop = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         val devLockedLoop =
           if (Build.VERSION.SDK_INT >= 22) (kmLoop?.isDeviceLocked == true) else (kmLoop?.isKeyguardLocked == true)
         val fgLoop = resolveBestForegroundPackage(acc)
         val regularForegroundActive =
-          (isRegularAppPackage(fgLoop) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
+          (isRegularAppPackage(fgLoop) || isLauncherPackage(ctx, fgLoop) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
             !hasFullScreenVisibleKeyguardLayer(acc) &&
             !isSystemKeyguardUiShowing(acc) &&
             !hasBouncerUiShowing(acc, lockType)
@@ -842,7 +885,7 @@ object LockVaultManager {
           regularForegroundActive ||
           isScreenUnlockedNow(ctx, acc, lockType)
         ) {
-          return UnlockAttemptResult(UnlockStatus.UNLOCKED_SUCCESSFULLY, "স্ক্রিন আনলক হয়েছে ✓")
+          return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
         }
         acc.swipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY, durationMs = swipe.durationMs)
         val bouncerReady =
@@ -912,7 +955,12 @@ object LockVaultManager {
       if (pkg in appLockPackages) return true
     }
     if (activeRoot == null) return false
-    if (activePkg in nonAppLockPackages || activePkg.contains("launcher") || activePkg.contains("browser")) {
+    if (activePkg.isBlank() ||
+      activePkg == "com.android.systemui" ||
+      activePkg in nonAppLockPackages ||
+      isLauncherPackage(acc, activePkg) ||
+      activePkg.contains("browser")
+    ) {
       return false
     }
     val textDump = collectCompactScreenText(listOf(activeRoot))

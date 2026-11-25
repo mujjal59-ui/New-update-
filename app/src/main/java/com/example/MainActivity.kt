@@ -145,6 +145,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    com.example.service.LockVaultManager.markHomeOrAppExitTransition()
+  }
+
+  override fun onPause() {
+    com.example.service.LockVaultManager.markHomeOrAppExitTransition()
+    super.onPause()
+  }
+
+  override fun onStop() {
+    com.example.service.LockVaultManager.markHomeOrAppExitTransition()
+    super.onStop()
+  }
+
   override fun onResume() {
     super.onResume()
     RiyaState.resume.value++
@@ -324,6 +339,7 @@ fun RiyaApp() {
   BackHandler(page != "home") { page = "home" }
   BackHandler(page == "home") {
     // Move task to background cleanly instead of finishing Activity so Infinix XOS never drops Accessibility
+    com.example.service.LockVaultManager.markHomeOrAppExitTransition()
     (ctx as? android.app.Activity)?.moveTaskToBack(true)
   }
 
@@ -1162,6 +1178,7 @@ fun RiyaHomeScreen(
       LxrVoiceModelPopupDialog(
         activeModelId = liveModelId,
         onSelectModel = { option ->
+          com.example.service.LockVaultManager.markHomeOrAppExitTransition()
           Store.setModel(ctx, option.modelId)
           RiyaState.live?.switchModelAndReconnect(option.modelId)
           Toast.makeText(ctx, "Voice model: ${option.title} ✓", Toast.LENGTH_SHORT).show()
