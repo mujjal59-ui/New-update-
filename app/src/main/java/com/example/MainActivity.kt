@@ -111,6 +111,7 @@ import com.example.service.RiyaNotificationListenerService
 import com.example.service.RiyaRuntimeBridge
 import com.example.service.RiyaService
 import com.example.service.RiyaVoiceManager
+import com.example.ui.AboutPage
 import com.example.ui.AppBuilderScreen
 import com.example.ui.AutoReplyPage
 import com.example.ui.CYBER_BLUE
@@ -368,6 +369,7 @@ fun RiyaApp() {
       "app_builder" -> AppBuilderScreen(back = { page = "home" }, onNavigate = { page = it })
       "video_creator" -> VideoCreatorScreen(back = { page = "home" }, onNavigate = { page = it })
       "seo_studio" -> SeoStudioScreen(back = { page = "home" }, onNavigate = { page = it })
+      "about" -> AboutPage(back = { page = "home" })
       else ->
         RiyaHomeScreen(
           status = status,

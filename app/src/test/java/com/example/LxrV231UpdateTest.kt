@@ -143,7 +143,7 @@ class LxrV231UpdateTest {
 
   @Test
   fun personaReflectsV231PersonalityAndCapabilities() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("শোনো"))
     assertTrue(RiyaPersona.TEXT.contains("থামো"))
     assertTrue(RiyaPersona.TEXT.contains("Singing & Personal Sharing"))

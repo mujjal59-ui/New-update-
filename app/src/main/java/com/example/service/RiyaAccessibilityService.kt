@@ -904,6 +904,30 @@ class RiyaAccessibilityService : AccessibilityService() {
     return sb.toString().trim()
   }
 
+  private fun collectSelfAndSubtreeText(n: AccessibilityNodeInfo): String {
+    val sb = StringBuilder()
+    fun appendNode(node: AccessibilityNodeInfo?) {
+      if (node == null) return
+      sb.append(node.text ?: "").append(' ')
+      sb.append(node.contentDescription ?: "").append(' ')
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        sb.append(node.stateDescription ?: "").append(' ')
+      }
+      sb.append(node.viewIdResourceName ?: "").append(' ')
+    }
+    appendNode(n)
+    for (i in 0 until n.childCount) {
+      val c = n.getChild(i)
+      appendNode(c)
+      if (c != null) {
+        for (j in 0 until minOf(c.childCount, 4)) {
+          appendNode(c.getChild(j))
+        }
+      }
+    }
+    return sb.toString().lowercase()
+  }
+
   private fun collectNodeHierarchyText(n: AccessibilityNodeInfo): String {
     val sb = StringBuilder()
     fun appendNode(node: AccessibilityNodeInfo?) {
@@ -951,8 +975,15 @@ class RiyaAccessibilityService : AccessibilityService() {
     timeoutMs: Long,
   ): AccessibilityNodeInfo? {
     val deadline = System.currentTimeMillis() + timeoutMs
-    val carrierDataPattern = Regex("\\b(gb|mb|4g|5g|lte|volte|airtel|robi|grameenphone|banglalink|teletalk|gp)\\b")
+    val dataUsagePattern = Regex("\\b\\d+(\\.\\d+)?\\s*(gb|mb|kb|tb)\\b")
+    val carrierDataPattern = Regex("\\b(4g|5g|lte|airtel|robi|grameenphone|banglalink|teletalk|gp|sim)\\b")
     val lookingForMobileData = labels.any { it.contains("mobile data") || it.contains("cellular") || it.contains("ডাটা") }
+    val dm = runCatching { resources.displayMetrics }.getOrNull()
+    val screenW = (dm?.widthPixels ?: 1080).coerceAtLeast(360)
+    val screenH = (dm?.heightPixels ?: 2400).coerceAtLeast(640)
+    val minTileTopPx = (screenH * 0.10f).toInt()
+    val rightColThresholdPx = (screenW * 0.45f).toInt()
+
     while (System.currentTimeMillis() < deadline) {
       val roots = mutableListOf<AccessibilityNodeInfo>()
       windows?.forEach { w -> w.root?.let { roots.add(it) } }
@@ -972,21 +1003,34 @@ class RiyaAccessibilityService : AccessibilityService() {
         }
       }
 
-      val found =
-        candidates.firstOrNull { node ->
-          val info = collectNodeHierarchyText(node)
+      val scored =
+        candidates.mapNotNull { node ->
+          val bounds = Rect()
+          node.getBoundsInScreen(bounds)
+          if (bounds.width() <= 0 || bounds.height() <= 0 || bounds.top < minTileTopPx) {
+            return@mapNotNull null
+          }
+          val info = collectSelfAndSubtreeText(node)
+          if (info.isBlank()) return@mapNotNull null
           val excluded = excludeLabels.any { ex -> info.contains(ex.lowercase()) }
-          if (excluded) return@firstOrNull false
-          val directMatch = labels.any { k -> info.contains(k.lowercase()) }
-          val carrierMatch =
-            lookingForMobileData &&
-              (carrierDataPattern.containsMatchIn(info) ||
-                info.contains("mobile_data") ||
-                info.contains("cell_tile") ||
-                info.contains("data_tile"))
-          directMatch || carrierMatch
+          if (excluded) return@mapNotNull null
+          var score = 0
+          if (labels.any { k -> info.contains(k.lowercase()) }) score += 100
+          if (lookingForMobileData) {
+            if (info.contains("mobile_data") || info.contains("cell_tile") || info.contains("data_tile") || info.contains("qs_mobile")) {
+              score += 120
+            }
+            if (dataUsagePattern.containsMatchIn(info)) score += 95
+            if (carrierDataPattern.containsMatchIn(info)) score += 60
+            // Infinix XOS Control Center places Mobile Data tile in the upper-right slot next to Wi-Fi
+            if (score > 0 && bounds.centerX() >= rightColThresholdPx && bounds.top < (screenH * 0.40f).toInt()) {
+              score += 35
+            }
+          }
+          if (score > 0) node to score else null
         }
-      if (found != null) return found
+      val best = scored.maxByOrNull { it.second }?.first
+      if (best != null) return best
       Thread.sleep(160)
     }
     return null
@@ -1166,17 +1210,33 @@ class RiyaAccessibilityService : AccessibilityService() {
     val box = allNodes.getOrElse(selectedIdx) { allNodes.first() }
     val pickedRole = EditableFieldMatcher.classifyRole(candidates[selectedIdx], candidates)
 
-    val boxRect = Rect()
-    box.getBoundsInScreen(boxRect)
-    if (boxRect.width() > 0 && boxRect.height() > 0) {
-      tapAt(boxRect.exactCenterX(), boxRect.exactCenterY())
-      Thread.sleep(90)
-    }
-    box.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-    box.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-    Thread.sleep(70)
+    val existingRaw = box.text?.toString().orEmpty()
+    val hintRaw = if (Build.VERSION.SDK_INT >= 26) box.hintText?.toString().orEmpty() else ""
+    val placeholderSet = setOf("note something down", "write a note", "title", "শিরোনাম", "নোট লিখুন", "type here", "enter text")
+    val hasRealExistingText =
+      existingRaw.isNotBlank() &&
+        !existingRaw.equals(hintRaw, ignoreCase = true) &&
+        existingRaw.trim().lowercase() !in placeholderSet
+    val textToApply =
+      if (pickedRole == EditableFieldRole.BODY && hasRealExistingText && t.isNotBlank()) {
+        if (existingRaw.contains(t)) existingRaw else "$existingRaw\n$t"
+      } else {
+        t
+      }
 
-    val b = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t) }
+    if (!box.isFocused) {
+      val boxRect = Rect()
+      box.getBoundsInScreen(boxRect)
+      if (boxRect.width() > 0 && boxRect.height() > 0) {
+        tapAt(boxRect.exactCenterX(), boxRect.exactCenterY())
+        Thread.sleep(90)
+      }
+      box.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+      box.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+      Thread.sleep(70)
+    }
+
+    val b = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToApply) }
     var ok = box.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
     if (!ok) {
       val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -1185,6 +1245,7 @@ class RiyaAccessibilityService : AccessibilityService() {
       }
     }
     Thread.sleep(160)
+    runCatching { box.refresh() }
     readEntireScreenTree()
 
     if (!ok) return "লেখার বক্সে টাইপ করা যায়নি"

@@ -95,9 +95,15 @@ object LxrAppDiscoveryEngine {
       "নগদ" to listOf("nagad"),
       "rocket" to listOf("rocket", "nexus"),
       "রকেট" to listOf("rocket", "nexus"),
-      "notes" to listOf("notes", "keep", "notepad"),
-      "নোটস" to listOf("notes", "keep", "notepad"),
-      "নোট" to listOf("notes", "keep", "notepad"),
+      "notes" to listOf("notes", "notepad", "transsion.notepad"),
+      "notepad" to listOf("notes", "notepad", "transsion.notepad"),
+      "নোটস" to listOf("notes", "notepad", "transsion.notepad"),
+      "নোটপ্যাড" to listOf("notes", "notepad", "transsion.notepad"),
+      "নোট" to listOf("notes", "notepad", "transsion.notepad"),
+      "keep" to listOf("keep", "google.android.keep"),
+      "keep notes" to listOf("keep", "google.android.keep"),
+      "কিপ" to listOf("keep", "google.android.keep"),
+      "কিপ নোটস" to listOf("keep", "google.android.keep"),
       "termux" to listOf("termux"),
       "টারমাক্স" to listOf("termux"),
       "capcut" to listOf("capcut", "lemon.lvoverseas"),
@@ -354,15 +360,30 @@ object LxrAppDiscoveryEngine {
 
     fun compact(s: String) = normalizeUnicode(s).lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
 
-    // Strict guard against Messenger <-> Facebook or Messages mixups
+    // Strict guard against Messenger <-> Facebook and Notes <-> Keep Notes mixups
     val wantsMessenger = "messenger" in terms || "মেসেঞ্জার" in terms
     val wantsFacebook = ("facebook" in terms || "fb" in terms || "ফেসবুক" in terms) && !wantsMessenger
+    val wantsKeep =
+      cleanQuery.contains("keep") ||
+        cleanQuery.contains("কিপ") ||
+        "google.android.keep" in terms
+    val wantsNotes =
+      !wantsKeep &&
+        ("notes" in terms || "notepad" in terms || "নোট" in terms || "নোটস" in terms || "নোটপ্যাড" in terms)
+    val hasDeviceNotepad =
+      installed.any { e ->
+        val ep = e.packageName.lowercase()
+        val el = normalizeUnicode(e.label).lowercase()
+        ep.contains("notepad") || (!ep.contains("keep") && (el == "notes" || el == "notepad"))
+      }
 
     fun isBlockedCrossMatch(entry: InstalledAppEntry): Boolean {
       val p = entry.packageName.lowercase()
       val l = normalizeUnicode(entry.label).lowercase()
       if (wantsMessenger && (p == "com.facebook.katana" || p == "com.facebook.lite")) return true
       if (wantsFacebook && (p.contains("orca") || p.contains("mlite") || l == "messenger")) return true
+      if (wantsKeep && p.contains("notepad") && !p.contains("keep")) return true
+      if (wantsNotes && hasDeviceNotepad && (p == "com.google.android.keep" || l.contains("keep"))) return true
       return false
     }
 
@@ -400,14 +421,14 @@ object LxrAppDiscoveryEngine {
     val pm = ctx.packageManager
     val direct = runCatching { pm.getLaunchIntentForPackage(entry.packageName) }.getOrNull()
     if (direct != null) {
-      return direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+      return direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     val act = entry.activityName
     if (!act.isNullOrBlank()) {
       return Intent(Intent.ACTION_MAIN)
         .addCategory(Intent.CATEGORY_LAUNCHER)
         .setClassName(entry.packageName, act)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     return null
   }

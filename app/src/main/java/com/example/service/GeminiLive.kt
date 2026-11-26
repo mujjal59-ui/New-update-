@@ -1446,9 +1446,16 @@ class GeminiLive(private val ctx: Context) {
     }
     val url =
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$key"
+    val timingProfile = activeTimingProfile()
+    val timedClient =
+      client.newBuilder()
+        .connectTimeout(timingProfile.wsConnectTimeoutSec, TimeUnit.SECONDS)
+        .writeTimeout(timingProfile.wsWriteTimeoutSec, TimeUnit.SECONDS)
+        .pingInterval(timingProfile.wsPingIntervalSec, TimeUnit.SECONDS)
+        .build()
     var me: WebSocket? = null
     me =
-      client.newWebSocket(
+      timedClient.newWebSocket(
         Request.Builder().url(url).build(),
         object : WebSocketListener() {
           override fun onOpen(w: WebSocket, r: Response) {
@@ -1615,7 +1622,7 @@ class GeminiLive(private val ctx: Context) {
     val sys =
       """
       [LIVE SYSTEM RUNTIME]
-      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.41.0 — Personal AI Operating System Controller)
+      - Spoken Name: "LxR" ("আমি LxR") | App: LXR--AI (v2.42.0 — Personal Operating System Controller & Smart Digital Operator; নোট: কখনোই নিজেকে AI বলবে না, শুধু বলবে আমি LxR)
       - Active Voice Model & Exact Timings: ${activeProfile.toSummaryBn()}
       - Device: ${InfinixDevicePlaybook.DEVICE_PROFILE} | Accessibility: $accStatus | ModifySystemSettings: $writePerm | DefaultAssistant: $assistStatus | DeviceAdmin: $deviceAdminStatus | ExactAlarms: $exactAlarmStatus
       - Installed Apps Snapshot: $installedSummary
@@ -1878,7 +1885,7 @@ class GeminiLive(private val ctx: Context) {
           activeTurnBlockedByLimit = false
           LxrFloatingOverlayManager.setSpeakingBoost(false)
           val u = uText.toString().trim()
-          val p = pText.toString().trim()
+          val p = RiyaVoiceManager.validateAndNormalizeSpeechOutput(pText.toString().trim())
           currentTurnEntry?.let { entry ->
             voiceQueue.markCompleted(entry, replyText = p)
           }
@@ -2709,9 +2716,14 @@ class GeminiLive(private val ctx: Context) {
           listOf("com.transsion.calculator", "com.google.android.calculator", "com.android.calculator2"),
         ),
         Triple(
+          "Keep Notes",
+          listOf("keep notes", "google keep", "keep", "কিপ", "কিপ নোটস"),
+          listOf("com.google.android.keep"),
+        ),
+        Triple(
           "Notes",
-          listOf("notes", "notepad", "keep", "নোট", "নোটস"),
-          listOf("com.transsion.notepad", "com.google.android.keep"),
+          listOf("notes", "notepad", "note", "নোট", "নোটস", "নোটপ্যাড"),
+          listOf("com.transsion.notepad", "com.android.notes", "com.miui.notes", "com.samsung.android.app.notes"),
         ),
         Triple("bKash", listOf("bkash", "বিকাশ"), listOf("com.bKash.customerapp")),
         Triple("Nagad", listOf("nagad", "নগদ"), listOf("com.konasl.nagad")),
@@ -2748,7 +2760,7 @@ class GeminiLive(private val ctx: Context) {
       targetPkgs = known.second
       launchIntent =
         targetPkgs.firstNotNullOfOrNull { pkg -> runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull() }
-          ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+          ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       if (launchIntent == null) {
         val allowedSet = targetPkgs.map { it.lowercase() }.toSet()
         val queriedActs =
@@ -2765,7 +2777,7 @@ class GeminiLive(private val ctx: Context) {
           launchIntent =
             Intent(li)
               .setClassName(matchAct.activityInfo.packageName, matchAct.activityInfo.name)
-              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
       }
     }
@@ -2794,7 +2806,7 @@ class GeminiLive(private val ctx: Context) {
       val curBefore = acc?.rootInActiveWindow?.packageName?.toString().orEmpty()
       val alreadyOpen = curBefore.isNotBlank() && curBefore in targetPkgs
       if (!alreadyOpen) {
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         LxrAppDiscoveryEngine.launchActivitySafely(ctx, acc, launchIntent)
         val deadline = System.currentTimeMillis() + 4500L
         while (System.currentTimeMillis() < deadline) {

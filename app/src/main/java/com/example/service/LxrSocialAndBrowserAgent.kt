@@ -171,8 +171,14 @@ object LxrSocialAndBrowserAgent {
       return "ফোনে '$rawQuery' অ্যাপটি সরাসরি প্যাকেজ লিস্টে মেলেনি বস (হোম স্ক্রিন ঘুরে দেখতে Accessibility চালু রাখুন)।"
     }
 
-    // Physical launcher exploration: Home -> Home pages -> App Drawer swipe up -> Drawer Search
+    val allInstalled = LxrAppDiscoveryEngine.queryAllLaunchableApps(ctx)
+    if (!shouldAllowLauncherSwipeExploration(cleanQuery, allInstalled)) {
+      return "ফোনের ইনস্টলকৃত অ্যাপ তালিকায় '$rawQuery' নামে কোনো অ্যাপ পাওয়া যায়নি বস — অকারণে হোম স্ক্রিন সোয়াইপ না করে সঠিক অ্যাপের নাম বলো।"
+    }
+
+    // Physical launcher inspection: check Home screen safely WITHOUT blind edge/drawer swipe loops
     goHomeFn()
+    Thread.sleep(320L)
     acc.readEntireScreenTree()
     val directHome = acc.clickText(cleanQuery, isContact = false)
     if (directHome.contains("ক্লিক করা হয়েছে")) {
@@ -182,59 +188,24 @@ object LxrSocialAndBrowserAgent {
       return "হোম স্ক্রিন থেকে '$rawQuery' ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন ১০১% রিড]:\n${s.take(1800)}"
     }
 
-    val dm = ctx.resources.displayMetrics
-    val w = dm.widthPixels.coerceAtLeast(720).toFloat()
-    val h = dm.heightPixels.coerceAtLeast(1280).toFloat()
-
-    // Swipe right pages 1..2 on Home screen
-    repeat(2) {
-      acc.swipe(w * 0.85f, h * 0.50f, w * 0.15f, h * 0.50f, 260L)
-      Thread.sleep(360L)
-      acc.readEntireScreenTree()
-      val res = acc.clickText(cleanQuery, isContact = false)
-      if (res.contains("ক্লিক করা হয়েছে")) {
-        Thread.sleep(500L)
-        if (LockVaultManager.isAppLockScreenShowing(acc)) LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-        return "হোম স্ক্রিনের পেজ থেকে '$rawQuery' খুলেছি বস।\n[সম্পূর্ণ স্ক্রিন]:\n${acc.readScreen().take(1800)}"
-      }
-    }
-
-    // Open App Drawer by swiping from mid-screen ONLY after Home transition settles
-    goHomeFn()
-    Thread.sleep(420L)
-    val fgDrawerPkg = LockVaultManager.resolveBestForegroundPackage(acc).lowercase()
-    val launchers = acc.resolveHomeLauncherPackages().map { it.lowercase() }.toSet()
-    val safeToOpenDrawer =
-      !LockVaultManager.isMainScreenGenuinelyLockedBeforeTask(ctx, acc) &&
-        (fgDrawerPkg in launchers || fgDrawerPkg.contains("launcher") || fgDrawerPkg.contains("home"))
-    if (safeToOpenDrawer) {
-      acc.swipe(w * 0.50f, h * 0.68f, w * 0.50f, h * 0.22f, 360L)
-      Thread.sleep(450L)
-      acc.readEntireScreenTree()
-    }
-
-    val drawerHit = acc.clickText(cleanQuery, isContact = false)
-    if (drawerHit.contains("ক্লিক করা হয়েছে")) {
-      Thread.sleep(500L)
-      if (LockVaultManager.isAppLockScreenShowing(acc)) LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-      return "অ্যাপ ড্রয়ার থেকে '$rawQuery' ওপেন করেছি বস।\n[সম্পূর্ণ স্ক্রিন]:\n${acc.readScreen().take(1800)}"
-    }
-
-    // Use App Drawer top search box if available
-    val typedSearch = acc.typeText(cleanQuery, target = "auto")
-    if (!typedSearch.contains("কোনো লেখার বক্স পাওয়া যায়নি")) {
-      Thread.sleep(450L)
-      acc.readEntireScreenTree()
-      val searchedClick = acc.clickText(cleanQuery, isContact = false)
-      if (searchedClick.contains("ক্লিক করা হয়েছে")) {
-        Thread.sleep(550L)
-        if (LockVaultManager.isAppLockScreenShowing(acc)) LockVaultManager.unlockAppLockIfPresent(ctx, acc)
-        return "অ্যাপ ড্রয়ার সার্চ থেকে '$rawQuery' খুলেছি বস।\n[সম্পূর্ণ স্ক্রিন]:\n${acc.readScreen().take(1800)}"
-      }
-    }
-
     val finalRead = acc.readScreen().take(1200)
-    return "হোম স্ক্রিন, অ্যাপ ড্রয়ার এবং সার্চ বার পুরোটা দেখে নিশ্চিত হলাম: '$rawQuery' অ্যাপটি এই ফোনে ইনস্টল করা নেই বস।\n[শেষ স্ক্রিন]: $finalRead"
+    return "হোম স্ক্রিন ও ইনস্টলকৃত অ্যাপ তালিকা দেখে নিশ্চিত হলাম: '$rawQuery' নামে কোনো অ্যাপ পাওয়া যায়নি বস।\n[শেষ স্ক্রিন]: $finalRead"
+  }
+
+  fun shouldAllowLauncherSwipeExploration(
+    rawQuery: String,
+    installedApps: List<InstalledAppEntry>,
+  ): Boolean {
+    val clean = LxrAppDiscoveryEngine.normalizeQuery(rawQuery)
+    if (clean.length < 2) return false
+    val words = clean.split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (words.size > 3) return false
+    if (LxrAppDiscoveryEngine.matchInstalledEntry(clean, installedApps) != null) return true
+    val terms = LxrAppDiscoveryEngine.expandSearchTerms(clean)
+    return installedApps.any { entry ->
+      val hay = "${entry.label} ${entry.packageName}".lowercase()
+      terms.any { t -> t.length >= 3 && hay.contains(t) }
+    }
   }
 
   fun collectFormFields(acc: RiyaAccessibilityService?): Pair<List<FormFieldDescriptor>, String> {

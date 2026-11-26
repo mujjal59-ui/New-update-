@@ -271,8 +271,11 @@ object Store {
   const val MIN_VOICE_SPEED = 0.75f
   const val MAX_VOICE_SPEED = 1.35f
   const val MIC_TAP_GREETING_BN =
-    "আসসালামু আলাইকুম বস। কেমন আছো বস? আশা করি ভালো আছো। বলো বস, আজ তোমার জন্য কী করতে পারি? কোন কাজটি করতে হবে?"
+    "আসসালামু,ওয়ালাইকুম কেমন আছো আমার প্রাণপ্রিয় বস ❤️ বলো কি করতে হবে ❤️"
   const val WAKE_CALL_GREETING_BN = "বস ❤️ কেন ডেকেছো? বলো, কী করতে হবে?"
+  const val ELEVENLABS_API_KEY_URL = "https://elevenlabs.io/app/developers/api-keys"
+  const val DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
+  const val DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 
   val VOICE_OPTIONS =
     listOf(
@@ -387,6 +390,25 @@ object Store {
   fun youApiKey(c: Context): String = p(c).getString("youKey", "") ?: ""
 
   fun setYouApiKey(c: Context, v: String) = p(c).edit().putString("youKey", v.trim()).apply()
+
+  fun elevenLabsApiKey(c: Context): String = p(c).getString("elevenLabsApiKey", "") ?: ""
+
+  fun setElevenLabsApiKey(c: Context, v: String) =
+    p(c).edit().putString("elevenLabsApiKey", v.trim()).commit()
+
+  fun elevenLabsEnabled(c: Context): Boolean = p(c).getBoolean("elevenLabsEnabled", true)
+
+  fun setElevenLabsEnabled(c: Context, v: Boolean) =
+    p(c).edit().putBoolean("elevenLabsEnabled", v).commit()
+
+  fun elevenLabsVoiceId(c: Context): String =
+    p(c).getString("elevenLabsVoiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+      ?.trim()
+      ?.ifBlank { DEFAULT_ELEVENLABS_VOICE_ID }
+      ?: DEFAULT_ELEVENLABS_VOICE_ID
+
+  fun setElevenLabsVoiceId(c: Context, v: String) =
+    p(c).edit().putString("elevenLabsVoiceId", v.trim().ifBlank { DEFAULT_ELEVENLABS_VOICE_ID }).commit()
 
   fun model(c: Context): String {
     val m = p(c).getString("model", null) ?: legacyPrefs(c).getString("model", DEFAULT_LIVE_MODEL) ?: DEFAULT_LIVE_MODEL

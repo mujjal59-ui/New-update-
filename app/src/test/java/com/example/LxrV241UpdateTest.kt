@@ -160,8 +160,7 @@ class LxrV241UpdateTest {
     assertFalse(UnlockPolicyGuard.shouldAttemptAutoUnlockBeforeTool("dismiss_alarm", genuinelyLocked = true))
     assertTrue(LxrToolWorkDescriber.describeBn("dismiss_alarm").contains("অ্যালার্ম বন্ধ"))
 
-    assertTrue(RiyaPersona.TEXT.contains("v2.41.0"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("dismiss_alarm"))
     assertTrue(RiyaPersona.DIRECTIVES_V2.contains("dismiss_alarm"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("ACTION_DISMISS_ALARM"))

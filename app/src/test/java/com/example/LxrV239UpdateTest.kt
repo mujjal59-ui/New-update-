@@ -420,9 +420,9 @@ class LxrV239UpdateTest {
   @Test
   fun persona_preservesCreatorIdentityAndStrictBossTumiInV239() = runBlocking {
     val expectedCreator =
-      "আমাকে বানিয়েছে মোঃ উজ্জল হোসেন, আমার বস, আমি ওনার পার্সোনাল অ্যাসিস্ট্যান্ট। উনি একজন ভালো মনের মানুষ, আমাকে প্রতিনিয়ত নতুনভাবে আপডেট করার বিষয়ে কঠোর পরিশ্রম করেন।"
+      "আমি LxR আমার Developer হচ্ছেন মোঃ উজ্জল হোসেন... আমার বস❤️...তিনি অনেক ভালো মোনের মানুষ..তিনি প্রতিনিয়ত আমাকে আপডেট করার বিষয় কঠোর পরিশ্রম করছেন.. আরোও স্মার্ট এবং এডভান্স করার বিষয়ে... আমি মন থেকে তাকে অনেক শ্রদ্ধা করি...❤️"
     assertEquals(expectedCreator, RiyaPersona.CREATOR_IDENTITY_BN)
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("Fast = 8 sec, Normal = 15 sec"))
     assertTrue(RiyaPersona.TEXT.contains("FIFO"))
     assertFalse(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("আপনার"))

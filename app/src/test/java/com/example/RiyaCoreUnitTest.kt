@@ -174,12 +174,12 @@ class RiyaCoreUnitTest {
   @Test
   fun creatorIdentity_containsExpectedFounderBioAndRepositoryDirectMatch() = kotlinx.coroutines.runBlocking {
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
-    assertTrue(RiyaPersona.TEXT.contains("পার্সোনাল অ্যাসিস্ট্যান্ট"))
+    assertTrue(RiyaPersona.TEXT.contains("Personal Operating System Controller"))
     val repo = com.example.ai.RiyaAiRepository()
     var reply = ""
     repo.streamAssistantReply("তোমাকে কে বানিয়েছে?", "", true).collect { reply = it }
     assertTrue(reply.contains("মোঃ উজ্জল হোসেন"))
-    assertTrue(reply.contains("কঠোর পরিশ্রম করেন"))
+    assertTrue(reply.contains("কঠোর পরিশ্রম করছেন"))
   }
 
   @Test
@@ -291,9 +291,9 @@ class RiyaCoreUnitTest {
 
   @Test
   fun micTapGreetingAndCalibratedVoiceSensitivity_areConfiguredProperly() {
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু আলাইকুম বস"))
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("কেমন আছো বস"))
-    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আজ তোমার জন্য কী করতে পারি"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("আসসালামু,ওয়ালাইকুম"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("কেমন আছো আমার প্রাণপ্রিয় বস ❤️"))
+    assertTrue(Store.MIC_TAP_GREETING_BN.contains("বলো কি করতে হবে ❤️"))
     assertTrue(Store.WAKE_CALL_GREETING_BN.contains("কেন ডেকেছো"))
 
     assertEquals(0.44f, com.example.data.VoiceMatchSensitivity.EASY.threshold, 0.001f)

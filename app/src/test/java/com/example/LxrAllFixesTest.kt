@@ -403,7 +403,7 @@ class LxrAllFixesTest {
   fun lxrPersonaAndZeroDelayVad_enforceNameLaxZeroExcuseAndStudioCapabilities() {
     assertTrue(RiyaPersona.TEXT.contains("আমি LxR"))
     assertTrue(RiyaPersona.TEXT.contains("LAX"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("3D Studio"))
     assertTrue(RiyaPersona.CAPABILITIES_A_TO_Z_BN.contains("Episode 01"))
     assertTrue("End-of-turn flush window must stay balanced and snappy (60..400ms)", LiveVadConfig.END_OF_TURN_FLUSH_MS in 60L..400L)

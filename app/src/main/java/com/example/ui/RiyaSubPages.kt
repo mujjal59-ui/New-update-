@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.app.Activity
 import android.Manifest
 import android.app.NotificationManager
 import android.bluetooth.BluetoothManager
@@ -17,12 +18,14 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,14 +33,17 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -124,16 +130,27 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.example.BuildConfig
+import com.example.R
 import com.example.data.HomeTheme
 import com.example.data.ReplyDelayOption
 import com.example.data.ReplyLimitOption
@@ -614,6 +631,9 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
   var lowNetFast by remember { mutableStateOf(Store.lowNetFastMode(ctx)) }
   var perplexityKey by remember { mutableStateOf(Store.perplexityApiKey(ctx)) }
   var youKey by remember { mutableStateOf(Store.youApiKey(ctx)) }
+  var elevenLabsKey by remember { mutableStateOf(Store.elevenLabsApiKey(ctx)) }
+  var elevenLabsEnabled by remember { mutableStateOf(Store.elevenLabsEnabled(ctx)) }
+  var elevenLabsShow by remember { mutableStateOf(false) }
   var genderFilter by remember { mutableStateOf<VoiceGender?>(null) }
   var show by remember { mutableStateOf(false) }
   val voicePrefs = remember { RiyaPreferences(ctx) }
@@ -764,6 +784,8 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
     Store.setVoiceMatchSensitivity(ctx, vmSensitivity)
     Store.setPerplexityApiKey(ctx, perplexityKey)
     Store.setYouApiKey(ctx, youKey)
+    Store.setElevenLabsApiKey(ctx, elevenLabsKey)
+    Store.setElevenLabsEnabled(ctx, elevenLabsEnabled)
     RiyaVoiceManager.refreshVoicePreferences(ctx)
     RiyaState.live?.updatePlaybackSpeed(voiceSpeed)
   }
@@ -1112,7 +1134,7 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
           val opt = Store.voiceOption(ctx)
           RiyaVoiceManager.speakUrgent(
             ctx,
-            "হ্যালো বস, আমি এল এক্স আর এ আই। এখন ${opt.displayName} ভয়েসে আপনার নির্ধারিত গতিতে কথা বলছি।",
+            "হ্যালো বস, আমি এল এক্স আর। এখন ${opt.displayName} ভয়েসে আপনার নির্ধারিত গতিতে কথা বলছি।",
           )
         },
         modifier = Modifier.fillMaxWidth().testTag("test_voice_button"),
@@ -1534,6 +1556,119 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
         colors = fieldColors,
         visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
       )
+    }
+
+    // ElevenLabs Ultra-Sweet Bengali Female Voice API Section
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .testTag("elevenlabs_api_key_card")
+          .background(CYBER_CARD, RoundedCornerShape(18.dp))
+          .border(1.2.dp, CYBER_PURPLE.copy(alpha = 0.55f), RoundedCornerShape(18.dp))
+          .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        PremiumIconBadge(Icons.Filled.RecordVoiceOver, "ElevenLabs Voice", listOf(CYBER_PURPLE, CYBER_RED), sizeDp = 36)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+          Text("ElevenLabs API Key (মিষ্টি বাংলা ভয়েস)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+          Text(
+            if (elevenLabsEnabled && elevenLabsKey.isNotBlank())
+              "সক্রিয় ✓ — (${Store.DEFAULT_ELEVENLABS_MODEL_ID})"
+            else "কী সেভ করে চালু করলে বাংলা কণ্ঠ আরও মিষ্টি ও জীবন্ত হবে",
+            color = if (elevenLabsEnabled && elevenLabsKey.isNotBlank()) CYBER_GREEN else Color(0xFFAAB4D0),
+            fontSize = 11.sp,
+          )
+        }
+        Switch(
+          checked = elevenLabsEnabled,
+          onCheckedChange = {
+            elevenLabsEnabled = it
+            Store.setElevenLabsEnabled(ctx, it)
+            RiyaVoiceManager.refreshVoicePreferences(ctx)
+          },
+          modifier = Modifier.testTag("elevenlabs_enable_switch"),
+          colors = SwitchDefaults.colors(checkedTrackColor = CYBER_PURPLE, checkedThumbColor = Color.White),
+        )
+      }
+      OutlinedTextField(
+        value = elevenLabsKey,
+        onValueChange = { elevenLabsKey = it },
+        modifier = Modifier.fillMaxWidth().testTag("elevenlabs_api_key_input"),
+        label = { Text("ElevenLabs API Key") },
+        singleLine = true,
+        colors = fieldColors,
+        visualTransformation = if (elevenLabsShow) VisualTransformation.None else PasswordVisualTransformation(),
+      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        TextButton(
+          onClick = { elevenLabsShow = !elevenLabsShow },
+          modifier = Modifier.heightIn(min = 48.dp).testTag("elevenlabs_show_key_btn"),
+        ) {
+          Text(if (elevenLabsShow) "Hide Key" else "Show Key", color = CYBER_CYAN)
+        }
+        OutlinedButton(
+          onClick = {
+            if (elevenLabsKey.isBlank()) {
+              Toast.makeText(ctx, "আগে ElevenLabs API Key দিন বস", Toast.LENGTH_SHORT).show()
+            } else {
+              elevenLabsEnabled = true
+              applyVoiceSettings()
+              RiyaVoiceManager.speakUrgent(
+                ctx,
+                "হ্যালো বস, আমি এল এক্স আর। ElevenLabs এর মিষ্টি বাংলা কণ্ঠে তোমার সাথে কথা বলছি।",
+              )
+            }
+          },
+          modifier = Modifier.heightIn(min = 48.dp).testTag("elevenlabs_test_voice_btn"),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = CYBER_PURPLE, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("টেস্ট মিষ্টি ভয়েস", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+      }
+      Column(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .testTag("elevenlabs_api_key_link")
+            .clip(RoundedCornerShape(12.dp))
+            .background(CYBER_PURPLE.copy(alpha = 0.12f))
+            .border(1.dp, CYBER_PURPLE.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+            .clickable {
+              try {
+                ctx.startActivity(
+                  Intent(Intent.ACTION_VIEW, Uri.parse(Store.ELEVENLABS_API_KEY_URL))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+              } catch (_: Throwable) {
+                Toast.makeText(ctx, "ব্রাউজার খোলা যায়নি", Toast.LENGTH_SHORT).show()
+              }
+            }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
+        Text(
+          "ElevenLabs API key সংগ্রহ করুন:",
+          color = Color.White,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Text(
+          Store.ELEVENLABS_API_KEY_URL,
+          color = CYBER_CYAN,
+          fontSize = 11.5.sp,
+          fontWeight = FontWeight.SemiBold,
+          textDecoration = TextDecoration.Underline,
+        )
+      }
     }
 
     Button(
@@ -2345,6 +2480,115 @@ fun SettingsPage(back: () -> Unit, onNavigate: (String) -> Unit) {
           fontSize = 12.sp,
         )
       }
+    }
+  }
+}
+
+fun formatAboutVersionLabel(versionName: String): String = "Version\n$versionName"
+
+@Composable
+fun AboutPage(
+  back: () -> Unit,
+  versionName: String = BuildConfig.VERSION_NAME,
+) {
+  val ctx = LocalContext.current
+  BackHandler(onBack = back)
+
+  DisposableEffect(Unit) {
+    val activity = ctx as? Activity
+    val window = activity?.window
+    val controller = if (window != null) WindowInsetsControllerCompat(window, window.decorView) else null
+    if (controller != null) {
+      controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      controller.hide(WindowInsetsCompat.Type.statusBars())
+    }
+    onDispose {
+      if (controller != null) {
+        controller.show(WindowInsetsCompat.Type.statusBars())
+      }
+    }
+  }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .testTag("about_page_root")
+        .background(Color(0xFF020236)),
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState()),
+    ) {
+      BoxWithConstraints(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .aspectRatio(842f / 1867f),
+      ) {
+        Image(
+          painter = painterResource(id = R.drawable.lxr_about_poster),
+          contentDescription = "LXR--AI About Poster",
+          contentScale = ContentScale.FillWidth,
+          modifier = Modifier.fillMaxSize().testTag("about_poster_image"),
+        )
+
+        val badgeWidth = maxWidth * 0.159f
+        val badgeHeight = maxHeight * 0.0375f
+        val badgeOffsetX = kotlin.math.round(constraints.maxWidth * 0.810f).toInt()
+        val badgeOffsetY = kotlin.math.round(constraints.maxHeight * 0.166f).toInt()
+        val versionLabelFont = (maxWidth.value * 0.0225f).coerceIn(7f, 14f).sp
+        val versionNumberFont = (maxWidth.value * 0.0315f).coerceIn(9f, 20f).sp
+
+        Box(
+          modifier =
+            Modifier
+              .offset { IntOffset(badgeOffsetX, badgeOffsetY) }
+              .size(width = badgeWidth, height = badgeHeight)
+              .testTag("about_version_badge")
+              .clip(RoundedCornerShape(6.dp))
+              .background(Color(0xFF020236)),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text =
+              buildAnnotatedString {
+                withStyle(SpanStyle(color = Color.White, fontSize = versionLabelFont, fontWeight = FontWeight.Medium)) {
+                  append("Version\n")
+                }
+                withStyle(SpanStyle(color = Color(0xFFF3EB12), fontSize = versionNumberFont, fontWeight = FontWeight.Bold)) {
+                  append(versionName)
+                }
+              },
+            textAlign = TextAlign.Center,
+            lineHeight = (versionNumberFont.value * 1.12f).sp,
+            maxLines = 2,
+            softWrap = false,
+          )
+        }
+      }
+    }
+
+    IconButton(
+      onClick = back,
+      modifier =
+        Modifier
+          .align(Alignment.TopStart)
+          .padding(start = 12.dp, top = 12.dp)
+          .size(48.dp)
+          .testTag("about_back_button")
+          .clip(CircleShape)
+          .background(Color(0xB305081A))
+          .border(1.dp, Color(0x6600E5FF), CircleShape),
+    ) {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+        contentDescription = "Back",
+        tint = Color.White,
+        modifier = Modifier.size(22.dp),
+      )
     }
   }
 }

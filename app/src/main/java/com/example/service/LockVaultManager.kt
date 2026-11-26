@@ -644,6 +644,7 @@ object LockVaultManager {
       if (pm.isInteractive) return
       val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
       if (km != null && !km.isKeyguardLocked && !km.isDeviceLocked) return
+      if (pm.isInteractive && hasVisibleRegularAppOrLauncherWindow(acc)) return
 
       // 1. Physical Double-Tap gesture on closed/AOD screen to trigger OEM Double-Tap-to-Wake screen light
       if (acc != null) {
@@ -799,7 +800,7 @@ object LockVaultManager {
     ) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
-    if (pm?.isInteractive != false && isInHomeOrAppExitTransition()) {
+    if (pm?.isInteractive != false && (isInHomeOrAppExitTransition() || isLauncherPackage(ctx, activeRootEarly))) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     val lockType = Store.phoneLockType(ctx)
@@ -848,7 +849,7 @@ object LockVaultManager {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }
     val fgPkgNow = resolveBestForegroundPackage(acc)
-    if ((isRegularAppPackage(fgPkgNow) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
+    if ((isRegularAppPackage(fgPkgNow) || isLauncherPackage(ctx, fgPkgNow) || hasVisibleRegularAppOrLauncherWindow(acc)) &&
       !hasFullScreenVisibleKeyguardLayer(acc) &&
       !isSystemKeyguardUiShowing(acc) &&
       !hasBouncerUiShowing(acc, lockType) &&
@@ -860,7 +861,7 @@ object LockVaultManager {
       hasFullScreenVisibleKeyguardLayer(acc) ||
         isSystemKeyguardUiShowing(acc) ||
         hasBouncerUiShowing(acc, lockType) ||
-        (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow) && !hasVisibleRegularAppOrLauncherWindow(acc))
+        (kmCheck?.isKeyguardLocked == true && !isRegularAppPackage(fgPkgNow) && !isLauncherPackage(ctx, fgPkgNow) && !hasVisibleRegularAppOrLauncherWindow(acc))
     if (!keyguardConfirmed && (pm?.isInteractive != false)) {
       return UnlockAttemptResult(UnlockStatus.ALREADY_UNLOCKED, "ফোন আগেই আনলক আছে।")
     }

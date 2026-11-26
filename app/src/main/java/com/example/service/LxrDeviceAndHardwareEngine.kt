@@ -33,6 +33,7 @@ import android.provider.AlarmClock
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
+import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import java.text.SimpleDateFormat
@@ -114,6 +115,24 @@ object LxrDeviceAndHardwareEngine {
     } catch (_: Throwable) {
       false
     }
+  }
+
+  @Suppress("MissingPermission")
+  fun isMobileDataEnabledNow(ctx: Context): Boolean? {
+    runCatching {
+      val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+      if (tm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return tm.isDataEnabled
+      }
+    }
+    val globalVal = runCatching { Settings.Global.getInt(ctx.contentResolver, "mobile_data", -1) }.getOrDefault(-1)
+    if (globalVal == 1) return true
+    if (globalVal == 0) return false
+    return runCatching {
+      val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+      if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) true else null
+    }.getOrNull()
   }
 
   fun isWriteSettingsGranted(ctx: Context): Boolean =
@@ -287,22 +306,80 @@ object LxrDeviceAndHardwareEngine {
       }
 
       s in setOf("mobile_data", "data", "cellular", "মোবাইল_ডাটা", "ডাটা", "ইন্টারনেট") -> {
-        val want = enabled ?: true
+        val want = enabled ?: !(isMobileDataEnabledNow(ctx) ?: false)
         val word = if (want) "চালু" else "বন্ধ"
+        val curBefore = isMobileDataEnabledNow(ctx)
+        if (curBefore != null && curBefore == want) {
+          return "ফোনের মোবাইল ডাটা আগেই $word আছে বস ✓"
+        }
         if (acc == null) {
-          ctx.startActivity(Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          runCatching {
+            ctx.startActivity(Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          }.onFailure {
+            ctx.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          }
           return "মোবাইল ডাটা সেটিংস খুলেছি বস (স্বয়ংক্রিয় ট্যাপের জন্য Accessibility চালু রাখুন)।"
         }
         val qs = acc.toggleQuickSettingTile(
           enable = want,
-          labels = listOf("mobile data", "cellular", "data connection", "5g", "4g", "sim", "মোবাইল ডাটা"),
-          excludeLabels = listOf("wi-fi", "wifi", "hotspot", "saver"),
+          labels = listOf("mobile data", "cellular", "data connection", "মোবাইল ডাটা"),
+          excludeLabels = listOf("wi-fi", "wifi", "hotspot", "saver", "joy connect"),
+          hardwareStateKnown = curBefore,
         )
-        if (qs == "OK" || qs == "ALREADY") {
-          "হয়েছে, বস! মোবাইল ডাটা $word করে দিয়েছি।"
-        } else {
+        val qsDeadline = System.currentTimeMillis() + 1200L
+        while (System.currentTimeMillis() < qsDeadline) {
+          val afterQs = isMobileDataEnabledNow(ctx)
+          if (afterQs == want) {
+            return "হয়েছে, বস! মোবাইল ডাটা বাস্তবেই $word করে দিয়েছি ✓"
+          }
+          Thread.sleep(160)
+        }
+        if (qs == "ALREADY" && curBefore == want) {
+          return "ফোনের মোবাইল ডাটা আগেই $word আছে বস ✓"
+        }
+
+        // Reliable Settings UI fallback: Mobile Network / Data Usage settings -> setSwitch
+        runCatching {
+          ctx.startActivity(Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure {
           ctx.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-          "Quick Settings-এ মোবাইল ডাটা সরাসরি টগল করা যায়নি, নেটওয়ার্ক সেটিংস খুলে দিয়েছি বস।"
+        }
+        val waitDeadline = System.currentTimeMillis() + 2800L
+        while (System.currentTimeMillis() < waitDeadline) {
+          val curPkg = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
+          if (curPkg == "com.android.settings" || curPkg == "com.android.phone") {
+            Thread.sleep(280)
+            break
+          }
+          Thread.sleep(160)
+        }
+        val swRes = acc.setSwitch(
+          enable = want,
+          labels = listOf("mobile data", "cellular data", "data connection", "data usage", "মোবাইল ডাটা", "সিম ডাটা"),
+          excludeLabels = listOf("roaming", "wi-fi", "wifi", "5g", "volte", "calls", "hotspot"),
+        )
+        if (!want) {
+          for (lbl in listOf("Turn off", "OK", "Allow", "বন্ধ করুন")) {
+            if (acc.clickText(lbl).contains("ক্লিক করা হয়েছে")) {
+              Thread.sleep(240)
+              break
+            }
+          }
+        }
+        val confirmDeadline = System.currentTimeMillis() + 1100L
+        while (isMobileDataEnabledNow(ctx) != want && System.currentTimeMillis() < confirmDeadline) {
+          Thread.sleep(160)
+        }
+        val finalState = isMobileDataEnabledNow(ctx)
+        if (finalState == want || (finalState == null && (swRes == "OK" || swRes == "ALREADY"))) {
+          val fg = acc.rootInActiveWindow?.packageName?.toString().orEmpty()
+          if (fg == "com.android.settings" || fg == "com.android.phone") {
+            acc.global("back")
+            Thread.sleep(180)
+          }
+          "হয়েছে, বস! মোবাইল ডাটা $word করে দিয়েছি ✓"
+        } else {
+          "বস, মোবাইল ডাটা সেটিংস খুলেছি — অনুগ্রহ করে এক নজর 'Mobile Data' সুইচটি দেখে নিন।"
         }
       }
 
@@ -1333,9 +1410,16 @@ object LxrDeviceAndHardwareEngine {
       return "বস, ফোনের লাইভ লোকেশন দেখতে Location (ACCESS_FINE_LOCATION) পারমিশন প্রয়োজন। Menu > Permissions থেকে Location চালু করে দাও, অথবা অনুমতি পপ-আপে Allow দাও।"
     }
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    val locEnabled = if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled else lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    var locEnabled = isLocationEnabledNow(ctx)
+    var autoEnabledLocation = false
     if (!locEnabled) {
-      return "ফোনের GPS / Location সুইচ বন্ধ আছে বস! বললে আমি এখনই Location চালু করে তোমার বর্তমান ঠিকানা বের করে দিচ্ছি।"
+      val enableMsg = controlDeviceSetting(ctx, RiyaAccessibilityService.instance, "location", enabled = true)
+      Thread.sleep(350)
+      locEnabled = isLocationEnabledNow(ctx)
+      if (!locEnabled) {
+        return "ফোনের GPS / Location বন্ধ ছিল — চালু করার চেষ্টা করেছি ($enableMsg)।"
+      }
+      autoEnabledLocation = true
     }
 
     val candidates = mutableListOf<Location>()
@@ -1368,7 +1452,8 @@ object LxrDeviceAndHardwareEngine {
     }
 
     if (best == null) {
-      return "GPS সংযোগ নিচ্ছে বস — খোলা জায়গা বা জানালার পাশে কয়েক সেকেন্ড ধরে থাকলে তোমার সঠিক লাইভ লোকেশন পাওয়া যাবে (Google Maps দিয়েও চেক করতে পারো)।"
+      val prefix = if (autoEnabledLocation) "✅ ফোনের GPS / Location স্বয়ংক্রিয়ভাবে চালু করেছি।\n" else ""
+      return "${prefix}GPS সংযোগ নিচ্ছে বস — খোলা জায়গা বা জানালার পাশে কয়েক সেকেন্ড ধরে থাকলে তোমার সঠিক লাইভ লোকেশন পাওয়া যাবে (Google Maps দিয়েও চেক করতে পারো)।"
     }
 
     val addr = reverseGeocodeAddressObject(ctx, best.latitude, best.longitude)
@@ -1395,6 +1480,9 @@ object LxrDeviceAndHardwareEngine {
     val mapsUrl = String.format(Locale.US, "https://maps.google.com/?q=%.6f,%.6f", best.latitude, best.longitude)
     val accM = best.accuracy.roundToInt()
     return buildString {
+      if (autoEnabledLocation) {
+        appendLine("✅ ফোনের GPS / Location বন্ধ ছিল — স্বয়ংক্রিয়ভাবে চালু করে লাইভ ঠিকানা বের করেছি:")
+      }
       appendLine("📍 তোমার বর্তমান লাইভ লোকেশন:")
       if (!addressLine.isNullOrBlank()) {
         appendLine("• পূর্ণ ঠিকানা: $addressLine")

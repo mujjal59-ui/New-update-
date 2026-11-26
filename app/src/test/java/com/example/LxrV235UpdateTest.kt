@@ -275,7 +275,7 @@ class LxrV235UpdateTest {
 
   @Test
   fun personaEnforcesV235StrictTumiAll15CapabilitiesAndNoLegacyNameLeak() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("list_installed_apps"))
     assertTrue(RiyaPersona.TEXT.contains("schedule_exact_reminder"))
     assertTrue(RiyaPersona.TEXT.contains("Device Admin"))

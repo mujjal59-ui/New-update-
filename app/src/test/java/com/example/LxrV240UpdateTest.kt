@@ -109,7 +109,7 @@ class LxrV240UpdateTest {
       "RiyaAiRepository.SYSTEM_INSTRUCTION must not contain Slide again to unlock",
       RiyaAiRepository.SYSTEM_INSTRUCTION.contains("Slide again to unlock", ignoreCase = true),
     )
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains(RiyaPersona.CREATOR_IDENTITY_BN))
 
     // Home/app-exit transition guard suppresses lock/swipe false positives

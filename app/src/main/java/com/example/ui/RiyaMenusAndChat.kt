@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkChatRead
@@ -504,6 +505,17 @@ fun RiyaThreeLineMenuDialog(
           label = "Always Listening (App খুললেই)",
           checked = alwaysListening,
           onCheckedChange = onToggleAlways,
+        )
+        MenuSectionRow(
+          tag = "menu_about",
+          icon = Icons.Filled.Info,
+          colors = listOf(CYBER_CYAN, CYBER_BLUE),
+          title = "About",
+          subtitle = "LXR--AI ডেভেলপার ও ভার্সন তথ্য",
+          onClick = {
+            onDismiss()
+            onNavigate("about")
+          },
         )
       }
     },

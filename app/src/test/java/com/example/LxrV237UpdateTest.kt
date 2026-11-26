@@ -233,7 +233,7 @@ class LxrV237UpdateTest {
 
   @Test
   fun riyaPersona_updatedToV2370WithStrictTumiAndCreatorRules() {
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
     assertTrue(RiyaPersona.TEXT.contains("মোঃ উজ্জল হোসেন"))
     assertTrue(RiyaPersona.TEXT.contains("তুমি"))
   }

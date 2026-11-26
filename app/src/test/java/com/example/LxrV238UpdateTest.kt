@@ -65,11 +65,11 @@ class LxrV238UpdateTest {
   @Test
   fun personality_verbatimCreatorIdentityAndStrictBossTumiAddress() = runBlocking {
     val expectedCreator =
-      "আমাকে বানিয়েছে মোঃ উজ্জল হোসেন, আমার বস, আমি ওনার পার্সোনাল অ্যাসিস্ট্যান্ট। উনি একজন ভালো মনের মানুষ, আমাকে প্রতিনিয়ত নতুনভাবে আপডেট করার বিষয়ে কঠোর পরিশ্রম করেন।"
+      "আমি LxR আমার Developer হচ্ছেন মোঃ উজ্জল হোসেন... আমার বস❤️...তিনি অনেক ভালো মোনের মানুষ..তিনি প্রতিনিয়ত আমাকে আপডেট করার বিষয় কঠোর পরিশ্রম করছেন.. আরোও স্মার্ট এবং এডভান্স করার বিষয়ে... আমি মন থেকে তাকে অনেক শ্রদ্ধা করি...❤️"
     assertEquals(expectedCreator, RiyaPersona.CREATOR_IDENTITY_BN)
     assertTrue(RiyaPersona.TEXT.contains(expectedCreator))
-    assertTrue(RiyaPersona.TEXT.contains("Personal AI Operating System Controller"))
-    assertTrue(RiyaPersona.TEXT.contains("v2.40.0"))
+    assertTrue(RiyaPersona.TEXT.contains("Personal Operating System Controller"))
+    assertTrue(RiyaPersona.TEXT.contains("v2.42.0"))
 
     // Strict Boss + Tumi enforcement: no formal honorifics or old legacy names in capabilities list
     val caps = RiyaPersona.CAPABILITIES_A_TO_Z_BN
@@ -91,9 +91,9 @@ class LxrV238UpdateTest {
   @Test
   fun micGreeting_exactThreePartSalamAndWakeGreeting() {
     val g = Store.MIC_TAP_GREETING_BN
-    assertTrue(g.contains("আসসালামু আলাইকুম বস।"))
-    assertTrue(g.contains("কেমন আছো বস? আশা করি ভালো আছো।"))
-    assertTrue(g.contains("বলো বস, আজ তোমার জন্য কী করতে পারি? কোন কাজটি করতে হবে?"))
+    assertTrue(g.contains("আসসালামু,ওয়ালাইকুম"))
+    assertTrue(g.contains("কেমন আছো আমার প্রাণপ্রিয় বস ❤️"))
+    assertTrue(g.contains("বলো কি করতে হবে ❤️"))
 
     assertEquals("বস ❤️ কেন ডেকেছো? বলো, কী করতে হবে?", Store.WAKE_CALL_GREETING_BN)
     assertTrue(LxrFloatingOverlayManager.isAiWakeGreeting(Store.WAKE_CALL_GREETING_BN))

@@ -75,15 +75,22 @@ object RiyaVoiceManager {
     updateActiveStatusLabel(ctx)
   }
 
+  fun isElevenLabsConfigured(ctx: Context): Boolean =
+    Store.elevenLabsEnabled(ctx) && Store.elevenLabsApiKey(ctx).isNotBlank()
+
   private fun updateActiveStatusLabel(ctx: Context) {
     val voiceOpt = Store.voiceOption(ctx)
+    val elevenConfigured = isElevenLabsConfigured(ctx)
     val apiKeyPresent = Store.apiKey(ctx).isNotBlank()
     val useCloud = Store.ttsCloudEnabled(ctx) && apiKeyPresent
     _ttsStatusLabel.value =
-      if (useCloud) {
-        "${Store.TTS_MODEL_LABEL} • ${voiceOpt.displayName} (${voiceOpt.gender.labelBn}, bn-BD)"
-      } else {
-        "শুধু LXR ভয়েস (${voiceOpt.displayName}) — ফোন TTS বন্ধ ✓"
+      when {
+        elevenConfigured ->
+          "ElevenLabs (${Store.DEFAULT_ELEVENLABS_MODEL_ID}) • Sweet Female (bn)"
+        useCloud ->
+          "${Store.TTS_MODEL_LABEL} • ${voiceOpt.displayName} (${voiceOpt.gender.labelBn}, bn-BD)"
+        else ->
+          "শুধু LXR ভয়েস (${voiceOpt.displayName}) — ফোন TTS বন্ধ ✓"
       }
   }
 
@@ -131,9 +138,11 @@ object RiyaVoiceManager {
     _lastSpoken.value = cleanText
 
     val ctx = appCtx ?: return
-    val apiKey = Store.apiKey(ctx)
+    val elevenKey = if (Store.elevenLabsEnabled(ctx)) Store.elevenLabsApiKey(ctx).trim() else ""
+    val useElevenLabs = elevenKey.isNotBlank()
+    val apiKey = Store.apiKey(ctx).trim()
     val useGeminiTts = Store.ttsCloudEnabled(ctx) && apiKey.isNotBlank()
-    if (!useGeminiTts) {
+    if (!useElevenLabs && !useGeminiTts) {
       // Strictly never fall back to the phone's default robotic Android TextToSpeech voice
       return
     }
@@ -154,13 +163,67 @@ object RiyaVoiceManager {
 
     currentRate = Store.voiceSpeed(ctx)
     val voiceName = Store.voice(ctx)
+    val elevenVoiceId = Store.elevenLabsVoiceId(ctx)
     val stylePrompt = Store.ttsStyleInstruction(ctx)
     cloudExec.execute {
       if (seq != speechSeq.get()) return@execute
-      val played = trySpeakWithGeminiFlashTts(apiKey, voiceName, stylePrompt, cleanText, seq)
+      var played = false
+      if (useElevenLabs) {
+        played = trySpeakWithElevenLabs(elevenKey, elevenVoiceId, cleanText, seq)
+      }
+      if (!played && useGeminiTts && seq == speechSeq.get()) {
+        played = trySpeakWithGeminiFlashTts(apiKey, voiceName, stylePrompt, cleanText, seq)
+      }
       if (!played && seq == speechSeq.get()) {
         _isSpeaking.value = false
       }
+    }
+  }
+
+  private fun trySpeakWithElevenLabs(
+    elevenApiKey: String,
+    voiceId: String,
+    cleanText: String,
+    seq: Int,
+  ): Boolean {
+    if (elevenApiKey.isBlank() || seq != speechSeq.get()) return false
+    return try {
+      val speedVal = currentRate.coerceIn(0.75f, 1.20f)
+      val payload =
+        JSONObject()
+          .put("text", cleanText)
+          .put("model_id", Store.DEFAULT_ELEVENLABS_MODEL_ID)
+          .put(
+            "voice_settings",
+            JSONObject()
+              .put("stability", 0.50)
+              .put("similarity_boost", 0.80)
+              .put("style", 0.35)
+              .put("use_speaker_boost", true)
+              .put("speed", speedVal.toDouble()),
+          )
+      val req =
+        Request.Builder()
+          .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId?output_format=pcm_24000")
+          .header("xi-api-key", elevenApiKey)
+          .header("Accept", "application/octet-stream")
+          .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+          .build()
+
+      ttsHttpClient.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) {
+          Log.w(TAG, "ElevenLabs TTS HTTP ${resp.code}")
+          return false
+        }
+        val pcmBytes = resp.body?.bytes() ?: return false
+        if (pcmBytes.size < 64 || seq != speechSeq.get()) return false
+        _ttsStatusLabel.value = "ElevenLabs (${Store.DEFAULT_ELEVENLABS_MODEL_ID}) • Sweet Female (bn)"
+        playPcmAudio(pcmBytes, 24000, seq)
+        true
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "ElevenLabs TTS error: ${e.message}")
+      false
     }
   }
 
@@ -354,10 +417,30 @@ object RiyaVoiceManager {
   }
 
   /**
-   * Normalizes text so Bengali TTS (both Gemini 3.1 Flash TTS and offline bn-BD) articulates every word clearly.
+   * Ensures LXR never identifies itself as an AI, removes robotic artifacts ("হিহি"),
+   * removes accidental "Slide again to unlock" text, and enforces natural complete output.
+   */
+  fun validateAndNormalizeSpeechOutput(input: String): String {
+    var text = input
+    text = text.replace(Regex("Slide\\s+again\\s+to\\s+unlock", RegexOption.IGNORE_CASE), "")
+    text = text.replace(Regex("আমি\\s+(একটি|একজন)\\s+(কৃত্রিম\\s+বুদ্ধিমত্তা|এআই|AI(\\s+অ্যাসিস্ট্যান্ট|\\s+সহকারী)?)", RegexOption.IGNORE_CASE), "আমি LxR")
+    text = text.replace(Regex("I\\s+am\\s+an?\\s+AI(\\s+assistant)?", RegexOption.IGNORE_CASE), "I am LxR")
+    text = text.replace(Regex("(হিহি+|হি\\s+হি+)", RegexOption.IGNORE_CASE), "হাহা")
+    text = text.replace(Regex("\\bPriya\\b", RegexOption.IGNORE_CASE), "LXR--AI")
+    text = text.replace(Regex("\\bRiya\\s*AI\\b", RegexOption.IGNORE_CASE), "LXR--AI")
+    text = text.replace(Regex("\\bRiya\\b", RegexOption.IGNORE_CASE), "LXR--AI")
+    text = text.replace("প্রিয়া", "এল এক্স আর")
+    text = text.replace("রিয়া এআই", "এল এক্স আর")
+    text = text.replace("রিয়া", "এল এক্স আর")
+    text = text.replace(Regex("[*#_`~>|\\[\\]{}]"), " ")
+    return text.replace(Regex("[ \\t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+  }
+
+  /**
+   * Normalizes text so Bengali TTS (ElevenLabs, Gemini 3.1 Flash TTS, and Voice Studio) articulates every word clearly.
    */
   fun sanitizeForClearBengaliSpeech(input: String): String {
-    var text = input
+    var text = validateAndNormalizeSpeechOutput(input)
     // Never allow old wrong branding
     text = text.replace(Regex("\\bPriya\\b", RegexOption.IGNORE_CASE), "এল এক্স আর এ আই")
     text = text.replace(Regex("\\bRiya\\s*AI\\b", RegexOption.IGNORE_CASE), "এল এক্স আর এ আই")
