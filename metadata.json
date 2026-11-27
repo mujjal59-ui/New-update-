@@ -1,0 +1,6 @@
+{
+  "name": "LXR--AI",
+  "description": "LXR--AI — বাংলা ভয়েস ও অ্যাক্সেসিবিলিটি অ্যাসিস্ট্যান্ট: Gemini 3.1 Flash TTS, LxR ব্লুটুথ ও সফট-ভয়েস সাপোর্ট, WhatsApp/imo/Messenger অটো-রিপ্লাই ও Infinix Android 16 নেভিগেশন।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

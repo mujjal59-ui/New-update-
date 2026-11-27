@@ -1,0 +1,177 @@
+package com.example.ui
+
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.data.RiyaState
+import com.example.data.Store
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
+
+/** Front/Back camera preview; ফ্রেম ধরে সাথে সাথে ও নিয়মিতভাবে Gemini Live Vision-এ পাঠায়। */
+@Composable
+fun LiveCamera(modifier: Modifier = Modifier) {
+  val ctx = LocalContext.current
+  val owner = LocalLifecycleOwner.current
+  val useFrontCamera by RiyaState.useFrontCamera.collectAsState()
+  val exec = remember { Executors.newSingleThreadExecutor() }
+  val preview = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
+
+  DisposableEffect(owner, useFrontCamera) {
+    var provider: ProcessCameraProvider? = null
+    var analysisRef: ImageAnalysis? = null
+    var notifiedOn = false
+    var sentFrameCount = 0
+    com.example.service.LxrCameraVisionEngine.setUiPreviewActive(true)
+    val future = ProcessCameraProvider.getInstance(ctx)
+    future.addListener(
+      {
+        try {
+          val p = future.get()
+          provider = p
+          val pv = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+          var lastSentMs = 0L
+          val analysis =
+            ImageAnalysis.Builder()
+              .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+              .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+              .build()
+          analysisRef = analysis
+
+          analysis.setAnalyzer(exec) { img ->
+            var bmp: Bitmap? = null
+            var rotBmp: Bitmap? = null
+            var scaledBmp: Bitmap? = null
+            try {
+              val now = System.currentTimeMillis()
+              val interval =
+                when {
+                  !notifiedOn -> 380L
+                  Store.lowNetFastMode(ctx) -> 1250L
+                  else -> 950L
+                }
+              if (now - lastSentMs >= interval) {
+                val live = RiyaState.live
+                if (live != null && live.isReady()) {
+                  lastSentMs = now
+                  bmp = img.toBitmap()
+                  val rot = img.imageInfo.rotationDegrees
+                  val rotated =
+                    if (rot != 0) {
+                      Bitmap.createBitmap(
+                        bmp,
+                        0,
+                        0,
+                        bmp.width,
+                        bmp.height,
+                        Matrix().apply { postRotate(rot.toFloat()) },
+                        true,
+                      ).also { rotBmp = it }
+                    } else {
+                      bmp
+                    }
+
+                  val maxDim = 512f
+                  val sc = maxDim / maxOf(rotated.width, rotated.height)
+                  val finalBmp =
+                    if (sc < 1f) {
+                      Bitmap.createScaledBitmap(
+                        rotated,
+                        (rotated.width * sc).toInt().coerceAtLeast(64),
+                        (rotated.height * sc).toInt().coerceAtLeast(64),
+                        true,
+                      ).also { scaledBmp = it }
+                    } else {
+                      rotated
+                    }
+
+                  val snap =
+                    com.example.service.LxrCameraVisionEngine.analyzeBitmap(
+                      bmp = finalBmp,
+                      isFrontCamera = useFrontCamera,
+                      quality = 58,
+                      sourceMode = "foreground",
+                    )
+                  com.example.service.LxrCameraVisionEngine.onForegroundFrame(snap)
+                  val jpegBytes = snap.jpegBytes
+                  if (jpegBytes != null && jpegBytes.isNotEmpty()) {
+                    live.sendCameraFrame(jpegBytes)
+                    sentFrameCount++
+                    val usable =
+                      com.example.service.LxrCameraVisionGuard.evaluateFrameUsability(snap, nowMs = now)
+                    if (!notifiedOn &&
+                      usable.hasFreshFrame &&
+                      (snap.faceDetected || sentFrameCount >= 2)
+                    ) {
+                      notifiedOn = true
+                      live.notifyCameraActive(
+                        active = true,
+                        isFrontCamera = useFrontCamera,
+                        proactiveCuriosity = useFrontCamera && snap.faceDetected,
+                        faceDetected = snap.faceDetected,
+                      )
+                    }
+                  }
+                }
+              }
+            } catch (_: Throwable) {
+            } finally {
+              try {
+                if (scaledBmp != null && scaledBmp !== rotBmp && scaledBmp !== bmp) scaledBmp?.recycle()
+                if (rotBmp != null && rotBmp !== bmp) rotBmp?.recycle()
+                bmp?.recycle()
+              } catch (_: Throwable) {}
+              try {
+                img.close()
+              } catch (_: Throwable) {}
+            }
+          }
+          val selector =
+            if (useFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA
+            else CameraSelector.DEFAULT_BACK_CAMERA
+          p.unbindAll()
+          p.bindToLifecycle(owner, selector, pv, analysis)
+        } catch (_: Throwable) {}
+      },
+      ContextCompat.getMainExecutor(ctx),
+    )
+    onDispose {
+      try {
+        analysisRef?.clearAnalyzer()
+      } catch (_: Throwable) {}
+      try {
+        provider?.unbindAll()
+      } catch (_: Throwable) {}
+      com.example.service.LxrCameraVisionEngine.setUiPreviewActive(false)
+      if (RiyaState.visionCameraActive.value && RiyaState.running.value) {
+        com.example.service.RiyaService.syncCameraState(ctx)
+      } else {
+        try {
+          RiyaState.live?.notifyCameraActive(false, isFrontCamera = useFrontCamera)
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+  DisposableEffect(Unit) {
+    onDispose {
+      try {
+        exec.shutdownNow()
+      } catch (_: Throwable) {}
+    }
+  }
+  AndroidView({ preview }, modifier)
+}

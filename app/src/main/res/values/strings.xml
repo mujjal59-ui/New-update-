@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">LXR--AI</string>
+    <string name="accessibility_service_label">LXR--AI স্ক্রিন ও টাস্ক অ্যাসিস্ট্যান্ট</string>
+    <string name="accessibility_service_description">LXR--AI সম্পূর্ণ স্ক্রিন রিড করে দ্রুত টাস্ক সম্পন্ন করতে, ইমো (imo)-তে ইমোজি বাটনের বদলে সঠিক সেন্ড বাটনে ক্লিক করতে এবং Infinix Android 16 অ্যাপগুলোতে সহজে সার্চ করতে সাহায্য করে।</string>
+    <string name="notification_listener_label">LXR--AI মেসেজ অটো-রিপ্লাই</string>
+    <string name="assistant_service_label">LXR--AI</string>
+    <string name="channel_alerts_name">LXR--AI জরুরি ও অ্যাক্সেসিবিলিটি সতর্কতা</string>
+    <string name="channel_messages_name">LXR--AI মেসেজ ও রিপ্লাই অনুমতি</string>
+    <string name="section_btn_app_builder">অ্যাপস তৈরি</string>
+    <string name="section_btn_video_creator">ভিডিও তৈরি</string>
+    <string name="section_btn_youtube_seo">YouTube\nভিডিও SEO</string>
+    <string name="section_btn_youtube_seo_cd">YouTube ভিডিও SEO</string>
+    <string name="app_builder_screen_title">App Builder</string>
+    <string name="app_builder_screen_subtitle">অ্যাপস তৈরি • স্টুডিও লেআউট ও নেভিগেশন</string>
+    <string name="video_creator_screen_title">Video Creator</string>
+    <string name="video_creator_screen_subtitle">ভিডিও তৈরি • স্টুডিও লেআউট ও নেভিগেশন</string>
+    <string name="seo_studio_screen_title">YouTube SEO Studio</string>
+    <string name="seo_studio_screen_subtitle">রিয়েল সার্চ রিসার্চ, টাইটেল, ট্যাগ, স্ক্রিপ্ট হুক ও এক্সপোর্ট</string>
+    <string name="studio_ui_only_badge">LIVE RESEARCH &amp; SEO READY</string>
+    <string name="app_builder_status_note">রিয়েল Kotlin/Compose প্রজেক্ট ও Termux APK বিল্ড প্রস্তুত।</string>
+    <string name="video_creator_status_note">পূর্ণাঙ্গ ভিডিও স্টুডিও, অডিও ও ডাউনলোড এক্সপোর্ট প্রস্তুত।</string>
+    <string name="seo_studio_status_note">ভিডিওর বিষয় লিখে Google Search, DuckDuckGo ও Wikipedia রিসার্চসহ পূর্ণাঙ্গ YouTube SEO প্যাকেজ তৈরি করুন ও Download/LxR/YouTube_SEO ফোল্ডারে সেভ করুন।</string>
+    <string name="back_to_home_label">হোম স্ক্রিনে ফিরুন</string>
+    <string name="device_admin_desc">বসের নির্দেশে দ্রুত স্ক্রিন লক নিয়ন্ত্রণ এবং ২৪/৭ ব্যাকগ্রাউন্ড সিস্টেম স্থায়িত্ব রক্ষার জন্য।</string>
+</resources>
