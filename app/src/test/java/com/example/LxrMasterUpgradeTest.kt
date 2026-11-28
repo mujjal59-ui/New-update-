@@ -32,6 +32,12 @@ import com.example.service.ResearchSourceItem
 import com.example.service.RiyaVoiceManager
 import com.example.service.SourceCredibilityTier
 import com.example.service.TaskComplexityTier
+import com.example.service.PythonEngineeringAgent
+import com.example.service.JavaEngineeringAgent
+import com.example.service.KotlinAndroidEngineeringAgent
+import com.example.service.JsTsEngineeringAgent
+import com.example.service.TermuxFrameworkStatus
+import java.io.File
 import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -221,8 +227,24 @@ class LxrMasterUpgradeTest {
   }
 
   @Test
-  fun specialistAgents_15Registered_mathEvaluator_securityAuditor_andOrchestratorWork() {
-    assertEquals(15, LxrSpecialistRegistry.ALL_AGENTS.size)
+  fun specialistAgents_all15CoreRolesRegistered_languageEngineers_mathAndOrchestratorWork() {
+    assertEquals(15, LxrSpecialistRegistry.CORE_SPEC_15_ROLES.size)
+    val nonOrchestratorCore = LxrSpecialistRegistry.CORE_SPEC_15_ROLES.filter { it != "autonomous_orchestrator" }
+    nonOrchestratorCore.forEach { roleId ->
+      assertNotNull("Missing required role $roleId", LxrSpecialistRegistry.findById(roleId))
+    }
+    assertEquals(20, LxrSpecialistRegistry.ALL_AGENTS.size)
+
+    assertTrue(PythonEngineeringAgent.auditPython("def f(x=[]):\n  return eval(x)").size >= 2)
+    assertTrue(JavaEngineeringAgent.auditJava("Statement s = c.createStatement(); s.executeQuery(\"SELECT * FROM u WHERE id=\" + id);").isNotEmpty())
+    assertTrue(KotlinAndroidEngineeringAgent.auditKotlinAndroid("GlobalScope.launch { }").isNotEmpty())
+    assertTrue(JsTsEngineeringAgent.auditJsTs("el.innerHTML = userInput;").isNotEmpty())
+
+    val pySelected = LxrAutonomousOrchestrator.selectAgents("python fastapi async review", TaskComplexityTier.SPECIALIZED)
+    assertEquals("python_engineering", pySelected.first().id)
+
+    val ktSelected = LxrAutonomousOrchestrator.selectAgents("kotlin compose coroutine flow", TaskComplexityTier.SPECIALIZED)
+    assertEquals("kotlin_android_engineering", ktSelected.first().id)
 
     val mathRes = ReasoningAndMathAgent.evaluateExpression("12 + 3 * (10 - 4) / 2")
     assertTrue(mathRes.isSuccess)
@@ -257,14 +279,56 @@ class LxrMasterUpgradeTest {
   }
 
   @Test
-  fun termuxAdapters_all8Registered_andHonestUnavailabilityReported() {
+  fun termuxAdapters_all8FrameworksAndAll8Statuses_verifiedHonestly() {
+    assertEquals(8, TermuxFrameworkStatus.entries.size)
     assertEquals(8, LxrTermuxFrameworkAdapters.FRAMEWORKS.size)
     val expectedIds = setOf("langgraph", "crewai", "litellm", "aider", "openhands", "haystack", "llamaindex", "semgrep")
     assertEquals(expectedIds, LxrTermuxFrameworkAdapters.FRAMEWORKS.map { it.id }.toSet())
 
-    val probes = LxrTermuxFrameworkAdapters.probeAll(ctx)
-    assertEquals(8, probes.size)
-    assertTrue(probes.all { !it.isAvailableNow && it.installCommand.isNotBlank() })
+    // NOT_CHECKED
+    val unchecked = LxrTermuxFrameworkAdapters.probeFramework(ctx, "langgraph", performCheck = false)!!
+    assertEquals(TermuxFrameworkStatus.NOT_CHECKED, unchecked.status)
+
+    // UNAVAILABLE when Termux is absent
+    val unavail = LxrTermuxFrameworkAdapters.probeAll(ctx, performCheck = true, termuxInstalledOverride = false)
+    assertEquals(8, unavail.size)
+    assertTrue(unavail.all { it.status == TermuxFrameworkStatus.UNAVAILABLE && !it.isAvailableNow && it.diskRequiredMb > 0 && it.ramRequiredMb > 0 })
+
+    // NOT_INSTALLED vs UNSUPPORTED when Termux is installed without framework packages
+    val installedTermuxAider = LxrTermuxFrameworkAdapters.probeFramework(ctx, "aider", termuxInstalledOverride = true)!!
+    assertEquals(TermuxFrameworkStatus.NOT_INSTALLED, installedTermuxAider.status)
+    val installedTermuxOpenHands = LxrTermuxFrameworkAdapters.probeFramework(ctx, "openhands", termuxInstalledOverride = true)!!
+    assertEquals(TermuxFrameworkStatus.UNSUPPORTED, installedTermuxOpenHands.status)
+
+    // INSTALLED / EXECUTABLE / TESTED / WORKING via controlled temp markers
+    val tmpDir = File(ctx.cacheDir, "fw_probe_test").apply { mkdirs() }
+    val instFile = File(tmpDir, "aider.installed").apply { writeText("ok") }
+    assertEquals(
+      TermuxFrameworkStatus.INSTALLED,
+      LxrTermuxFrameworkAdapters.probeFramework(ctx, "aider", customMarkerPaths = listOf(instFile), termuxInstalledOverride = true)!!.status,
+    )
+    val execFile = File(tmpDir, "aider_bin").apply { writeText("#!/bin/sh\necho ok"); setExecutable(true) }
+    assertEquals(
+      TermuxFrameworkStatus.EXECUTABLE,
+      LxrTermuxFrameworkAdapters.probeFramework(ctx, "aider", customMarkerPaths = listOf(execFile), termuxInstalledOverride = true)!!.status,
+    )
+    val testedFile = File(tmpDir, "aider.tested").apply { writeText("ok") }
+    assertEquals(
+      TermuxFrameworkStatus.TESTED,
+      LxrTermuxFrameworkAdapters.probeFramework(ctx, "aider", customMarkerPaths = listOf(testedFile), termuxInstalledOverride = true)!!.status,
+    )
+    val workingFile = File(tmpDir, "aider.working").apply { writeText("ok") }
+    assertEquals(
+      TermuxFrameworkStatus.WORKING,
+      LxrTermuxFrameworkAdapters.probeFramework(ctx, "aider", customMarkerPaths = listOf(workingFile), termuxInstalledOverride = true)!!.status,
+    )
+
+    // Safety + honest execution check (never fabricates CLI output)
+    val unsafeOutcome = LxrTermuxFrameworkAdapters.executeViaTermux(ctx, "aider", "--version; rm -rf /")
+    assertFalse(unsafeOutcome.executed)
+    val unavailOutcome = LxrTermuxFrameworkAdapters.executeViaTermux(ctx, "aider", "--version")
+    assertFalse(unavailOutcome.executed)
+    assertEquals(TermuxFrameworkStatus.UNAVAILABLE, unavailOutcome.status)
   }
 
   @Test

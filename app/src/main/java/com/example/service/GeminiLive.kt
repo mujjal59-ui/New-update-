@@ -173,6 +173,7 @@ object LxrParallelToolPlanner {
       "run_autonomous_task",
       "prepare_app_requirements",
       "check_termux_build_status",
+      "inspect_termux_frameworks",
       "run_osint_investigation",
       "list_osint_reports",
     )
@@ -243,7 +244,7 @@ object LxrToolWorkDescriber {
         "run_autonomous_task" -> "স্বয়ংক্রিয় মাল্টি-এজেন্ট কাজ..."
         "inspect_camera_vision" -> "ক্যামেরা ভিশন দেখা..."
         "switch_camera_lens" -> "ক্যামেরা লেন্স পরিবর্তন..."
-        "build_android_app", "prepare_app_requirements", "check_termux_build_status", "run_termux_command" ->
+        "build_android_app", "prepare_app_requirements", "check_termux_build_status", "run_termux_command", "inspect_termux_frameworks", "run_termux_framework" ->
           "অ্যাপ বিল্ড ও Termux..."
         "web_search", "deep_research" -> "ওয়েব রিসার্চ..."
         "get_today_news_and_trending" -> "আজকের টেক ও বাংলাদেশের ট্রেন্ডিং..."
@@ -595,7 +596,9 @@ class GeminiLive(private val ctx: Context) {
       {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
       {"name":"diagnose_and_fix_self","description":"LXR--AI নিজের সিস্টেম ও অনুমতি (Accessibility, Notification, Modify System Settings / Restricted Settings, Default Digital Assistant, GPS, Battery) পরীক্ষা করে ('diagnose') সমস্যা চিহ্নিত করে, এবং বস স্পষ্ট অনুমতি দিলে তবেই নির্দিষ্ট সমস্যার সেটিংস খুলে ঠিক করে ('fix')।","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","enum":["diagnose","fix"],"description":"আগে সমস্যা খুঁজতে 'diagnose'; বসের অনুমতি পাওয়ার পর ঠিক করতে 'fix'"},"issue_key":{"type":"STRING","description":"যেমন accessibility, notification, overlay, write_settings, assistant, battery, location, app_info"}},"required":["mode"]}},
       {"name":"critical_task_solve","description":"অত্যন্ত জটিল বিশ্লেষণ, কোডিং, লজিক, পরিকল্পনা বা কঠিন কাজের জন্য বসের নির্বাচিত এক্সট্রা ক্রিটিক্যাল এআই মডেল (Gemini 2.5 Pro / Flash) ব্যবহার করে গভীর সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"কঠিন কাজ বা প্রশ্নের বিস্তারিত বর্ণনা"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিনের তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
-      {"name":"run_autonomous_task","description":"জটিল বা বহু-ধাপের কাজের জন্য স্বয়ংক্রিয়ভাবে বিশেষজ্ঞ এজেন্ট (প্ল্যানার, ম্যাথ/রিজনিং, কোডিং, সিকিউরিটি, রিসার্চ, OSINT, ডিভাইস, নেটওয়ার্ক, ভেরিফিকেশন গেট) একত্রে বা সমান্তরালে চালিয়ে যাচাইকৃত সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"সম্পূর্ণ কাজের নির্দেশনা বা প্রশ্ন"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিন তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
+      {"name":"run_autonomous_task","description":"জটিল বা বহু-ধাপের কাজের জন্য স্বয়ংক্রিয়ভাবে ১৫টি বিশেষজ্ঞ এজেন্ট (অরকেস্ট্রেটর, এক্সট্রা ক্রিটিক্যাল রিজনিং, অ্যাডভান্সড কোডিং, Python/Java/Kotlin/JS-TS ইঞ্জিনিয়ারিং, এডুকেশন, ম্যাথ, ডিপ রিসার্চ, ডকুমেন্টেশন, কোড সিকিউরিটি, নেটওয়ার্ক, প্ল্যানিং, QA ও ভেরিফিকেশন গেট) একত্রে বা সমান্তরালে চালিয়ে যাচাইকৃত সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"সম্পূর্ণ কাজের নির্দেশনা বা প্রশ্ন"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিন তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
+      {"name":"inspect_termux_frameworks","description":"Termux-এর ৮টি বহিরাগত ফ্রেমওয়ার্ক (LangGraph, CrewAI, LiteLLM, Aider, OpenHands, Haystack, LlamaIndex, Semgrep) এর আসল ৮-স্তরের অবস্থা (NOT_CHECKED..WORKING/UNSUPPORTED/UNAVAILABLE) ও ARM64 সামঞ্জস্য পরীক্ষা করো।","parameters":{"type":"OBJECT","properties":{}}},
+      {"name":"run_termux_framework","description":"যাচাইকৃত ও ইনস্টল থাকা Termux ফ্রেমওয়ার্কে (যেমন aider, langgraph, llamaindex) নিরাপদ CLI কমান্ড চালাও। প্রি-রিকুইজিট না থাকলে সৎভাবে ত্রুটি/অবস্থা জানাও।","parameters":{"type":"OBJECT","properties":{"framework_id":{"type":"STRING","description":"langgraph, crewai, litellm, aider, openhands, haystack, llamaindex, semgrep"},"command_args":{"type":"STRING","description":"নিরাপদ CLI আর্গুমেন্ট বা --version / --help"}},"required":["framework_id","command_args"]}},
       {"name":"inspect_camera_vision","description":"বস ফ্রন্ট বা ব্যাক ক্যামেরায় কী দেখা যাচ্ছে তা দেখতে বা 'আমাকে দেখো / সামনে কী আছে' জিজ্ঞাসা করলে ফোরগ্রাউন্ড বা ব্যাকগ্রাউন্ড ক্যামেরা দিয়ে আসল লাইভ ছবি (image/jpeg) তুলে যাচাই করে সত্য বর্ণনা দাও। ছবি ছাড়া কখনো অনুমান করবে না।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","current"],"description":"front (বসকে দেখতে), back (সামনের দৃশ্য) বা current"},"question":{"type":"STRING","description":"বস কী জানতে চেয়েছেন"}},"required":[]}},
       {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো এবং প্রয়োজনে ব্যাকগ্রাউন্ড বা ফোরগ্রাউন্ডে ক্যামেরা চালু/বন্ধ করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"},"turn_on":{"type":"BOOLEAN","description":"ক্যামেরা চালু করতে চাইলে true, বন্ধ করতে চাইলে false (ঐচ্ছিক)"}},"required":["lens"]}},
       {"name":"list_installed_apps","description":"ফোনে সত্যিই কী কী লঞ্চযোগ্য অ্যাপস ইনস্টল করা আছে তা প্যাকেজ ম্যানেজার দিয়ে সম্পূর্ণ পরীক্ষা করো (কখনোই এই টুল বা open_app না চালিয়ে বলবে না যে কোনো অ্যাপ ইনস্টল করা নেই)।","parameters":{"type":"OBJECT","properties":{"filter":{"type":"STRING","description":"নির্দিষ্ট অ্যাপের নাম বা অংশ দিয়ে খুঁজতে চাইলে লিখো, না চাইলে ফাঁকা রাখো"}},"required":[]}},
@@ -2768,6 +2771,12 @@ class GeminiLive(private val ctx: Context) {
             screenContext = scr,
             recordInMonitor = true,
           ).finalSummaryBn
+        }
+        "inspect_termux_frameworks" -> LxrTermuxFrameworkAdapters.formatAllStatusesBn(ctx)
+        "run_termux_framework" -> {
+          val fwId = a.optString("framework_id").trim()
+          val args = a.optString("command_args").trim()
+          LxrTermuxFrameworkAdapters.executeViaTermux(ctx, fwId, args).messageBn
         }
         "inspect_camera_vision" ->
           inspectCameraVision(

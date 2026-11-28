@@ -48,29 +48,29 @@ object LxrAutonomousOrchestrator {
 
   fun selectAgents(prompt: String, tier: TaskComplexityTier = classifyComplexity(prompt)): List<LxrSpecialistAgent> {
     val lower = prompt.lowercase(Locale.ROOT)
-    val matched = mutableListOf<LxrSpecialistAgent>()
-    for (agent in LxrSpecialistRegistry.ALL_AGENTS) {
-      if (agent.id == "intent_planner" || agent.id == "verification_critique" || agent.id == "documentation_summary") {
-        continue
-      }
-      if (agent.keywords.any { kw -> lower.contains(kw) }) {
-        matched.add(agent)
-      }
-    }
+    val scored =
+      LxrSpecialistRegistry.ALL_AGENTS.mapNotNull { agent ->
+        if (agent.id == "intent_planner" || agent.id == "verification_critique" || agent.id == "documentation_summary") {
+          return@mapNotNull null
+        }
+        val hits = agent.keywords.count { kw -> matchesKeyword(lower, kw) }
+        if (hits > 0) agent to hits else null
+      }.sortedByDescending { it.second }.map { it.first }.toMutableList()
+
     if (ReasoningAndMathAgent.extractMathCandidate(prompt) != null) {
       LxrSpecialistRegistry.findById("reasoning_math")?.let { mathAgent ->
-        if (matched.none { it.id == mathAgent.id }) matched.add(0, mathAgent)
+        if (scored.none { it.id == mathAgent.id }) scored.add(0, mathAgent)
       }
     }
-    if (matched.isEmpty()) {
-      LxrSpecialistRegistry.findById("reasoning_math")?.let { matched.add(it) }
+    if (scored.isEmpty()) {
+      LxrSpecialistRegistry.findById("extra_critical_reasoning")?.let { scored.add(it) }
     }
     return when (tier) {
-      TaskComplexityTier.FAST_SINGLE -> matched.take(1)
-      TaskComplexityTier.SPECIALIZED -> matched.take(2)
+      TaskComplexityTier.FAST_SINGLE -> scored.take(1)
+      TaskComplexityTier.SPECIALIZED -> scored.take(2)
       TaskComplexityTier.MULTI_AGENT_PARALLEL -> {
         val planner = LxrSpecialistRegistry.findById("intent_planner")
-        (listOfNotNull(planner) + matched).distinctBy { it.id }.take(4)
+        (listOfNotNull(planner) + scored).distinctBy { it.id }.take(4)
       }
     }
   }
@@ -173,13 +173,20 @@ object LxrAutonomousOrchestrator {
     )
   }
 
+  private fun matchesKeyword(lower: String, kw: String): Boolean {
+    if (kw.length <= 4 && kw.all { it.isLetter() && it.code < 128 }) {
+      return Regex("""\b${Regex.escape(kw)}\b""").containsMatchIn(lower)
+    }
+    return lower.contains(kw)
+  }
+
   private fun countMatchedDomains(lower: String): Int {
     var count = 0
     for (agent in LxrSpecialistRegistry.ALL_AGENTS) {
       if (agent.id == "intent_planner" || agent.id == "verification_critique" || agent.id == "documentation_summary") {
         continue
       }
-      if (agent.keywords.any { lower.contains(it) }) {
+      if (agent.keywords.any { matchesKeyword(lower, it) }) {
         count += 1
       }
     }
