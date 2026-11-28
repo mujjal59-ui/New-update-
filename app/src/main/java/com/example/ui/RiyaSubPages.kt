@@ -1631,10 +1631,14 @@ fun KeyPage(back: () -> Unit, onNavigate: (String) -> Unit) {
             } else {
               elevenLabsEnabled = true
               applyVoiceSettings()
-              RiyaVoiceManager.speakUrgent(
-                ctx,
-                "হ্যালো বস, আমি এল এক্স আর। ElevenLabs এর মিষ্টি বাংলা কণ্ঠে তোমার সাথে কথা বলছি।",
+              RiyaVoiceManager.speak(
+                rawText = "হ্যালো বস, আমি এল এক্স আর। ElevenLabs এর মিষ্টি বাংলা কণ্ঠে তোমার সাথে কথা বলছি।",
+                interrupt = true,
+                forceSpeak = true,
+                forceElevenLabsOnly = true,
+                allowWhenMicMuted = true,
               )
+              Toast.makeText(ctx, "ElevenLabs ভয়েস টেস্ট চলছে...", Toast.LENGTH_SHORT).show()
             }
           },
           modifier = Modifier.heightIn(min = 48.dp).testTag("elevenlabs_test_voice_btn"),

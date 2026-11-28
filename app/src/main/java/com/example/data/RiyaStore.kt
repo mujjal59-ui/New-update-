@@ -220,6 +220,7 @@ object RiyaState {
   val motivationalBanner = MutableStateFlow<String?>(null)
   val connectedAudioDevice = MutableStateFlow("Phone Mic (Whisper Boost)")
   val isBluetoothMicActive = MutableStateFlow(false)
+  val isBtCommOutputVerified = MutableStateFlow(false)
   val networkSpeedLabel = MutableStateFlow("Fast")
   val voiceMatchLiveLabel = MutableStateFlow("")
   val homeThemeIndex = MutableStateFlow(0)
@@ -277,6 +278,7 @@ object Store {
   const val ELEVENLABS_API_KEY_URL = "https://elevenlabs.io/app/developers/api-keys"
   const val DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
   const val DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
+  const val ELEVENLABS_FALLBACK_MODEL_ID = "eleven_flash_v2_5"
   const val ELEVENLABS_LIVE_MODEL_ID = "elevenlabs-voice"
 
   val VOICE_OPTIONS =
@@ -426,6 +428,21 @@ object Store {
   fun youApiKey(c: Context): String = p(c).getString("youKey", "") ?: ""
 
   fun setYouApiKey(c: Context, v: String) = p(c).edit().putString("youKey", v.trim()).apply()
+
+  fun openAiCompatBaseUrl(c: Context): String = p(c).getString("openAiCompatBaseUrl", "")?.trim() ?: ""
+
+  fun setOpenAiCompatBaseUrl(c: Context, v: String) =
+    p(c).edit().putString("openAiCompatBaseUrl", v.trim().trimEnd('/')).apply()
+
+  fun openAiCompatApiKey(c: Context): String = p(c).getString("openAiCompatApiKey", "")?.trim() ?: ""
+
+  fun setOpenAiCompatApiKey(c: Context, v: String) =
+    p(c).edit().putString("openAiCompatApiKey", v.trim()).apply()
+
+  fun openAiCompatModel(c: Context): String = p(c).getString("openAiCompatModel", "")?.trim() ?: ""
+
+  fun setOpenAiCompatModel(c: Context, v: String) =
+    p(c).edit().putString("openAiCompatModel", v.trim()).apply()
 
   fun elevenLabsApiKey(c: Context): String = p(c).getString("elevenLabsApiKey", "") ?: ""
 

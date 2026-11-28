@@ -227,14 +227,19 @@ object LxrCapabilityInspector {
         ),
         LxrCapabilityItem(
           id = "deep_research_and_studio",
-          nameBn = "ওয়েব রিসার্চ, Termux APK বিল্ড ও 3D অ্যানিমেশন/YouTube SEO",
+          nameBn = "ওয়েব রিসার্চ, Termux APK বিল্ড, স্বয়ংক্রিয় মাল্টি-এজেন্ট ও 3D স্টুডিও",
           category = LxrCapabilityCategory.AI_INTELLIGENCE,
           availability =
             if (extraSearchKeys) LxrCapabilityAvailability.FULLY_OPERATIONAL
             else LxrCapabilityAvailability.PARTIALLY_SUPPORTED,
           detailBn =
-            if (extraSearchKeys) "Google/DuckDuckGo/Wikipedia + Perplexity/You.com সক্রিয়"
-            else "ফ্রি Google/DuckDuckGo/Wikipedia সক্রিয় (ঐচ্ছিক Perplexity/You Key ছাড়া)",
+            buildString {
+              append(
+                if (extraSearchKeys) "Google/DuckDuckGo/Wikipedia + Perplexity/You.com সক্রিয়"
+                else "ফ্রি Google/DuckDuckGo/Wikipedia সক্রিয় (ঐচ্ছিক Perplexity/You Key ছাড়া)"
+              )
+              append(" • নেটওয়ার্ক: ${LxrNetworkHealthMonitor.currentStatusBn(appCtx)}")
+            },
         ),
         // E. Background Operations
         LxrCapabilityItem(

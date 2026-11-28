@@ -110,6 +110,40 @@ object LiveVadConfig {
 }
 
 /**
+ * Shared Live session configuration & routing helpers (directly testable in Robolectric).
+ */
+object LiveSessionConfigBuilder {
+  fun buildResponseModalities(isElevenMode: Boolean = false): JSONArray {
+    // Gemini Live native-audio models reject TEXT-only modality with WS 1007/1008.
+    // Always negotiate AUDIO + outputAudioTranscription; ElevenLabs mode mutes raw Gemini PCM locally.
+    return JSONArray().put("AUDIO")
+  }
+
+  fun shouldIncludeOutputAudioTranscription(transcriptionCompatFallback: Boolean): Boolean =
+    !transcriptionCompatFallback
+
+  fun resolveOutputAudioUsage(
+    usingBtAudio: Boolean,
+    isBtCommOutputVerified: Boolean,
+    hasWiredOrA2dpHeadset: Boolean,
+  ): Int {
+    return if (usingBtAudio && isBtCommOutputVerified && !hasWiredOrA2dpHeadset) {
+      AudioAttributes.USAGE_VOICE_COMMUNICATION
+    } else if (usingBtAudio && isBtCommOutputVerified) {
+      AudioAttributes.USAGE_VOICE_COMMUNICATION
+    } else {
+      AudioAttributes.USAGE_MEDIA
+    }
+  }
+
+  fun shouldAcceptOutputPlayback(
+    micMuted: Boolean,
+    blockedByLimit: Boolean,
+    suppressingStale: Boolean,
+  ): Boolean = !micMuted && !blockedByLimit && !suppressingStale
+}
+
+/**
  * Classifies non-screen background tools so multiple independent tools in a single toolCall batch
  * execute concurrently via parallelToolExec while screen/UI tools stay strictly serialized.
  */
@@ -136,6 +170,7 @@ object LxrParallelToolPlanner {
       "dismiss_alarm",
       "list_scheduled_alarms",
       "critical_task_solve",
+      "run_autonomous_task",
       "prepare_app_requirements",
       "check_termux_build_status",
       "run_osint_investigation",
@@ -205,6 +240,7 @@ object LxrToolWorkDescriber {
         "check_notifications", "reply_to_incoming_message" -> "মেসেজ ও কল দেখা..."
         "diagnose_and_fix_self" -> "নিজের সমস্যা পরীক্ষা..."
         "critical_task_solve" -> "ক্রিটিক্যাল এআই চিন্তা..."
+        "run_autonomous_task" -> "স্বয়ংক্রিয় মাল্টি-এজেন্ট কাজ..."
         "inspect_camera_vision" -> "ক্যামেরা ভিশন দেখা..."
         "switch_camera_lens" -> "ক্যামেরা লেন্স পরিবর্তন..."
         "build_android_app", "prepare_app_requirements", "check_termux_build_status", "run_termux_command" ->
@@ -458,6 +494,28 @@ class GeminiLive(private val ctx: Context) {
 
   fun isReady(): Boolean = ready && !stopped
 
+  fun setMicMuted(muted: Boolean) {
+    RiyaState.micMuted.value = muted
+    if (muted) {
+      waitingServerReply = false
+      pendingVoiceDelayUntilMs = 0L
+      suppressStaleUntilMs = System.currentTimeMillis() + 1800L
+      uText.setLength(0)
+      pText.setLength(0)
+      interruptSpeakerForBoss()
+      RiyaVoiceManager.stopSpeaking()
+      if (ready && !stopped) {
+        runCatching { ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""") }
+      }
+      if (!stopped) RiyaState.status.value = "মাইক মিউট (Mute)"
+    } else {
+      suppressStaleUntilMs = 0L
+      if (!stopped) {
+        RiyaState.status.value = if (ready) "শুনছি বস..." else "Connecting…"
+      }
+    }
+  }
+
   fun switchModelAndReconnect(newModelId: String) {
     LockVaultManager.markHomeOrAppExitTransition()
     Store.setModel(ctx, newModelId)
@@ -470,6 +528,10 @@ class GeminiLive(private val ctx: Context) {
     thinkingConfigCompatFallback = false
     vadConfigCompatFallback = false
     transcriptionCompatFallback = false
+    if (RiyaState.micMuted.value) {
+      interruptSpeakerForBoss()
+      RiyaVoiceManager.stopSpeaking()
+    }
     try {
       ws?.cancel()
     } catch (_: Exception) {}
@@ -533,6 +595,7 @@ class GeminiLive(private val ctx: Context) {
       {"name":"instagram_action","description":"Instagram অ্যাপ খুলে পোস্ট/রিল পড়া, সার্চ করা, লাইক করা, কমেন্ট পড়া ও রিপ্লাই দেওয়া, শেয়ার বা ফটো/রিল পোস্ট করা।","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"open, read, search, post_photo, post_reel, reply_comment, react, share"},"text":{"type":"STRING"},"query":{"type":"STRING"},"confirmed":{"type":"BOOLEAN","description":"পাবলিক পোস্ট/রিল/কমেন্ট/শেয়ার করার আগে বস সম্মতি দিলে true"}},"required":["action"]}},
       {"name":"diagnose_and_fix_self","description":"LXR--AI নিজের সিস্টেম ও অনুমতি (Accessibility, Notification, Modify System Settings / Restricted Settings, Default Digital Assistant, GPS, Battery) পরীক্ষা করে ('diagnose') সমস্যা চিহ্নিত করে, এবং বস স্পষ্ট অনুমতি দিলে তবেই নির্দিষ্ট সমস্যার সেটিংস খুলে ঠিক করে ('fix')।","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","enum":["diagnose","fix"],"description":"আগে সমস্যা খুঁজতে 'diagnose'; বসের অনুমতি পাওয়ার পর ঠিক করতে 'fix'"},"issue_key":{"type":"STRING","description":"যেমন accessibility, notification, overlay, write_settings, assistant, battery, location, app_info"}},"required":["mode"]}},
       {"name":"critical_task_solve","description":"অত্যন্ত জটিল বিশ্লেষণ, কোডিং, লজিক, পরিকল্পনা বা কঠিন কাজের জন্য বসের নির্বাচিত এক্সট্রা ক্রিটিক্যাল এআই মডেল (Gemini 2.5 Pro / Flash) ব্যবহার করে গভীর সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"কঠিন কাজ বা প্রশ্নের বিস্তারিত বর্ণনা"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিনের তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
+      {"name":"run_autonomous_task","description":"জটিল বা বহু-ধাপের কাজের জন্য স্বয়ংক্রিয়ভাবে বিশেষজ্ঞ এজেন্ট (প্ল্যানার, ম্যাথ/রিজনিং, কোডিং, সিকিউরিটি, রিসার্চ, OSINT, ডিভাইস, নেটওয়ার্ক, ভেরিফিকেশন গেট) একত্রে বা সমান্তরালে চালিয়ে যাচাইকৃত সমাধান বের করো।","parameters":{"type":"OBJECT","properties":{"task_prompt":{"type":"STRING","description":"সম্পূর্ণ কাজের নির্দেশনা বা প্রশ্ন"},"include_screen":{"type":"BOOLEAN","description":"বর্তমান স্ক্রিন তথ্য যোগ করতে চাইলে true"}},"required":["task_prompt"]}},
       {"name":"inspect_camera_vision","description":"বস ফ্রন্ট বা ব্যাক ক্যামেরায় কী দেখা যাচ্ছে তা দেখতে বা 'আমাকে দেখো / সামনে কী আছে' জিজ্ঞাসা করলে ফোরগ্রাউন্ড বা ব্যাকগ্রাউন্ড ক্যামেরা দিয়ে আসল লাইভ ছবি (image/jpeg) তুলে যাচাই করে সত্য বর্ণনা দাও। ছবি ছাড়া কখনো অনুমান করবে না।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","current"],"description":"front (বসকে দেখতে), back (সামনের দৃশ্য) বা current"},"question":{"type":"STRING","description":"বস কী জানতে চেয়েছেন"}},"required":[]}},
       {"name":"switch_camera_lens","description":"লাইভ ভিশনের ফ্রন্ট (সামনের সেলফি) এবং ব্যাক (পিছনের) ক্যামেরার মধ্যে বদল করো এবং প্রয়োজনে ব্যাকগ্রাউন্ড বা ফোরগ্রাউন্ডে ক্যামেরা চালু/বন্ধ করো।","parameters":{"type":"OBJECT","properties":{"lens":{"type":"STRING","enum":["front","back","toggle"],"description":"front, back বা toggle"},"turn_on":{"type":"BOOLEAN","description":"ক্যামেরা চালু করতে চাইলে true, বন্ধ করতে চাইলে false (ঐচ্ছিক)"}},"required":["lens"]}},
       {"name":"list_installed_apps","description":"ফোনে সত্যিই কী কী লঞ্চযোগ্য অ্যাপস ইনস্টল করা আছে তা প্যাকেজ ম্যানেজার দিয়ে সম্পূর্ণ পরীক্ষা করো (কখনোই এই টুল বা open_app না চালিয়ে বলবে না যে কোনো অ্যাপ ইনস্টল করা নেই)।","parameters":{"type":"OBJECT","properties":{"filter":{"type":"STRING","description":"নির্দিষ্ট অ্যাপের নাম বা অংশ দিয়ে খুঁজতে চাইলে লিখো, না চাইলে ফাঁকা রাখো"}},"required":[]}},
@@ -629,12 +692,26 @@ class GeminiLive(private val ctx: Context) {
     return inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
   }
 
+  private fun hasWiredOrA2dpOutputDevice(): Boolean {
+    return runCatching {
+      val outs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+      outs.any {
+        it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+          it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+          it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+          it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+      }
+    }.getOrDefault(false)
+  }
+
   private fun routeAudio(allowRestart: Boolean = true) {
     try {
       val btInput = findBluetoothInputDevice()
       val btLabel = btInput?.productName?.toString()?.takeIf { it.isNotBlank() }
+      val wiredOrA2dpPresent = hasWiredOrA2dpOutputDevice()
 
       val btConnected: Boolean
+      var commOutputVerified = false
       if (Build.VERSION.SDK_INT >= 31) {
         val devs = am.availableCommunicationDevices
         val btOut =
@@ -649,21 +726,34 @@ class GeminiLive(private val ctx: Context) {
             }
           } else null
         btConnected = btOut != null || btInput != null
-        if (btConnected) {
+        if (btConnected && btOut != null) {
           am.mode = AudioManager.MODE_IN_COMMUNICATION
-          if (btOut != null) {
-            am.setCommunicationDevice(btOut)
+          val setOk = runCatching { am.setCommunicationDevice(btOut) }.getOrDefault(false)
+          val curType = runCatching { am.communicationDevice?.type }.getOrNull()
+          commOutputVerified =
+            setOk ||
+              curType == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+              curType == AudioDeviceInfo.TYPE_BLE_HEADSET
+          if (!commOutputVerified) {
+            // Fall back to normal media mode so AudioTrack does not write into a dead SCO pipe
+            runCatching { am.clearCommunicationDevice() }
+            am.mode = AudioManager.MODE_NORMAL
           }
         } else {
-          am.clearCommunicationDevice()
+          runCatching { am.clearCommunicationDevice() }
           am.mode = AudioManager.MODE_NORMAL
-          @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = true }
+          @Suppress("DEPRECATION")
+          run { am.isSpeakerphoneOn = !wiredOrA2dpPresent }
         }
         val activeName = btLabel ?: btOut?.productName?.toString()?.takeIf { it.isNotBlank() }
         RiyaState.isBluetoothMicActive.value = btConnected
+        RiyaState.isBtCommOutputVerified.value = commOutputVerified
         RiyaState.connectedAudioDevice.value =
-          if (btConnected) (activeName ?: "LxR Wireless Bluetooth")
-          else "Phone Mic (Direct Clear)"
+          when {
+            btConnected -> activeName ?: "LxR Wireless Bluetooth"
+            wiredOrA2dpPresent -> "Headset / Earphone"
+            else -> "Phone Mic (Direct Clear)"
+          }
       } else {
         @Suppress("DEPRECATION")
         val btOn =
@@ -674,19 +764,28 @@ class GeminiLive(private val ctx: Context) {
             }
         btConnected = btOn || btInput != null
         @Suppress("DEPRECATION")
-        if (btConnected) {
+        if (btConnected && btOn) {
           am.mode = AudioManager.MODE_IN_COMMUNICATION
           am.startBluetoothSco()
           am.isBluetoothScoOn = true
           am.isSpeakerphoneOn = false
+          commOutputVerified = am.isBluetoothScoOn
           RiyaState.isBluetoothMicActive.value = true
+          RiyaState.isBtCommOutputVerified.value = commOutputVerified
           RiyaState.connectedAudioDevice.value = btLabel ?: "LxR Wireless Bluetooth"
         } else {
           am.stopBluetoothSco()
           am.isBluetoothScoOn = false
           am.mode = AudioManager.MODE_NORMAL
-          RiyaState.isBluetoothMicActive.value = false
-          RiyaState.connectedAudioDevice.value = "Phone Mic (Direct Clear)"
+          am.isSpeakerphoneOn = !wiredOrA2dpPresent && !btConnected
+          RiyaState.isBluetoothMicActive.value = btConnected
+          RiyaState.isBtCommOutputVerified.value = false
+          RiyaState.connectedAudioDevice.value =
+            when {
+              btConnected -> btLabel ?: "LxR Wireless Bluetooth"
+              wiredOrA2dpPresent -> "Headset / Earphone"
+              else -> "Phone Mic (Direct Clear)"
+            }
         }
       }
 
@@ -696,11 +795,14 @@ class GeminiLive(private val ctx: Context) {
         findBuiltInMicDevice()?.let { rec?.setPreferredDevice(it) }
       }
 
-      if (allowRestart && btConnected != usingBtAudio && rec != null && !stopped) {
-        usingBtAudio = btConnected
+      val prevBt = usingBtAudio
+      usingBtAudio = btConnected
+      requestLiveAudioFocus()
+      if (allowRestart && btConnected != prevBt && rec != null && !stopped) {
         restartAudioForRouteChange()
-      } else {
-        usingBtAudio = btConnected
+      } else if (allowRestart && track != null && !stopped) {
+        // Ensure AudioTrack attributes match updated comm/media routing
+        rebuildWritableTrackLocked()
       }
     } catch (_: Exception) {}
   }
@@ -861,22 +963,23 @@ class GeminiLive(private val ctx: Context) {
               val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
               val phoneState = LockVaultManager.describeLivePhoneState(ctx, RiyaAccessibilityService.instance)
               if (
-                LxrProactiveCheckInPolicy.shouldTriggerProactiveCheckIn(
-                  ready = ready,
-                  stopped = stopped,
-                  isExecutingTool = isExecutingTool,
-                  waitingServerReply = waitingServerReply,
-                  activeTurnStarted = activeTurnHasStartedOutput,
-                  isAiSpeaking = isAiSpeakingRecently() || RiyaVoiceManager.isActivelySpeaking(),
-                  isBossSpeaking = isBossSpeakingRecently(),
-                  isInteractive = pm.isInteractive,
-                  isPhoneLocked = phoneState.isLocked,
-                  nowMs = now,
-                  sessionStartMs = sessionStartedAtMs,
-                  lastBossActivityMs = maxOf(lastBossTurnAtMs, lastBossSpeechDetectedMs),
-                  lastProactiveAtMs = lastProactiveCheckInAtMs,
-                  proactiveCountInStretch = proactiveCountInStretch,
-                )
+                !RiyaState.micMuted.value &&
+                  LxrProactiveCheckInPolicy.shouldTriggerProactiveCheckIn(
+                    ready = ready,
+                    stopped = stopped,
+                    isExecutingTool = isExecutingTool,
+                    waitingServerReply = waitingServerReply,
+                    activeTurnStarted = activeTurnHasStartedOutput,
+                    isAiSpeaking = isAiSpeakingRecently() || RiyaVoiceManager.isActivelySpeaking(),
+                    isBossSpeaking = isBossSpeakingRecently(),
+                    isInteractive = pm.isInteractive,
+                    isPhoneLocked = phoneState.isLocked,
+                    nowMs = now,
+                    sessionStartMs = sessionStartedAtMs,
+                    lastBossActivityMs = maxOf(lastBossTurnAtMs, lastBossSpeechDetectedMs),
+                    lastProactiveAtMs = lastProactiveCheckInAtMs,
+                    proactiveCountInStretch = proactiveCountInStretch,
+                  )
               ) {
                 lastProactiveCheckInAtMs = now
                 proactiveCountInStretch++
@@ -933,7 +1036,7 @@ class GeminiLive(private val ctx: Context) {
     msg: PendingIncomingMessage,
     autoSentReply: String? = null,
   ): Boolean {
-    if (!ready || stopped) return false
+    if (!ready || stopped || RiyaState.micMuted.value) return false
     val draftPart =
       if (msg.suggestedDraft.isNotBlank()) " আমি উত্তর হিসেবে লিখে ঠিক করেছি: \"${msg.suggestedDraft}\"।"
       else ""
@@ -998,7 +1101,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   fun onVoiceCallAlert(appLabel: String, callerName: String, callSummaryBn: String): Boolean {
-    if (!ready || stopped) return false
+    if (!ready || stopped || RiyaState.micMuted.value) return false
     val prompt =
       "[জরুরি ভয়েস/ভিডিও কল অ্যালার্ট]: $callSummaryBn। এখনই শান্ত ও স্পষ্ট বাংলায় বসকে সংক্ষেপে জানিয়ে দাও যে $appLabel-এ $callerName-এর কাছ থেকে এই কলটি এসেছে/মিস হয়েছে।"
     val fallbackText = "বস, $callSummaryBn।"
@@ -1047,7 +1150,7 @@ class GeminiLive(private val ctx: Context) {
   }
 
   fun announceSentReply(appLabel: String, senderName: String, replyText: String) {
-    if (!ready || stopped) return
+    if (!ready || stopped || RiyaState.micMuted.value) return
     val prompt =
       "বস অনুমতি দেওয়ায় $appLabel-এ $senderName-কে ঠিক এই উত্তরটি লিখে পাঠানো সম্পন্ন হয়েছে: \"$replyText\"। এখন শান্ত ও স্পষ্ট বাংলায় বসকে জানিয়ে দাও যে কোন লেখাটি পাঠানো হয়েছে।"
     try {
@@ -1218,10 +1321,20 @@ class GeminiLive(private val ctx: Context) {
 
   private fun requestLiveAudioFocus() {
     try {
+      val usage =
+        LiveSessionConfigBuilder.resolveOutputAudioUsage(
+          usingBtAudio = usingBtAudio,
+          isBtCommOutputVerified = RiyaState.isBtCommOutputVerified.value,
+          hasWiredOrA2dpHeadset = hasWiredOrA2dpOutputDevice(),
+        )
+      val focusStream =
+        if (usage == AudioAttributes.USAGE_VOICE_COMMUNICATION) AudioManager.STREAM_VOICE_CALL
+        else AudioManager.STREAM_MUSIC
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        audioFocusRequest?.let { oldReq -> runCatching { am.abandonAudioFocusRequest(oldReq) } }
         val attrs =
           AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setUsage(usage)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
         val req =
@@ -1236,7 +1349,7 @@ class GeminiLive(private val ctx: Context) {
         @Suppress("DEPRECATION")
         am.requestAudioFocus(
           audioFocusListener,
-          AudioManager.STREAM_MUSIC,
+          focusStream,
           AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
         )
       }
@@ -1684,18 +1797,14 @@ class GeminiLive(private val ctx: Context) {
     s.put("model", "models/$transportModelId")
 
     val genConfig = JSONObject()
-    if (isElevenMode) {
-      genConfig.put("responseModalities", JSONArray().put("TEXT"))
-    } else {
-      genConfig.put("responseModalities", JSONArray().put("AUDIO"))
-      val speechConfig =
-        JSONObject()
-          .put(
-            "voiceConfig",
-            JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)),
-          )
-      genConfig.put("speechConfig", speechConfig)
-    }
+    genConfig.put("responseModalities", LiveSessionConfigBuilder.buildResponseModalities(isElevenMode))
+    val speechConfig =
+      JSONObject()
+        .put(
+          "voiceConfig",
+          JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName)),
+        )
+    genConfig.put("speechConfig", speechConfig)
     if (!thinkingConfigCompatFallback && activeProfile.supportsMinimalThinking) {
       genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "MINIMAL"))
     }
@@ -1711,7 +1820,7 @@ class GeminiLive(private val ctx: Context) {
     }
     if (!transcriptionCompatFallback) {
       s.put("inputAudioTranscription", JSONObject())
-      if (!isElevenMode) {
+      if (LiveSessionConfigBuilder.shouldIncludeOutputAudioTranscription(transcriptionCompatFallback)) {
         s.put("outputAudioTranscription", JSONObject())
       }
     }
@@ -1751,6 +1860,7 @@ class GeminiLive(private val ctx: Context) {
           interruptSpeakerForBoss()
         }
         sc.optJSONObject("inputTranscription")?.optString("text")?.let {
+          if (RiyaState.micMuted.value) return@let
           lastBossSpeechDetectedMs = System.currentTimeMillis()
           proactiveCountInStretch = 0
           uText.append(it)
@@ -1774,7 +1884,7 @@ class GeminiLive(private val ctx: Context) {
           }
         }
         sc.optJSONObject("outputTranscription")?.optString("text")?.let {
-          if (!isSuppressingStaleAudio() && !activeTurnBlockedByLimit) {
+          if (LiveSessionConfigBuilder.shouldAcceptOutputPlayback(RiyaState.micMuted.value, activeTurnBlockedByLimit, isSuppressingStaleAudio())) {
             pText.append(it)
           }
         }
@@ -1784,8 +1894,13 @@ class GeminiLive(private val ctx: Context) {
           val isElevenMode =
             activeLiveModel.equals(Store.ELEVENLABS_LIVE_MODEL_ID, ignoreCase = true) ||
               Store.isElevenLabsVoiceModeSelected(ctx)
-          if (isSuppressingStaleAudio()) {
-            // Discard stale residual audio packets briefly during active Boss barge-in
+          if (!LiveSessionConfigBuilder.shouldAcceptOutputPlayback(RiyaState.micMuted.value, false, isSuppressingStaleAudio())) {
+            if (RiyaState.micMuted.value) {
+              interruptSpeakerForBoss()
+              RiyaVoiceManager.stopSpeaking()
+              RiyaState.status.value = "মাইক মিউট (Mute)"
+            }
+            // Discard audio packets while muted or during active Boss barge-in
           } else {
             val isFirstChunkOfTurn = !currentTurnReceivedFirstChunk
             if (isFirstChunkOfTurn) {
@@ -1810,6 +1925,9 @@ class GeminiLive(private val ctx: Context) {
               RiyaVoiceManager.stopSpeaking()
               val entry = voiceQueue.popNextPendingForTurn(defaultDelayMs = 0L)
               currentTurnEntry = entry
+              if (isElevenMode) {
+                RiyaState.status.value = "উত্তর তৈরি হচ্ছে (ElevenLabs)..."
+              }
             }
             if (activeTurnBlockedByLimit) return@let
 
@@ -1837,17 +1955,17 @@ class GeminiLive(private val ctx: Context) {
               if (!isElevenMode) {
                 partObj.optJSONObject("inlineData")?.let {
                   val pcm = Base64.decode(it.getString("data"), Base64.DEFAULT)
-                  if (!stopped && !activeTurnBlockedByLimit) {
+                  if (!stopped && !activeTurnBlockedByLimit && !RiyaState.micMuted.value) {
                     val pcmRms = computeRms16Bit(pcm, pcm.size)
                     val applyDelay = isFirstChunkOfTurn && i == 0 && holdUntilMs > 0L
                     try {
                       if (!playExec.isShutdown) {
                         playExec.execute {
-                          if (stopped || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                          if (stopped || RiyaState.micMuted.value || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
                           if (applyDelay) {
                             RiyaState.status.value = "রিপ্লাই ডিলে (${(remainingMs / 1000L).coerceAtLeast(1)}s) — শুনছি বস..."
                             var remain = holdUntilMs - System.currentTimeMillis()
-                            while (remain > 0L && !stopped && !isSuppressingStaleAudio() && turnEpoch == audioPlaybackEpoch.get()) {
+                            while (remain > 0L && !stopped && !RiyaState.micMuted.value && !isSuppressingStaleAudio() && turnEpoch == audioPlaybackEpoch.get()) {
                               val step = minOf(remain, 50L)
                               try {
                                 Thread.sleep(step)
@@ -1856,7 +1974,7 @@ class GeminiLive(private val ctx: Context) {
                               }
                               remain = holdUntilMs - System.currentTimeMillis()
                             }
-                            if (stopped || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
+                            if (stopped || RiyaState.micMuted.value || activeTurnBlockedByLimit || isSuppressingStaleAudio() || turnEpoch != audioPlaybackEpoch.get()) return@execute
                           }
                           if (turnEntry != null && turnEntry.playbackStartedAtMs == 0L) {
                             voiceQueue.markPlaybackStarted(turnEntry)
@@ -1864,25 +1982,54 @@ class GeminiLive(private val ctx: Context) {
                           pendingAudioChunks.incrementAndGet()
                           try {
                             var activeT = ensureWritableTrackLocked()
-                            if (!stopped && activeT != null && activeT.state == AudioTrack.STATE_INITIALIZED) {
+                            if (!stopped && !RiyaState.micMuted.value && activeT != null && activeT.state == AudioTrack.STATE_INITIALIZED) {
                               try {
                                 if (activeT.playState != AudioTrack.PLAYSTATE_PLAYING) {
                                   activeT.play()
                                 }
                                 lastSpeakerWriteMs = System.currentTimeMillis()
                                 var wrote = activeT.write(pcm, 0, pcm.size)
-                                if (wrote <= 0 && !stopped && turnEpoch == audioPlaybackEpoch.get()) {
+                                if (wrote <= 0 && !stopped && !RiyaState.micMuted.value && turnEpoch == audioPlaybackEpoch.get()) {
                                   activeT = rebuildWritableTrackLocked()
                                   if (activeT != null && activeT.state == AudioTrack.STATE_INITIALIZED) {
                                     runCatching { activeT.play() }
                                     wrote = activeT.write(pcm, 0, pcm.size)
                                   }
                                 }
-                                if (wrote > 0 && turnEpoch == audioPlaybackEpoch.get()) {
+                                // Detect silent/dead BT communication pipe stall and auto-recover onto USAGE_MEDIA
+                                if (wrote > 0 && usingBtAudio && RiyaState.isBtCommOutputVerified.value) {
+                                  val writtenDelta = (totalSpeakerFramesWritten + (wrote / 2).toLong()) - speakerHeadBaseFrames
+                                  val headNow = runCatching { (activeT?.playbackHeadPosition ?: 0).toLong() and 0xFFFFFFFFL }.getOrDefault(0L)
+                                  if (writtenDelta > 14_400L && headNow <= speakerHeadBaseFrames) {
+                                    RiyaState.isBtCommOutputVerified.value = false
+                                    runCatching {
+                                      if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
+                                      am.mode = AudioManager.MODE_NORMAL
+                                    }
+                                    requestLiveAudioFocus()
+                                    val fallbackT = rebuildWritableTrackLocked()
+                                    if (fallbackT != null && fallbackT.state == AudioTrack.STATE_INITIALIZED) {
+                                      activeT = fallbackT
+                                      runCatching { fallbackT.play() }
+                                      wrote = fallbackT.write(pcm, 0, pcm.size)
+                                      RiyaState.addLog("অডিও রুট অটো-রিকভারি: Media স্পিকার/হেডসেটে স্থানান্তর হয়েছে")
+                                    }
+                                  }
+                                }
+                                if (wrote > 0 && !RiyaState.micMuted.value && turnEpoch == audioPlaybackEpoch.get()) {
+                                  val activeStream =
+                                    if (usingBtAudio && RiyaState.isBtCommOutputVerified.value) AudioManager.STREAM_VOICE_CALL
+                                    else AudioManager.STREAM_MUSIC
+                                  val streamVol = runCatching { am.getStreamVolume(activeStream) }.getOrDefault(1)
+                                  val isTrackPlaying = activeT?.playState == AudioTrack.PLAYSTATE_PLAYING
                                   activeTurnHasStartedOutput = true
                                   activeTurnProducedVoiceReply = true
-                                  RiyaState.status.value = "LXR--AI কথা বলছে..."
-                                  LxrFloatingOverlayManager.setSpeakingBoost(true)
+                                  if (streamVol <= 0) {
+                                    RiyaState.status.value = "⚠️ ফোনের ভলিউম ০% — ভলিউম বাড়ান"
+                                  } else if (isTrackPlaying && (pcmRms >= 28.0 || lastSpeakerSoundingMs > 0L)) {
+                                    RiyaState.status.value = "LXR--AI কথা বলছে..."
+                                  }
+                                  LxrFloatingOverlayManager.setSpeakingBoost(isTrackPlaying && streamVol > 0)
                                   if (LxrFloatingOverlayManager.isShowing) {
                                     LxrFloatingOverlayManager.cancelPendingHide()
                                   }
@@ -1928,7 +2075,7 @@ class GeminiLive(private val ctx: Context) {
             voiceQueue.markCompleted(entry, replyText = p)
           }
           currentTurnEntry = null
-          val pureWake = u.isNotEmpty() && LxrFloatingOverlayManager.isPureWakeCall(u) && !hadCommandOrToolThisTurn
+          val pureWake = !RiyaState.micMuted.value && u.isNotEmpty() && LxrFloatingOverlayManager.isPureWakeCall(u) && !hadCommandOrToolThisTurn
           if (pureWake) {
             LxrFloatingOverlayManager.showForWakeOrMic(ctx)
             if (p.isBlank() && !activeTurnProducedVoiceReply && LxrFloatingOverlayManager.canTriggerWakeGreetingNow()) {
@@ -1975,7 +2122,7 @@ class GeminiLive(private val ctx: Context) {
                   val lockedOk = LockVaultManager.relockScreen(ctx, RiyaAccessibilityService.instance)
                   if (lockedOk) {
                     RiyaState.addLog("LXR--AI: মেইন স্ক্রিন লক ছিল — কাজ শেষে আবার স্ক্রিন লক করা হয়েছে ✓")
-                    if (!ready) {
+                    if (!ready && !RiyaState.micMuted.value) {
                       RiyaVoiceManager.speakUrgent(
                         ctx,
                         "বস, তোমার ফোনের মেইন স্ক্রিন আগে লক অবস্থায় ছিল, তাই কাজ শেষ করে আবার লক করে দিয়েছি।",
@@ -2014,31 +2161,44 @@ class GeminiLive(private val ctx: Context) {
             activeLiveModel.equals(Store.ELEVENLABS_LIVE_MODEL_ID, ignoreCase = true) ||
               Store.isElevenLabsVoiceModeSelected(ctx)
           val restoreStatusText = if (RiyaState.micMuted.value) "মাইক মিউট (Mute)" else "শুনছি বস..."
-          if (isElevenMode && !wasBlockedByLimit && p.isNotBlank() && !isSuppressingStaleAudio()) {
-            RiyaState.status.value = "LXR--AI কথা বলছে (ElevenLabs)..."
+          if (RiyaState.micMuted.value) {
+            interruptSpeakerForBoss()
+            RiyaVoiceManager.stopSpeaking()
+            RiyaState.status.value = "মাইক মিউট (Mute)"
+          } else if (isElevenMode && !wasBlockedByLimit && p.isNotBlank() && !isSuppressingStaleAudio()) {
+            RiyaState.status.value = "ElevenLabs ভয়েস তৈরি হচ্ছে..."
             RiyaVoiceManager.initialize(ctx)
             RiyaVoiceManager.speak(p, interrupt = true, forceSpeak = true, forceElevenLabsOnly = true)
             val elevenCheckStart = System.currentTimeMillis()
             val restoreEpoch = audioPlaybackEpoch.get()
+            var observedAudioPlaying = false
             lateinit var checkElevenDone: Runnable
             checkElevenDone = Runnable {
-              if (stopped || !ready || audioPlaybackEpoch.get() != restoreEpoch) return@Runnable
+              if (stopped || !ready || audioPlaybackEpoch.get() != restoreEpoch || RiyaState.micMuted.value) {
+                if (RiyaState.micMuted.value) RiyaState.status.value = "মাইক মিউট (Mute)"
+                return@Runnable
+              }
               val elapsed = System.currentTimeMillis() - elevenCheckStart
               val ttsErr = RiyaVoiceManager.lastTtsError.value
               if (!ttsErr.isNullOrBlank()) {
                 RiyaState.addLog("⚠️ ElevenLabs ত্রুটি: $ttsErr")
-                RiyaState.status.value = if (RiyaState.micMuted.value) "মাইক মিউট (Mute)" else "শুনছি বস..."
+                RiyaState.status.value = "শুনছি বস..."
                 return@Runnable
               }
-              if ((elapsed > 900L && !RiyaVoiceManager.isActivelySpeaking()) || elapsed > 18_000L) {
+              val activelyPlaying = RiyaVoiceManager.isActivelySpeaking()
+              if (activelyPlaying) {
+                observedAudioPlaying = true
+                RiyaState.status.value = "LXR--AI কথা বলছে (ElevenLabs)..."
+              }
+              if ((observedAudioPlaying && !activelyPlaying) || (!observedAudioPlaying && elapsed > 8_500L) || elapsed > 28_000L) {
                 if (!activeTurnHasStartedOutput) {
                   RiyaState.status.value = if (RiyaState.micMuted.value) "মাইক মিউট (Mute)" else "শুনছি বস..."
                 }
               } else {
-                main.postDelayed(checkElevenDone, 450L)
+                main.postDelayed(checkElevenDone, 320L)
               }
             }
-            main.postDelayed(checkElevenDone, 750L)
+            main.postDelayed(checkElevenDone, 280L)
           } else {
             val restoreEpoch = audioPlaybackEpoch.get()
             val statusRestoreDelay = if (remainingAudioMs > 180L) (remainingAudioMs + 150L).coerceIn(180L, 5000L) else 0L
@@ -2150,7 +2310,7 @@ class GeminiLive(private val ctx: Context) {
               LxrFloatingOverlayManager.scheduleIdleFailsafeHide(ctx, delayMs = 4500L)
             }
             if (!stopped && ready && !activeTurnHasStartedOutput) {
-              RiyaState.status.value = "শুনছি বস..."
+              RiyaState.status.value = if (RiyaState.micMuted.value) "মাইক মিউট (Mute)" else "শুনছি বস..."
             }
           }
         }
@@ -2598,6 +2758,17 @@ class GeminiLive(private val ctx: Context) {
           val scr = if (includeScreen) screenSnapshot() else ""
           LxrDeviceAndHardwareEngine.solveCriticalTaskWithExtraModel(ctx, taskPrompt, scr)
         }
+        "run_autonomous_task" -> {
+          val taskPrompt = a.optString("task_prompt").trim()
+          val includeScreen = a.optBoolean("include_screen", true)
+          val scr = if (includeScreen) screenSnapshot() else ""
+          LxrAutonomousOrchestrator.executeAutonomousTask(
+            ctx = ctx,
+            prompt = taskPrompt,
+            screenContext = scr,
+            recordInMonitor = true,
+          ).finalSummaryBn
+        }
         "inspect_camera_vision" ->
           inspectCameraVision(
             requestedLens = a.optString("lens", "current"),
@@ -2763,10 +2934,15 @@ class GeminiLive(private val ctx: Context) {
   }
 
   private fun sendGreetingTurn() {
+    if (stopped || RiyaState.micMuted.value) return
     val prevWriteMs = lastSpeakerWriteMs
     // Pause upstream mic while Live API opens its greeting speech so VAD won't cut it
     micMuteUntilMs = System.currentTimeMillis() + 1200L
     val greeting = Store.MIC_TAP_GREETING_BN
+    val activeLiveModel = modelOverride ?: Store.model(ctx)
+    val isElevenMode =
+      activeLiveModel.equals(Store.ELEVENLABS_LIVE_MODEL_ID, ignoreCase = true) ||
+        Store.isElevenLabsVoiceModeSelected(ctx)
     val prompt =
       "[SESSION START GREETING - MANDATORY] বস এইমাত্র মাইক অন করেছেন। সাথে সাথে কোনো দেরি না করে ঠিক এই মধুর অভ্যর্থনাটি বাংলায় স্পষ্টভাবে বলো (সেশনের মাঝখানে আর পুনরাবৃত্তি করবে না): \"$greeting\" — এবং অভ্যর্থনার পরে যদি বস তাৎক্ষণিক অন্য কোনো কমান্ড না দেন, তবে নিজে থেকেই `get_today_news_and_trending` চালিয়ে আজকের সংক্ষিপ্ত টেক আপডেট নিউজ ও বাংলাদেশের ১-২টি মূল ট্রেন্ডিং টপিক জানিয়ে দিও।"
     try {
@@ -2788,19 +2964,22 @@ class GeminiLive(private val ctx: Context) {
           )
       val ok = ws?.send(turnPayload.toString()) == true
       if (!ok) {
-        RiyaVoiceManager.speakUrgent(ctx, greeting)
+        if (!RiyaState.micMuted.value) RiyaVoiceManager.speakUrgent(ctx, greeting)
       } else {
         main.postDelayed(
           {
-            if (!stopped && !ready && lastSpeakerWriteMs == prevWriteMs) {
+            val missingOutput =
+              if (isElevenMode) pText.isEmpty() && !RiyaVoiceManager.isActivelySpeaking()
+              else lastSpeakerWriteMs == prevWriteMs && !activeTurnHasStartedOutput && !RiyaVoiceManager.isActivelySpeaking()
+            if (!stopped && !RiyaState.micMuted.value && missingOutput) {
               RiyaVoiceManager.speakUrgent(ctx, greeting)
             }
           },
-          4800L,
+          5200L,
         )
       }
     } catch (_: Throwable) {
-      RiyaVoiceManager.speakUrgent(ctx, greeting)
+      if (!RiyaState.micMuted.value) RiyaVoiceManager.speakUrgent(ctx, greeting)
     }
   }
 
@@ -3618,8 +3797,11 @@ class GeminiLive(private val ctx: Context) {
   private fun createAudioTrackInstance(): AudioTrack? =
     try {
       val usage =
-        if (usingBtAudio) AudioAttributes.USAGE_VOICE_COMMUNICATION
-        else AudioAttributes.USAGE_MEDIA
+        LiveSessionConfigBuilder.resolveOutputAudioUsage(
+          usingBtAudio = usingBtAudio,
+          isBtCommOutputVerified = RiyaState.isBtCommOutputVerified.value,
+          hasWiredOrA2dpHeadset = hasWiredOrA2dpOutputDevice(),
+        )
       val minAudioBuf =
         AudioTrack.getMinBufferSize(
           24000,
@@ -3828,6 +4010,7 @@ class GeminiLive(private val ctx: Context) {
           }
 
           var recReadFailures = 0
+          var sentMuteStreamEnd = false
           while (!stopped) {
             val activeRec = synchronized(recLock) { rec } ?: break
             val n =
@@ -3862,6 +4045,7 @@ class GeminiLive(private val ctx: Context) {
               sentSpeechChunksThisTurn = 0
               consecutiveLoudMicChunks = 0
               preRollRing.clear()
+              bargeVerifyStream.reset()
               silentFrameCounter++
               if (gateState != 0) {
                 gateState = 0
@@ -3871,7 +4055,10 @@ class GeminiLive(private val ctx: Context) {
                 consecutiveRejects = 0
                 rejectedSpeechChunks = 0
               }
-              if (ready && !stopped && (ws?.queueSize() ?: 0L) < 48_000L && silentFrameCounter % 3 == 0) {
+              if (!sentMuteStreamEnd && ready && !stopped) {
+                sentMuteStreamEnd = true
+                runCatching { ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""") }
+              } else if (ready && !stopped && (ws?.queueSize() ?: 0L) < 48_000L && silentFrameCounter % 8 == 0) {
                 sendAudioPcm(zeroSilence, zeroSilence.size)
               }
               if (!activeTurnHasStartedOutput && RiyaState.status.value != "মাইক মিউট (Mute)") {
@@ -3879,6 +4066,7 @@ class GeminiLive(private val ctx: Context) {
               }
               continue
             }
+            sentMuteStreamEnd = false
             if (n > 0 && ready && !stopped && (ws?.queueSize() ?: 0L) < 48_000L) {
               val now = System.currentTimeMillis()
               if (now - lastVmRefreshAt > 400L) {

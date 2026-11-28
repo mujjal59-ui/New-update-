@@ -11,6 +11,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -26,7 +29,99 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+data class NetworkHealthSnapshot(
+  val isOnline: Boolean = false,
+  val isValidated: Boolean = false,
+  val transportLabel: String = "Checking",
+  val updatedAtMs: Long = 0L,
+)
+
+object LxrNetworkHealthMonitor {
+  private val _snapshot = MutableStateFlow(NetworkHealthSnapshot())
+  val snapshot: StateFlow<NetworkHealthSnapshot> = _snapshot.asStateFlow()
+
+  @Volatile private var registeredCallback: ConnectivityManager.NetworkCallback? = null
+
+  fun startMonitoring(context: Context) {
+    val appCtx = context.applicationContext
+    val cm = runCatching { appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager }.getOrNull() ?: return
+    refreshNow(appCtx)
+    if (registeredCallback != null) return
+    val cb =
+      object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+          refreshNow(appCtx)
+        }
+
+        override fun onLost(network: Network) {
+          refreshNow(appCtx)
+        }
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+          updateFromCaps(caps)
+        }
+      }
+    runCatching {
+      cm.registerDefaultNetworkCallback(cb)
+      registeredCallback = cb
+    }
+  }
+
+  fun stopMonitoring(context: Context) {
+    val cb = registeredCallback ?: return
+    registeredCallback = null
+    runCatching {
+      val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+      cm?.unregisterNetworkCallback(cb)
+    }
+  }
+
+  fun refreshNow(context: Context): NetworkHealthSnapshot {
+    val cm = runCatching { context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager }.getOrNull()
+    val caps = runCatching { cm?.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
+    return updateFromCaps(caps)
+  }
+
+  private fun updateFromCaps(caps: NetworkCapabilities?): NetworkHealthSnapshot {
+    if (caps == null) {
+      val snap = NetworkHealthSnapshot(isOnline = false, isValidated = false, transportLabel = "Offline", updatedAtMs = System.currentTimeMillis())
+      _snapshot.value = snap
+      return snap
+    }
+    val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    val transport =
+      when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+        else -> "Network"
+      }
+    val snap =
+      NetworkHealthSnapshot(
+        isOnline = hasInternet,
+        isValidated = hasInternet && validated,
+        transportLabel = transport,
+        updatedAtMs = System.currentTimeMillis(),
+      )
+    _snapshot.value = snap
+    return snap
+  }
+
+  fun currentStatusBn(context: Context): String {
+    val snap = refreshNow(context)
+    return when {
+      snap.isValidated -> "অনলাইন ও যাচাইকৃত (${snap.transportLabel}) ✓"
+      snap.isOnline -> "সংযুক্ত (${snap.transportLabel}, ইন্টারনেট যাচাই চলছে)"
+      else -> "অফলাইন — ইন্টারনেট সংযোগ নেই"
+    }
+  }
+}
 
 class RiyaService : Service() {
   private var live: GeminiLive? = null
@@ -163,6 +258,7 @@ class RiyaService : Service() {
     promoteForegroundSafely(buildLiveNotification())
     LxrCameraVisionEngine.ensureBackgroundCaptureIfActive(applicationContext)
 
+    LxrNetworkHealthMonitor.startMonitoring(applicationContext)
     LxrCompanionAgent.start(applicationContext)
     LxrBackgroundTaskManager.recoverInterruptedTasks(applicationContext)
     AccessibilityStatusMonitor.startListening(this)
@@ -256,6 +352,7 @@ class RiyaService : Service() {
 
   override fun onDestroy() {
     val shouldStayAlive = !Store.userStoppedService(applicationContext) && !pausedForVoiceMatch
+    LxrNetworkHealthMonitor.stopMonitoring(applicationContext)
     try {
       serviceScope.cancel()
     } catch (_: Throwable) {}

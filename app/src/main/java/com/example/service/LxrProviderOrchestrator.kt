@@ -56,14 +56,18 @@ object LxrProviderRegistry {
     val geminiConfigured = Store.apiKey(context).isNotBlank()
     val pplxConfigured = Store.perplexityApiKey(context).isNotBlank()
     val youConfigured = Store.youApiKey(context).isNotBlank()
+    val compatUrl = Store.openAiCompatBaseUrl(context)
+    val compatModel = Store.openAiCompatModel(context)
+    val compatConfigured = compatUrl.startsWith("https://", ignoreCase = true) && compatModel.isNotBlank()
+    val gwHealth = LxrProviderGateway.healthSummaryBn()
     return listOf(
       LxrProviderStatus(
         id = "gemini_live",
-        displayName = "Gemini Live & 2.5 Flash",
+        displayName = "Gemini Live & 2.5 Pro/Flash Gateway",
         tierLabel = "Gemini Official",
         isConfigured = geminiConfigured,
         detailBn =
-          if (geminiConfigured) "API Key সক্রিয় — ভয়েস, স্ক্রিপ্ট ও গ্রাউন্ডেড SEO চালু আছে"
+          if (geminiConfigured) "API Key সক্রিয় — ভয়েস, স্ক্রিপ্ট ও ক্রিটিক্যাল গেটওয়ে চালু ($gwHealth)"
           else "API Key সেট করা নেই (Menu থেকে দিলে চালু হবে)",
       ),
       LxrProviderStatus(
@@ -97,6 +101,15 @@ object LxrProviderRegistry {
         detailBn =
           if (youConfigured) "কনফিগার করা আছে ✓"
           else "কনফিগার করা নেই (ঐচ্ছিক API Key)",
+      ),
+      LxrProviderStatus(
+        id = "openai_compat_byo",
+        displayName = "OpenAI-Compatible BYO Gateway",
+        tierLabel = "Optional BYO Endpoint",
+        isConfigured = compatConfigured,
+        detailBn =
+          if (compatConfigured) "কনফিগার করা আছে ($compatModel) ✓"
+          else "কনফিগার করা নেই (ঐচ্ছিক OpenAI-Compatible Endpoint)",
       ),
     )
   }
