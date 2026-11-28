@@ -439,8 +439,6 @@ object LxrResearchEngine {
     val uniqueSources =
       collectedSources.distinctBy { it.url.ifBlank { "${it.engine}|${it.title}" } }.take(8)
 
-    val verification = LxrResearchVerificationHelper.evaluateSources(uniqueSources)
-
     val summaryBn =
       buildString {
         if (primaryAnswers.isNotEmpty()) {
@@ -448,14 +446,10 @@ object LxrResearchEngine {
         } else if (uniqueSources.isNotEmpty()) {
           appendLine("ওয়েব রিসার্চের যাচাইকৃত ফলাফল ($checkedAt):")
           uniqueSources.take(4).forEachIndexed { idx, src ->
-            val tier = LxrResearchVerificationHelper.classifySource(src)
-            appendLine("${idx + 1}. [${tier.labelBn}] ${src.title} — ${src.snippet.take(180)} (${src.url})")
+            appendLine("${idx + 1}. ${src.title} — ${src.snippet.take(180)} (${src.url})")
           }
         } else {
           appendLine("দুঃখিত বস, এই মুহূর্তে ইন্টারনেট/ইঞ্জিন থেকে '$cleanQuery' বিষয়ে কোনো ফলাফল আনা যায়নি।")
-        }
-        if (verification.contradictionAlertsBn.isNotEmpty()) {
-          appendLine("\n⚠️ তথ্যগত সতর্কতা: ${verification.contradictionAlertsBn.joinToString(" | ")}")
         }
         if (uniqueSources.isNotEmpty()) {
           appendLine("\n[তথ্যসূত্র]: " + uniqueSources.take(4).joinToString(" | ") { it.url })
@@ -930,86 +924,3 @@ object LxrResearchEngine {
     }
   }
 }
-
-enum class SourceCredibilityTier(val weight: Int, val labelBn: String) {
-  PRIMARY_OFFICIAL(4, "অফিশিয়াল / সরকারি"),
-  REFERENCE_DOCS(3, "রেফারেন্স ডকুমেন্টেশন"),
-  NEWS_MEDIA(2, "সংবাদমাধ্যম"),
-  UNVERIFIED_WEB(1, "সাধারণ ওয়েব"),
-}
-
-data class ResearchVerificationReport(
-  val annotatedSources: List<Pair<ResearchSourceItem, SourceCredibilityTier>>,
-  val contradictionAlertsBn: List<String>,
-  val tierSummaryBn: String,
-)
-
-object LxrResearchVerificationHelper {
-  private val OFFICIAL_DOMAINS =
-    listOf(".gov", ".edu", "developer.android.com", "kotlinlang.org", "ai.google.dev", "developers.google.com", "github.com", "elevenlabs.io", "who.int")
-  private val REFERENCE_DOMAINS =
-    listOf("wikipedia.org", "britannica.com", "stackoverflow.com", "arxiv.org", "developer.mozilla.org")
-  private val NEWS_DOMAINS =
-    listOf("bbc.", "reuters.", "apnews.", "prothomalo.", "thedailystar.", "bdnews24.", "aljazeera.", "news.google.com")
-
-  fun classifyUrl(url: String): SourceCredibilityTier {
-    val low = url.trim().lowercase(Locale.ROOT)
-    return when {
-      OFFICIAL_DOMAINS.any { low.contains(it) } -> SourceCredibilityTier.PRIMARY_OFFICIAL
-      REFERENCE_DOMAINS.any { low.contains(it) } -> SourceCredibilityTier.REFERENCE_DOCS
-      NEWS_DOMAINS.any { low.contains(it) } -> SourceCredibilityTier.NEWS_MEDIA
-      else -> SourceCredibilityTier.UNVERIFIED_WEB
-    }
-  }
-
-  fun classifySource(item: ResearchSourceItem): SourceCredibilityTier {
-    val urlTier = classifyUrl(item.url)
-    if (urlTier != SourceCredibilityTier.UNVERIFIED_WEB) return urlTier
-    return if (item.engine.contains("Wikipedia", ignoreCase = true)) {
-      SourceCredibilityTier.REFERENCE_DOCS
-    } else if (item.engine.contains("News", ignoreCase = true)) {
-      SourceCredibilityTier.NEWS_MEDIA
-    } else {
-      SourceCredibilityTier.UNVERIFIED_WEB
-    }
-  }
-
-  fun detectContradictions(sources: List<ResearchSourceItem>): List<String> {
-    if (sources.size < 2) return emptyList()
-    val alerts = mutableListOf<String>()
-    val positiveCue = Regex("""\b(is|are|confirmed|launched|released|true|সত্য|চালু|সফল)\b""", RegexOption.IGNORE_CASE)
-    val negativeCue = Regex("""\b(not|no|false|fake|cancelled|denied|মিথ্যা|বন্ধ|বাতিল|নেই)\b""", RegexOption.IGNORE_CASE)
-    var hasPos = false
-    var hasNeg = false
-    val years = linkedSetOf<String>()
-    val yearRegex = Regex("""\b(20\d{2})\b""")
-    for (s in sources) {
-      val combined = "${s.title} ${s.snippet}"
-      if (positiveCue.containsMatchIn(combined)) hasPos = true
-      if (negativeCue.containsMatchIn(combined)) hasNeg = true
-      yearRegex.findAll(combined).forEach { years.add(it.groupValues[1]) }
-    }
-    if (hasPos && hasNeg) {
-      alerts.add("বিভিন্ন উৎসে পরস্পরবিরোধী দাবি (হ্যাঁ বনাম না) পাওয়া গেছে — প্রাথমিক অফিশিয়াল সূত্র দেখে নিশ্চিত হোন।")
-    }
-    if (years.size >= 3) {
-      alerts.add("উৎসগুলোতে একাধিক ভিন্ন সাল (${years.take(4).joinToString(", ")}) দেখা যাচ্ছে — সর্বশেষ তারিখ যাচাই করুন।")
-    }
-    return alerts
-  }
-
-  fun evaluateSources(sources: List<ResearchSourceItem>): ResearchVerificationReport {
-    val annotated = sources.map { it to classifySource(it) }
-    val alerts = detectContradictions(sources)
-    val counts = annotated.groupingBy { it.second }.eachCount()
-    val summary =
-      if (annotated.isEmpty()) ""
-      else counts.entries.sortedByDescending { it.key.weight }.joinToString(", ") { "${it.key.labelBn}: ${it.value}" }
-    return ResearchVerificationReport(
-      annotatedSources = annotated,
-      contradictionAlertsBn = alerts,
-      tierSummaryBn = summary,
-    )
-  }
-}
-

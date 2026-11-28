@@ -1358,15 +1358,65 @@ object LxrDeviceAndHardwareEngine {
   }
 
   fun solveCriticalTaskWithExtraModel(ctx: Context, taskPrompt: String, screenContext: String = ""): String {
-    val cleanTask = taskPrompt.trim()
-    if (cleanTask.isBlank()) {
-      return "ক্রিটিক্যাল কাজের জন্য কোনো প্রশ্ন বা নির্দেশনা দেওয়া হয়নি বস।"
+    val apiKey = com.example.data.Store.apiKey(ctx).trim()
+    if (apiKey.isBlank()) {
+      return "এক্সট্রা এআই মডেল চালানোর জন্য Gemini API Key প্রয়োজন বস।"
     }
-    return LxrProviderGateway.executeCriticalReasoning(
-      ctx = ctx,
-      taskPrompt = cleanTask,
-      screenContext = screenContext,
-    ).formattedBn
+    val preferred = com.example.data.Store.extraCriticalModel(ctx)
+    val candidates =
+      listOf(preferred, "gemini-2.5-flash", "gemini-2.0-flash").distinct()
+    val client =
+      okhttp3.OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(28, TimeUnit.SECONDS)
+        .build()
+    val promptBody =
+      buildString {
+        appendLine("তুমি LXR--AI-এর এক্সট্রা ক্রিটিক্যাল রিজনিং ও টাস্ক ইঞ্জিন। বসের কঠিন বা জটিল কাজের জন্য পরিষ্কার, সঠিক এবং কার্যকর বাংলা সমাধান ও ধাপ দাও।")
+        if (screenContext.isNotBlank()) {
+          appendLine("বর্তমান স্ক্রিন/সিস্টেম তথ্য: $screenContext")
+        }
+        appendLine("কাজ/প্রশ্ন: $taskPrompt")
+      }
+    for (modelId in candidates) {
+      try {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:generateContent?key=$apiKey"
+        val bodyJson =
+          org.json.JSONObject()
+            .put(
+              "contents",
+              org.json.JSONArray()
+                .put(
+                  org.json.JSONObject()
+                    .put("parts", org.json.JSONArray().put(org.json.JSONObject().put("text", promptBody)))
+                ),
+            )
+        val req =
+          okhttp3.Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+          val raw = resp.body?.string().orEmpty()
+          if (resp.isSuccessful && raw.isNotBlank()) {
+            val json = org.json.JSONObject(raw)
+            val txt =
+              json.optJSONArray("candidates")
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.optJSONObject(0)
+                ?.optString("text")
+                .orEmpty()
+                .trim()
+            if (txt.isNotBlank()) {
+              return "[$modelId ক্রিটিক্যাল মডেল]:\n$txt"
+            }
+          }
+        }
+      } catch (_: Throwable) {}
+    }
+    return "এক্সট্রা ক্রিটিক্যাল মডেল এই মুহূর্তে নেটওয়ার্ক থেকে সাড়া দিতে পারেনি বস।"
   }
 
   fun selectBestLocation(candidates: List<Location>): Location? {

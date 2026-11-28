@@ -1170,17 +1170,12 @@ fun RiyaHomeScreen(
       homeTheme = activeTheme,
       onToggle = {
         val nextMuted = !micMuted
-        val liveSession = RiyaState.live
-        if (liveSession != null) {
-          liveSession.setMicMuted(nextMuted)
+        RiyaState.micMuted.value = nextMuted
+        if (nextMuted) {
+          RiyaVoiceManager.stopSpeaking()
+          if (running) RiyaState.status.value = "মাইক মিউট (Mute)"
         } else {
-          RiyaState.micMuted.value = nextMuted
-          if (nextMuted) {
-            RiyaVoiceManager.stopSpeaking()
-            if (running) RiyaState.status.value = "মাইক মিউট (Mute)"
-          } else {
-            if (running) RiyaState.status.value = "শুনছি বস..."
-          }
+          if (running) RiyaState.status.value = "শুনছি বস..."
         }
       },
       modifier = Modifier.align(Alignment.TopCenter).offset(y = muteTopY.dp),
